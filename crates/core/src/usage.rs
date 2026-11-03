@@ -484,6 +484,7 @@ pub fn codex_quota(source: &Source, value: &Value, stamp: i64, origin: &str) -> 
         origin: origin.into(),
         ..Default::default()
     };
+    q.subscription_expires_at = value["subscriptionExpiresAt"].as_i64();
     let maps = value.get("rateLimitsByLimitId").and_then(Value::as_object);
     let fallback = value.get("rateLimits").unwrap_or(value);
     let buckets: Vec<(&str, &Value)> = if let Some(m) = maps.filter(|m| !m.is_empty()) {

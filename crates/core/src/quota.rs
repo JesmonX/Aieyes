@@ -362,12 +362,34 @@ pub(crate) fn resolve_codex(configured: &str) -> String {
 }
 
 fn codex(source: &Source, settings: &Settings) -> Result<Value> {
-    codex_rpc(
+    let mut value = codex_rpc(
         source,
         settings,
         "account/rateLimits/read",
         json!({"excludeResetCreditDetails":false,"supportsLunaReserve":false}),
-    )
+    )?;
+    // A managed home reports this per profile; its auth.json may be another account.
+    if source.host_id.is_none() && value.get("subscriptionExpiresAt").is_none() {
+        let path = expand(&source.path);
+        let home = if matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("sessions" | "archived_sessions")
+        ) {
+            path.parent().unwrap_or(&path).to_path_buf()
+        } else {
+            path
+        };
+        if !home.join(".aieyes/accounts").exists()
+            && let Some(end) = std::fs::read(home.join("auth.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .and_then(|auth| crate::codex_auth::files::subscription_expires_at(&auth))
+            && let Some(row) = value.as_object_mut()
+        {
+            row.insert("subscriptionExpiresAt".into(), json!(end));
+        }
+    }
+    Ok(value)
 }
 pub fn codex_rpc(
     source: &Source,

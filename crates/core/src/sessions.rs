@@ -1202,7 +1202,16 @@ impl Reader {
                             }
                             discovery.paths.retain(|(p, _, _)| p != &path);
                             let stamp = modified(&path);
-                            if path.is_file() && now.saturating_sub(stamp) < 86400 {
+                            if path.is_file()
+                                && discoverable(
+                                    &self.process_snapshot,
+                                    &self.cursors,
+                                    source,
+                                    &path,
+                                    stamp,
+                                    now,
+                                )
+                            {
                                 discovery.paths.push((path, hook, stamp));
                             }
                         }
@@ -1213,9 +1222,10 @@ impl Reader {
                     }
                 }
             }
-            discovery
-                .paths
-                .retain(|(_, _, stamp)| now.saturating_sub(*stamp) < 86400);
+            let (snapshot, cursors) = (&self.process_snapshot, &self.cursors);
+            discovery.paths.retain(|(path, _, stamp)| {
+                discoverable(snapshot, cursors, source, path, *stamp, now)
+            });
             discovery
                 .paths
                 .sort_by_key(|(_, _, stamp)| std::cmp::Reverse(*stamp));
@@ -1276,7 +1286,16 @@ impl Reader {
                                         let stamp = modified(&p);
                                         (p, false, stamp)
                                     })
-                                    .filter(|(_, _, stamp)| now.saturating_sub(*stamp) < 86400),
+                                    .filter(|(path, _, stamp)| {
+                                        discoverable(
+                                            &self.process_snapshot,
+                                            &self.cursors,
+                                            source,
+                                            path,
+                                            *stamp,
+                                            now,
+                                        )
+                                    }),
                             );
                         }
                         Err(e) => error = Some(e.to_string()),
@@ -1306,7 +1325,14 @@ impl Reader {
                         continue;
                     }
                     let modified = modified(entry.path());
-                    if now.saturating_sub(modified) < 86400 {
+                    if discoverable(
+                        &self.process_snapshot,
+                        &self.cursors,
+                        source,
+                        entry.path(),
+                        modified,
+                        now,
+                    ) {
                         paths.push((entry.path().to_owned(), hook, modified));
                     }
                 }
@@ -1588,6 +1614,25 @@ fn read_dsh_session(path: &Path, previous: Option<&Cursor>) -> anyhow::Result<Fi
         read_bytes: size - offset,
         ..Default::default()
     })
+}
+/// The age limit bounds scanning; it must not hide a session whose process is
+/// still running. Quiet transcripts stay visible through the process evidence
+/// that later decides their state.
+fn discoverable(
+    processes: &crate::session_processes::Snapshot,
+    cursors: &HashMap<String, Cursor>,
+    source: &Source,
+    path: &Path,
+    stamp: u64,
+    now: u64,
+) -> bool {
+    now.saturating_sub(stamp) < 86400
+        || processes.holds(&source.provider, path)
+        || cursors
+            .get(path.to_string_lossy().as_ref())
+            .is_some_and(|c| {
+                c.activity.pid > 0 && processes.is_running(c.activity.pid, c.activity.process_start)
+            })
 }
 fn process_alive(pid: u32, start: u64) -> bool {
     let mut system = sysinfo::System::new();

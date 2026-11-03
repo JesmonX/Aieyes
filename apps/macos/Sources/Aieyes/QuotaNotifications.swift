@@ -33,6 +33,11 @@ private struct QuotaResetEvent: Decodable {
     private var observers: [NSObjectProtocol] = []
     private var asked = false
     private var stopped = false
+    // Events already taken from core but not yet delivered (permission off or add() failed); retried once authorized.
+    private struct Pending { var id: String, title: String, body: String, queuedAt: Date }
+    private var pending: [Pending] = []
+    // `error` also reports the user's test notification; only background failures clear themselves.
+    private var backgroundError = false
     private var center: UNUserNotificationCenter? {
         // macOS asserts instead of returning an error for an unbundled executable.
         guard Bundle.main.bundleIdentifier != nil else {
@@ -44,7 +49,7 @@ private struct QuotaResetEvent: Decodable {
     func start() {
         guard !started, !stopped, let center else { return }
         started = true; center.delegate = self
-        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in await self?.refreshPermission() } })
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in await self?.refreshPermission(); await self?.flushPending() } })
         task = Task { [weak self] in await self?.drain(); self?.task = nil }
     }
     // AppModel owns the five-second cross-process revision fallback. Reuse its
@@ -76,17 +81,33 @@ private struct QuotaResetEvent: Decodable {
                     if enabled && !asked { asked = true; await authorize() }
                     else { await refreshPermission() }
                     configurationRevision = revision["settings"] ?? 0
+                    await flushPending()
                     }
                 if notificationRevision == nil || notificationRevision != revision["notifications"] {
                     let events: [QuotaResetEvent] = try await engine.call("quotaResetNotifications.take", params: ["since":since])
                     notificationRevision = revision["notifications"] ?? 0
-                    for event in events {
-                        guard !Task.isCancelled, !stopped else { return }
-                        await deliver(id: event.id, title: event.title, body: event.body)
-                    }
+                    let now = Date()
+                    for event in events where !pending.contains(where: { $0.id == event.id }) { pending.append(Pending(id: event.id, title: event.title, body: event.body, queuedAt: now)) }
+                    await flushPending()
                 }
             } while !stopped && !Task.isCancelled && (configurationRevision != latestRevisions["settings", default: 0] || notificationRevision != latestRevisions["notifications", default: 0])
-        } catch { if !Task.isCancelled && !stopped { self.error = error.localizedDescription } }
+            if backgroundError && pending.isEmpty { error = nil; backgroundError = false }
+        } catch { if !Task.isCancelled && !stopped { self.error = error.localizedDescription; backgroundError = true } }
+    }
+    /// Delivers queued events; keeps undelivered ones (at most 20, no older than 6 hours) for the next attempt.
+    private func flushPending() async {
+        let cutoff = Date().addingTimeInterval(-6 * 3600)
+        pending.removeAll { $0.queuedAt < cutoff }
+        if pending.count > 20 { pending.removeFirst(pending.count - 20) }
+        guard !pending.isEmpty else { return }
+        var failed: [Pending] = []
+        for item in pending {
+            guard !Task.isCancelled, !stopped else { return }
+            if !(await deliver(id: item.id, title: item.title, body: item.body)) { failed.append(item) }
+        }
+        pending = failed
+        backgroundError = !failed.isEmpty
+        if failed.isEmpty { error = nil }
     }
     func refreshPermission() async {
         // Snapshot and model-test instances never contact the user's notification center.
@@ -107,19 +128,19 @@ private struct QuotaResetEvent: Decodable {
         }
         await refreshPermission()
     }
-    private func deliver(id: String, title: String, body: String) async {
-        guard let center else { error = permission; return }
+    @discardableResult private func deliver(id: String, title: String, body: String) async -> Bool {
+        guard let center else { error = permission; return false }
         let status = await center.notificationSettings().authorizationStatus
         guard status == .authorized || status == .provisional else {
-            error = L("通知未发送：请先允许 Aieyes 发送系统通知。"); return
+            error = L("通知未发送：请先允许 Aieyes 发送系统通知。"); return false
         }
         let content = UNMutableNotificationContent()
         content.title = title; content.body = body; content.sound = .default
-        do { try await center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) }
-        catch { self.error = L("通知发送失败：") + L(error.localizedDescription) }
+        do { try await center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)); return true }
+        catch { self.error = L("通知发送失败：") + L(error.localizedDescription); return false }
     }
     func test() async {
-        error = nil; testMessage = nil; await authorize()
+        error = nil; backgroundError = false; testMessage = nil; await authorize()
         await deliver(id: UUID().uuidString, title: L("Aieyes 测试通知"), body: L("收到此通知表示系统通知可正常显示。"))
         if error == nil { testMessage = L("测试通知已提交，请检查系统显示。") }
     }

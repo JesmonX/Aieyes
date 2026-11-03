@@ -425,9 +425,14 @@ impl Store {
         }
         let mut snapshots = self.db.prepare("SELECT payload FROM quota_history WHERE account_key=?1 AND stamp>=?2 AND stamp<=?3 ORDER BY stamp")?;
         let snapshots = snapshots
-            .query_map(params![account_key, from - 120, to + 120], |r| {
-                r.get::<_, String>(0)
-            })?
+            .query_map(
+                params![
+                    account_key,
+                    from - 120 - crate::store::QUOTA_OBSERVATION_MAX_GAP,
+                    to + 120
+                ],
+                |r| r.get::<_, String>(0),
+            )?
             .map(|r| Ok(serde_json::from_str::<QuotaSnapshot>(&r?)?))
             .collect::<Result<Vec<_>>>()?;
         if snapshots.is_empty() {
@@ -681,6 +686,203 @@ mod tests {
             .unwrap();
         assert_eq!(key, hash("b"));
     }
+    #[test]
+    fn repeated_quota_reads_keep_edges_and_heartbeat_and_still_attribute() {
+        let (_dir, s, _source, e) = fixture();
+        let count = |s: &Store| -> i64 {
+            s.db.query_row("SELECT COUNT(*) FROM quota_history", [], |r| r.get(0))
+                .unwrap()
+        };
+        let mut q = QuotaSnapshot {
+            provider: "codex".into(),
+            account_id: "a".into(),
+            source_id: "s".into(),
+            origin: "live".into(),
+            plan: Some("plus".into()),
+            updated_at: 1000,
+            windows: vec![QuotaWindow {
+                id: "five".into(),
+                window_minutes: Some(300),
+                resets_at: Some(10000),
+                used_percent: 1.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        s.quota(&q).unwrap();
+        q.updated_at = 1040;
+        s.quota(&q).unwrap();
+        q.updated_at = 1080;
+        q.windows[0].resets_at = Some(10002);
+        s.quota(&q).unwrap();
+        assert_eq!(count(&s), 1, "unchanged reads are not stored");
+        // A request after the last stored row still finds its state.
+        let mut request = q.clone();
+        request.account_id.clear();
+        s.db.execute(
+            "INSERT INTO codex_request_limits VALUES('s','request',?1)",
+            [serde_json::to_string(&request).unwrap()],
+        )
+        .unwrap();
+        assert!(
+            s.codex_request_quota_matches(&e, &["s".into()], "codex:a", 1200, 1230)
+                .unwrap()
+        );
+        q.updated_at = 1120;
+        q.windows[0].used_percent = 2.0;
+        s.quota(&q).unwrap();
+        assert_eq!(count(&s), 3, "a change stores both sides of its edge");
+        q.updated_at = 1160;
+        q.windows[0].resets_at = Some(10040);
+        s.quota(&q).unwrap();
+        assert_eq!(count(&s), 4, "a sliding reset time is evidence");
+        q.updated_at = 1400;
+        s.quota(&q).unwrap();
+        assert_eq!(count(&s), 5, "the heartbeat bounds the gap");
+        // A slow poll: the skipped read at 1500 keeps 1400 -> 1800 from becoming
+        // a data gap that the reads themselves never had.
+        q.updated_at = 1500;
+        s.quota(&q).unwrap();
+        q.updated_at = 1800;
+        s.quota(&q).unwrap();
+        assert_eq!(count(&s), 7);
+        q.updated_at = 1840;
+        q.windows[0].used_percent = 3.0;
+        s.quota(&q).unwrap();
+        q.updated_at = 1860;
+        s.quota(&q).unwrap();
+        assert_eq!(count(&s), 9, "reads stay dense right after a change");
+        let mut stamps =
+            s.db.prepare("SELECT stamp FROM quota_history ORDER BY stamp")
+                .unwrap();
+        let stamps: Vec<i64> = stamps
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert!(
+            stamps
+                .windows(2)
+                .all(|w| w[1] - w[0] <= crate::store::QUOTA_OBSERVATION_MAX_GAP)
+        );
+    }
+
+    #[test]
+    fn missed_subscription_end_read_keeps_the_badge_and_adds_no_history() {
+        let (_dir, s, _source, _e) = fixture();
+        let stored = |s: &Store| -> QuotaSnapshot {
+            let raw: String =
+                s.db.query_row("SELECT payload FROM quotas", [], |r| r.get(0))
+                    .unwrap();
+            serde_json::from_str(&raw).unwrap()
+        };
+        let rows = |s: &Store| -> i64 {
+            s.db.query_row("SELECT COUNT(*) FROM quota_history", [], |r| r.get(0))
+                .unwrap()
+        };
+        let mut q = QuotaSnapshot {
+            provider: "codex".into(),
+            account_id: "a".into(),
+            source_id: "s".into(),
+            origin: "live".into(),
+            plan: Some("plus".into()),
+            updated_at: 1000,
+            subscription_expires_at: Some(5000),
+            windows: vec![QuotaWindow {
+                id: "five".into(),
+                window_minutes: Some(300),
+                resets_at: Some(10000),
+                used_percent: 1.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        s.quota(&q).unwrap();
+        q.updated_at = 1040;
+        q.subscription_expires_at = None;
+        s.quota(&q).unwrap();
+        assert_eq!(stored(&s).subscription_expires_at, Some(5000));
+        assert_eq!(rows(&s), 1, "a missed file read is not a new quota state");
+        // A renewed end date replaces it, without being a new quota state either.
+        q.updated_at = 1080;
+        q.subscription_expires_at = Some(9000);
+        s.quota(&q).unwrap();
+        assert_eq!(stored(&s).subscription_expires_at, Some(9000));
+        assert_eq!(rows(&s), 1);
+        // A changed plan or a passed date no longer vouches for the old value.
+        q.updated_at = 1120;
+        q.subscription_expires_at = None;
+        q.plan = Some("pro".into());
+        s.quota(&q).unwrap();
+        assert_eq!(stored(&s).subscription_expires_at, None);
+        q.updated_at = 1160;
+        q.subscription_expires_at = Some(1200);
+        s.quota(&q).unwrap();
+        q.updated_at = 1240;
+        q.subscription_expires_at = None;
+        s.quota(&q).unwrap();
+        assert_eq!(stored(&s).subscription_expires_at, None);
+    }
+
+    #[test]
+    fn first_maintenance_pass_returns_expired_space_and_passes_are_exclusive() {
+        let (dir, s, _source, _e) = fixture();
+        let expired = crate::models::now() - 91 * 86400;
+        let payload = "x".repeat(2000);
+        for _ in 0..2000 {
+            s.db.execute(
+                "INSERT INTO quota_history(account_key,stamp,payload) VALUES('k',?1,?2)",
+                params![expired, payload],
+            )
+            .unwrap();
+        }
+        let count = |s: &Store| -> i64 {
+            s.db.query_row("SELECT COUNT(*) FROM quota_history", [], |r| r.get(0))
+                .unwrap()
+        };
+        // Another process is mid-pass: leave the work to it.
+        let held = crate::file_lock::FileLock::try_exclusive(
+            std::fs::File::options()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(dir.path().join("store-maintenance.lock"))
+                .unwrap(),
+        )
+        .unwrap();
+        s.maintain_quota_history().unwrap();
+        assert_eq!(count(&s), 2000);
+        drop(held);
+        let before: i64 =
+            s.db.query_row("PRAGMA page_count", [], |r| r.get(0))
+                .unwrap();
+        s.maintain_quota_history().unwrap();
+        assert_eq!(count(&s), 0);
+        let after: i64 =
+            s.db.query_row("PRAGMA page_count", [], |r| r.get(0))
+                .unwrap();
+        assert!(after < before / 2, "{before} -> {after}");
+    }
+
+    #[test]
+    fn quota_history_maintenance_removes_only_expired_rows() {
+        let (_dir, s, _source, _e) = fixture();
+        let stamp = crate::models::now();
+        for at in [stamp - 91 * 86400, stamp - 89 * 86400] {
+            s.db.execute(
+                "INSERT INTO quota_history(account_key,stamp,payload) VALUES('k',?1,'{}')",
+                [at],
+            )
+            .unwrap();
+        }
+        s.maintain_quota_history().unwrap();
+        s.maintain_quota_history().unwrap();
+        let oldest: i64 =
+            s.db.query_row("SELECT MIN(stamp) FROM quota_history", [], |r| r.get(0))
+                .unwrap();
+        assert_eq!(oldest, stamp - 89 * 86400);
+    }
+
     #[test]
     fn request_quota_signature_must_match_the_candidate_account() {
         let (_dir, s, _source, e) = fixture();

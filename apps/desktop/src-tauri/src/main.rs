@@ -439,6 +439,7 @@ fn main() {
                 desktop::setup(app, &root)?;
                 return Ok(());
             }
+            Engine::spawn_store_maintenance(&root);
             let runner = app
                 .path()
                 .resource_dir()?

@@ -51,6 +51,10 @@ struct AieyesCommands: Commands {
     private var localEventMonitor: Any?
     private var estimateWindows: [String: NSWindow] = [:]
     private var approvingSettingsClose = false
+    private var quitWaitCancelled = false
+    private var accountSwitchKey: String?
+    // Unsaved-draft state reported by the account order / panel accounts editors, keyed by window.
+    private var auxiliaryDirty: [ObjectIdentifier: Bool] = [:]
     private var cancellables = Set<AnyCancellable>()
     private var model: AppModel!
     private var titleUpdatePending = false
@@ -207,7 +211,7 @@ struct AieyesCommands: Commands {
     }
     func popoverDidClose(_ notification: Notification) { statusItem.button?.highlight(false); model.setWindowVisible(false, window: "panel") }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        let windows = [detailWindow, panelAccountsWindow, quotaOrderWindow, samplingWindow].compactMap { $0 } + Array(estimateWindows.values)
+        let windows = [detailWindow, accountSwitchWindow, panelAccountsWindow, quotaOrderWindow, samplingWindow].compactMap { $0 } + Array(estimateWindows.values)
         if let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first(where: { $0.isVisible || $0.isMiniaturized }) {
             showWindow(window)
         } else { showPopover() }
@@ -360,6 +364,7 @@ struct AieyesCommands: Commands {
     private func openEstimate(_ quota: Quota, credits: Bool = false, group: String? = nil) {
         let key = quota.id + (credits ? ":credits" : ":quota")
         popover.performClose(nil)
+        if let existing = estimateWindows[key], existing.isVisible || existing.isMiniaturized { showWindow(existing); return }
         let window = estimateWindows[key] ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 530, height: 600), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         if estimateWindows[key] == nil {
             window.title = quota.name + (credits ? L(" · credit 价值") : L(" · 额度估值")); window.isReleasedWhenClosed = false
@@ -372,11 +377,12 @@ struct AieyesCommands: Commands {
     }
     private func openAccountSwitch(_ key: String) {
         popover.performClose(nil)
+        if let existing = accountSwitchWindow, accountSwitchKey == key, existing.isVisible || existing.isMiniaturized { showWindow(existing); return }
         let window = accountSwitchWindow ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 470), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = L("切换账户"); window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: AccountTargetsView(model: model, accountKey: key))
         if accountSwitchWindow == nil { window.center() }
-        accountSwitchWindow = window; fitToVisibleScreen(window); showWindow(window)
+        accountSwitchWindow = window; accountSwitchKey = key; fitToVisibleScreen(window); showWindow(window)
     }
     private func openSampling() {
         popover.performClose(nil)
@@ -393,20 +399,24 @@ struct AieyesCommands: Commands {
         popover.performClose(nil)
         if quotaOrderWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 488, height: 430), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.title = L("调整账户顺序"); window.isReleasedWhenClosed = false; window.center(); quotaOrderWindow = window
+            window.title = L("调整账户顺序"); window.isReleasedWhenClosed = false; window.center(); window.delegate = self; quotaOrderWindow = window
         }
         guard let window = quotaOrderWindow else { return }
-        window.contentView = NSHostingView(rootView: QuotaOrderView(model: model, onClose: { [weak window] in window?.close() }))
+        if window.isVisible || window.isMiniaturized { showWindow(window); return }
+        let id = ObjectIdentifier(window); auxiliaryDirty[id] = false
+        window.contentView = NSHostingView(rootView: QuotaOrderView(model: model, onClose: { [weak window] in window?.close() }, onDirtyChange: { [weak self] in self?.auxiliaryDirty[id] = $0 }))
         fitToVisibleScreen(window); showWindow(window)
     }
     private func openPanelAccounts() {
         popover.performClose(nil)
         if panelAccountsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 488, height: 528), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.title = L("面板显示账户"); window.isReleasedWhenClosed = false; window.center(); panelAccountsWindow = window
+            window.title = L("面板显示账户"); window.isReleasedWhenClosed = false; window.center(); window.delegate = self; panelAccountsWindow = window
         }
         guard let window = panelAccountsWindow else { return }
-        window.contentView = NSHostingView(rootView: PanelAccountsView(model: model, onClose: { [weak window] in window?.close() }))
+        if window.isVisible || window.isMiniaturized { showWindow(window); return }
+        let id = ObjectIdentifier(window); auxiliaryDirty[id] = false
+        window.contentView = NSHostingView(rootView: PanelAccountsView(model: model, onClose: { [weak window] in window?.close() }, onDirtyChange: { [weak self] in self?.auxiliaryDirty[id] = $0 }))
         fitToVisibleScreen(window); showWindow(window)
     }
     private func fitToVisibleScreen(_ window: NSWindow) {
@@ -419,9 +429,31 @@ struct AieyesCommands: Commands {
         window.setFrame(frame, display: true)
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if sender === quotaOrderWindow || sender === panelAccountsWindow {
+            guard auxiliaryDirty[ObjectIdentifier(sender)] == true, sender.attachedSheet == nil else { return sender.attachedSheet == nil }
+            // Same wording as the editors' discardDraftConfirmation.
+            let alert = NSAlert()
+            alert.messageText = L("放弃未保存的编辑？")
+            alert.informativeText = L("此编辑器的输入尚未保存，放弃后无法恢复。")
+            alert.addButton(withTitle: L("继续编辑"))
+            alert.addButton(withTitle: L("放弃更改"))
+            alert.buttons[0].keyEquivalent = "\u{1b}"
+            alert.beginSheetModal(for: sender) { [weak sender] response in
+                if response == .alertSecondButtonReturn { sender?.close() }
+            }
+            return false
+        }
         guard sender === detailWindow else { return true }
         if approvingSettingsClose { approvingSettingsClose = false; return true }
-        guard !model.settingsSaving, !model.repricing, sender.attachedSheet == nil else { return false }
+        guard sender.attachedSheet == nil else { return false }
+        if model.settingsSaving || model.repricing {
+            let alert = NSAlert()
+            alert.messageText = model.repricing ? L("正在重新计价…") : L("正在保存…")
+            alert.informativeText = L("请等待当前操作完成后再关闭窗口。")
+            alert.addButton(withTitle: L("好"))
+            alert.beginSheetModal(for: sender) { _ in }
+            return false
+        }
         guard model.settingsDirty else { return true }
         let alert = NSAlert()
         alert.messageText = L("保存配置更改？")
@@ -463,10 +495,56 @@ struct AieyesCommands: Commands {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if detailWindow?.attachedSheet != nil { detailWindow?.makeKeyAndOrderFront(nil); return .terminateCancel }
         guard model != nil else { return .terminateNow }
-        guard !model.settingsSaving, !model.repricing else { return .terminateCancel }
+        if model.settingsSaving || model.repricing { quitAfterPendingWork(sender); return .terminateLater }
         guard model.settingsDirty else { return .terminateNow }
         openSettings()
         guard let window = detailWindow, window.attachedSheet == nil else { return .terminateCancel }
+        askToSaveBeforeQuit(on: window, sender)
+        return .terminateLater
+    }
+    /// Logout, restart and shutdown must not be held up by this app.
+    private var sessionIsEnding: Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              event.eventClass == AEEventClass(kCoreEventClass), event.eventID == AEEventID(kAEQuitApplication),
+              let reason = event.attributeDescriptor(forKeyword: AEKeyword(kAEQuitReason))?.enumCodeValue else { return false }
+        return [kAELogOut, kAEReallyLogOut, kAEShowRestartDialog, kAEShowShutdownDialog, kAERestart, kAEShutDown].contains { OSType($0) == reason }
+    }
+    /// Saving and repricing are single core transactions. A user quit explains the wait and can be cancelled;
+    /// an ending session waits briefly, then lets the unfinished transaction roll back.
+    private func quitAfterPendingWork(_ sender: NSApplication) {
+        let ending = sessionIsEnding
+        var notice: NSAlert?
+        quitWaitCancelled = false
+        if !ending {
+            openSettings()
+            if let window = detailWindow, window.attachedSheet == nil {
+                let alert = NSAlert()
+                alert.messageText = model.repricing ? L("正在重新计价…") : L("正在保存…")
+                alert.informativeText = L("完成后将自动退出。")
+                alert.addButton(withTitle: L("取消退出"))
+                alert.beginSheetModal(for: window) { [weak self] response in
+                    guard response == .alertFirstButtonReturn else { return }
+                    self?.quitWaitCancelled = true
+                    sender.reply(toApplicationShouldTerminate: false)
+                }
+                notice = alert
+            }
+        }
+        Task { @MainActor [weak self] in
+            let deadline = Date().addingTimeInterval(10)
+            while let self, let model = self.model, model.settingsSaving || model.repricing, !self.quitWaitCancelled, !ending || Date() < deadline {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            guard let self, let model = self.model else { sender.reply(toApplicationShouldTerminate: true); return }
+            if self.quitWaitCancelled { return }
+            if let notice { notice.window.sheetParent?.endSheet(notice.window, returnCode: .abort) }
+            guard !model.settingsSaving, !model.repricing, model.settingsDirty else { sender.reply(toApplicationShouldTerminate: true); return }
+            self.openSettings()
+            guard let window = self.detailWindow, window.attachedSheet == nil else { sender.reply(toApplicationShouldTerminate: false); return }
+            self.askToSaveBeforeQuit(on: window, sender)
+        }
+    }
+    private func askToSaveBeforeQuit(on window: NSWindow, _ sender: NSApplication) {
         let alert = NSAlert()
         alert.messageText = L("退出前保存配置更改？")
         alert.informativeText = L("保存全部配置，或放弃本次未保存的更改。")
@@ -482,7 +560,6 @@ struct AieyesCommands: Commands {
                 self.model.discardSettingsDraft(); sender.reply(toApplicationShouldTerminate: true)
             } else { sender.reply(toApplicationShouldTerminate: false) }
         }
-        return .terminateLater
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) {

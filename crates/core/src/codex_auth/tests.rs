@@ -1118,3 +1118,37 @@ fn query_epochs_reject_round_trip_switches_and_switches_wait_for_writers() {
     let _switch = files::lock_wait(&root).unwrap();
     writer.join().unwrap();
 }
+
+#[test]
+fn wake_lock_queues_behind_a_short_holder_and_reports_a_long_one_as_busy() {
+    let (_dir, root) = root();
+    let held = files::lock(&root).unwrap();
+    let error = match files::lock_patient(&root, std::time::Duration::from_millis(150)) {
+        Err(error) => error,
+        Ok(_) => panic!("lock should stay busy"),
+    };
+    assert!(error.to_string().contains("正在执行的账户操作"));
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        drop(held);
+    });
+    assert!(files::lock_patient(&root, std::time::Duration::from_secs(5)).is_ok());
+    release.join().unwrap();
+}
+
+#[test]
+fn subscription_end_uses_the_newest_token_claim() {
+    let token = |end: &str| {
+        let body = URL_SAFE_NO_PAD.encode(
+            json!({"https://api.openai.com/auth":{"chatgpt_subscription_active_until":end}})
+                .to_string(),
+        );
+        format!("h.{body}.s")
+    };
+    let value = json!({"tokens":{
+        "access_token":token("2026-11-01T07:57:18+00:00"),
+        "id_token":token("2026-12-01T07:57:18+00:00"),
+    }});
+    assert_eq!(files::subscription_expires_at(&value), Some(1796111838));
+    assert_eq!(files::subscription_expires_at(&auth("u", "w", "r")), None);
+}

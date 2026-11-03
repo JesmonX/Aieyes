@@ -146,6 +146,16 @@ pub(crate) fn atomic_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
 pub fn lock(root: &Path) -> Result<crate::file_lock::FileLock> {
     lock_named(root, "凭据保存或续期")
 }
+/// Another operation holds this home's coordinator lock. Retrying callers test
+/// the type; the text remains the message users see and remote runners match.
+#[derive(Debug)]
+struct HomeBusy;
+impl std::fmt::Display for HomeBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("此 Codex 目录有正在执行的账户操作，请稍后重试")
+    }
+}
+impl std::error::Error for HomeBusy {}
 pub fn lock_named(root: &Path, name: &str) -> Result<crate::file_lock::FileLock> {
     let state = root.join(".aieyes/state");
     private_dir(&state)?;
@@ -160,9 +170,7 @@ pub fn lock_named(root: &Path, name: &str) -> Result<crate::file_lock::FileLock>
     }
     let f = options.open(path)?;
     let guard = crate::file_lock::FileLock::try_exclusive(f).map_err(|error| match error {
-        std::fs::TryLockError::WouldBlock => {
-            anyhow::anyhow!("此 Codex 目录有正在执行的账户操作，请稍后重试")
-        }
+        std::fs::TryLockError::WouldBlock => anyhow::Error::new(HomeBusy),
         other => anyhow::anyhow!("无法取得 Codex 账户锁：{other}"),
     })?;
     atomic(
@@ -170,6 +178,25 @@ pub fn lock_named(root: &Path, name: &str) -> Result<crate::file_lock::FileLock>
         &json!({"name":name}),
     )?;
     Ok(guard)
+}
+/// Scheduled tasks on one home start in the same minute and hold this lease for
+/// a whole model turn. Queue behind it, inside the runner's 150-second run lease
+/// (a turn may take 120 seconds); a home still busy afterwards reports busy.
+pub const WAKE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(25);
+pub fn lock_patient(
+    root: &Path,
+    patience: std::time::Duration,
+) -> Result<crate::file_lock::FileLock> {
+    let until = std::time::Instant::now() + patience;
+    loop {
+        crate::operations::check()?;
+        match lock(root) {
+            Err(error) if error.is::<HomeBusy>() && std::time::Instant::now() < until => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            result => return result,
+        }
+    }
 }
 /// Switching waits for credential writers; ordinary network reads hold no home lease.
 pub fn lock_wait(root: &Path) -> Result<crate::file_lock::FileLock> {
@@ -179,7 +206,7 @@ pub fn lock_wait(root: &Path) -> Result<crate::file_lock::FileLock> {
         match lock_named(root, "账户切换") {
             Ok(guard) => return Ok(guard),
             Err(error) => {
-                if !error.to_string().contains("正在执行的账户操作") {
+                if !error.is::<HomeBusy>() {
                     return Err(error);
                 }
                 let owner = read(&root.join(".aieyes/state/coordinator-operation.json"))
@@ -288,6 +315,21 @@ pub fn identity(auth: &Value) -> Result<Identity> {
             .unwrap_or("unknown")
             .into(),
     })
+}
+/// The newest subscription end claimed by the login tokens, if any.
+pub fn subscription_expires_at(auth: &Value) -> Option<i64> {
+    ["access_token", "id_token"]
+        .iter()
+        .filter_map(|key| {
+            let claims = claims(auth["tokens"][key].as_str()?);
+            let end = claims["https://api.openai.com/auth"]["chatgpt_subscription_active_until"]
+                .as_str()?
+                .to_owned();
+            chrono::DateTime::parse_from_rfc3339(&end)
+                .ok()
+                .map(|time| time.timestamp())
+        })
+        .max()
 }
 pub fn external(auth: &Value) -> Result<Value> {
     let ident = identity(auth)?;

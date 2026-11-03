@@ -4,6 +4,7 @@ Also imported by the deployed wake runner. Only Python standard-library dependen
 """
 import base64
 import contextlib
+import datetime
 import hashlib
 import json
 import os
@@ -95,12 +96,12 @@ def revision(value):
 
 
 class Lock:
-    def __init__(self, root, wait=False, name='凭据保存或续期'):
+    def __init__(self, root, wait=False, name='凭据保存或续期', patience=0):
         import fcntl
         state = private(root / '.aieyes/state')
         fd = os.open(str(safe(state / 'coordinator.lock')), os.O_RDWR | os.O_CREAT, 0o600)
         self.file = os.fdopen(fd, 'r+')
-        end = time.monotonic() + (30 if wait else 0)
+        end = time.monotonic() + (30 if wait else patience)
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -167,6 +168,15 @@ def identity(auth):
     return dict(key=hashlib.sha256((user + '\0' + workspace).encode()).hexdigest(), workspace=workspace,
                 email=i.get('email') or a.get('https://api.openai.com/profile', {}).get('email', ''),
                 plan=meta.get('chatgpt_plan_type') or imeta.get('chatgpt_plan_type') or 'unknown')
+
+
+def subscription_expires_at(auth):
+    tokens, ends = auth.get('tokens') or {}, []
+    for key in ('access_token', 'id_token'):
+        end = claims(tokens.get(key, '')).get('https://api.openai.com/auth', {}).get('chatgpt_subscription_active_until')
+        try: ends.append(int(datetime.datetime.fromisoformat(end.replace('Z', '+00:00')).timestamp()))
+        except (AttributeError, ValueError): pass
+    return max(ends, default=None)
 
 
 def external(auth):
@@ -776,6 +786,8 @@ def quota_read(loc, root, profile_id):
             check_query_epoch(root, epoch)
             if active(root) != active_before:
                 raise ValueError('日常账户已改变，已丢弃旧查询结果')
+            end = subscription_expires_at(current_auth(root, p))
+            if end is not None and isinstance(result, dict): result['subscriptionExpiresAt'] = end
             return result
     try:
         with query_lock(query): return attempt(auth)
@@ -1118,7 +1130,8 @@ def with_credentials(loc, profile_id):
 def wakeup(loc, profile_id, manifest, cwd):
     """Use access-token auth while the daily CLI keeps refresh-token authority."""
     root = safe(pathlib.Path(os.path.expanduser(loc['path']))).resolve()
-    with Lock(root):
+    # Tasks on one home start together and hold this lease for a whole model turn.
+    with Lock(root, patience=25):
         require_file(root)
         recover(root)
         p = profile(root, profile_id)

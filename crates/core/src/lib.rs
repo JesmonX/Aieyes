@@ -131,6 +131,22 @@ impl Engine {
     /// Detect native accounts once in the background after the engine starts.
     /// Uses its own connection; scans are serialized by per-target file locks.
     /// `AIEYES_AUTO_SCAN=off` disables it so UI fixtures never read the developer's real logins.
+    /// Background upkeep every front end starts once; failures retry next launch.
+    pub fn spawn_store_maintenance(root: &Path) {
+        if std::env::var("AIEYES_AUTO_SCAN").is_ok_and(|v| v == "off") {
+            return;
+        }
+        let root = root.to_path_buf();
+        let _ = std::thread::Builder::new()
+            .name("aieyes-store-maintenance".into())
+            .spawn(move || {
+                let result =
+                    store::Store::open(&root).and_then(|store| store.maintain_quota_history());
+                if let Err(error) = result {
+                    eprintln!("Aieyes: 数据库维护失败，将在下次启动时重试：{error:#}");
+                }
+            });
+    }
     pub fn spawn_auto_scan(root: &Path) {
         if std::env::var("AIEYES_AUTO_SCAN").is_ok_and(|v| v == "off") {
             return;

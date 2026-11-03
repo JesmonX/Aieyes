@@ -193,7 +193,7 @@ pub const PROVIDERS: &[Provider] = &[
     Provider { id: "roo", name: "Roo Code", default_path: "~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline", binary: "", requires_path: false, wakeup: false, discover_local: true, agent_id: "roo", machines: true },
     Provider { id: "kiro", name: "Kiro", default_path: "~/.kiro", binary: "kiro-cli", requires_path: false, wakeup: false, discover_local: true, agent_id: "kiro", machines: true },
     Provider { id: "trae", name: "Trae", default_path: "~/Library/Application Support/Trae", binary: "trae-cli", requires_path: false, wakeup: false, discover_local: true, agent_id: "trae", machines: true },
-    Provider { id: "trae-cn", name: "Trae CN", default_path: "~/Library/Application Support/Trae CN", binary: "", requires_path: false, wakeup: false, discover_local: true, agent_id: "trae", machines: true },
+    Provider { id: "trae-cn", name: "Trae CN", default_path: "~/Library/Application Support/Trae CN", binary: "", requires_path: false, wakeup: false, discover_local: true, agent_id: "trae-cn", machines: true },
     Provider { id: "custom", name: "自定义", default_path: "~/.aieyes", binary: "", requires_path: true, wakeup: false, discover_local: false, agent_id: "custom", machines: true },
 ];
 #[rustfmt::skip]
@@ -225,7 +225,7 @@ pub const SESSION_SOUND_TONES: &[(&str, &str, &str)] = &[
     ("droplet", "水滴", "droplet"),
     ("pulse", "电子", "pulse"),
 ];
-pub const CONTRACT_HASH: &str = "87c48550dabe4e44a6a6a10b942139d00d65a27c7e650c2ada1300ea41618e07";
+pub const CONTRACT_HASH: &str = "0189d10a11f31d39054643c0c4725567316f9a2f638249e1926e71ccfbef17fd";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

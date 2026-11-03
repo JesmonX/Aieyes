@@ -689,7 +689,23 @@ impl Settings {
                 _ => {}
             }
         }
-        self.version = self.version.max(11);
+        if self.version < 12 {
+            // Trae CN became its own Agent: keep a configured edition in the entry list.
+            let configured = self
+                .agents
+                .iter()
+                .any(|a| a.provider == "trae-cn" && (a.enabled || !a.machine_ids.is_empty()))
+                || self.sources.iter().any(|s| s.provider == "trae-cn")
+                || self.accounts.iter().any(|a| a.provider == "trae-cn");
+            if let Some(ids) = &mut self.appearance.settings_agent_ids
+                && configured
+                && !ids.iter().any(|id| id == "trae-cn")
+                && let Some(index) = ids.iter().position(|id| id == "trae")
+            {
+                ids.insert(index + 1, "trae-cn".into());
+            }
+        }
+        self.version = self.version.max(12);
         self.configuration_issues.clear();
         let mut providers = std::collections::HashSet::new();
         for agent in &self.agents {
@@ -945,6 +961,9 @@ pub struct QuotaSnapshot {
     pub bank_reset: Option<Value>,
     pub bank_updated_at: Option<i64>,
     pub plan: Option<String>,
+    /// Paid-through time stated by the provider's login, not a billing-cycle reset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription_expires_at: Option<i64>,
     pub error: Option<String>,
 }
 

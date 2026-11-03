@@ -302,12 +302,20 @@ fn quota_read(loc: &Location, root: &Path, profile: &str) -> Result<Value> {
         let mut rpc = loc.rpc(&query, false)?;
         rpc.guard_query(root, &epoch)?;
         rpc.login_external(auth)?;
-        let quota = rpc.quota(auth, &mut || read_authority(root, &p))?;
+        let mut quota = rpc.quota(auth, &mut || read_authority(root, &p))?;
         files::check_query_epoch(root, &epoch)?;
         ensure!(
             current(root) == active_before,
             "日常账户已改变，已丢弃旧查询结果"
         );
+        if let (Some(row), Some(end)) = (
+            quota.as_object_mut(),
+            files::subscription_expires_at(
+                &read_authority(root, &p).unwrap_or_else(|_| auth.clone()),
+            ),
+        ) {
+            row.insert("subscriptionExpiresAt".into(), json!(end));
+        }
         Ok(quota)
     };
     match attempt(&auth) {
@@ -853,7 +861,7 @@ pub fn wakeup(
     cwd: &Path,
 ) -> Result<()> {
     let root = loc.root()?;
-    let _lock = files::lock(&root)?;
+    let _lock = files::lock_patient(&root, files::WAKE_LOCK_WAIT)?;
     file_mode(&root)?;
     recover(&root)?;
     let profile = files::profile(&root, profile_id)?;

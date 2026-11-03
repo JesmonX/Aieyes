@@ -34,7 +34,7 @@ macOS 采用 SwiftUI/AppKit 原生界面，Windows 与 Linux 使用 Tauri 桌面
 
 ## 接入你已经在用的工具
 
-Codex · Claude Code · Antigravity · DeepSeek · ZCode · Qoder · Grok · Cursor · OpenCode · Kimi · Harness · CodeBuddy · Pi · Oh My Pi
+Codex · Claude Code · Antigravity · DeepSeek · ZCode · Qoder · Grok · Cursor · OpenCode · Kimi · CodeBuddy · Pi · Oh My Pi
 
 历史读取、额度查询、API 配置与会话状态能力随接入而异。例如，Cursor 私有数据库中的请求级 Token 尚未作为支持的历史来源。具体能力见[接入说明](docs/agent-subscriptions.md)。
 

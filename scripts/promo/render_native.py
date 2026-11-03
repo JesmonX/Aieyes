@@ -224,7 +224,8 @@ def patch(name, text):
                          ("} detail: {", "Divider()"), (".navigationSplitViewStyle(.balanced).toolbar(removing:.sidebarToggle)", ""),
                          ("if collapsed {\n                    ScrollView { VStack(spacing:4) {\n                        ForEach(monitoring",
                           "if true {\n                    ScrollView { VStack(alignment: .leading, spacing:4) {\n                        groupLabel(L(\"监测\"))\n                        ForEach(monitoring"),
-                         ("Divider()\n                        ForEach(configuration", "groupLabel(L(\"配置\"))\n                        ForEach(configuration")]:
+                         ("Divider()\n                        ForEach(configuration", "groupLabel(L(\"配置\"))\n                        ForEach(configuration"),
+                         ("    private func navigationButton(", "    private func groupLabel(_ text: String) -> some View { Text(text).font(AppFont.caption).foregroundStyle(.secondary).padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 3) }\n    private func navigationButton(")]:
             assert text.count(old) == 1, old
             text = text.replace(old, new)
     if name == "CodexAccountsView.swift":

@@ -556,7 +556,6 @@
         "quota",
         "quotaReset"
       ],
-      "agent": "trae",
       "icon": {
         "asset": "trae",
         "monochrome": false

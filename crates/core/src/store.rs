@@ -43,6 +43,58 @@ impl WriteTransaction<'_> {
         Ok(())
     }
 }
+/// Consecutive observations further apart than this are a data gap: automatic
+/// valuation discards its pending intervals, and request attribution looks back
+/// this far. Skipping repeats must never create a gap the reads did not have.
+pub(crate) const QUOTA_OBSERVATION_MAX_GAP: i64 = 300;
+const QUOTA_HISTORY_HEARTBEAT: i64 = 240;
+/// Replay restarts an unreliable interval at the next stored observation, so
+/// reads stay dense while quota is moving; only idle polling is thinned.
+const QUOTA_HISTORY_ACTIVE_HOLD: i64 = 300;
+const QUOTA_HISTORY_RETENTION: i64 = 90 * 86400;
+/// Unanchored windows slide their reset time with each read. That movement is
+/// attribution evidence, so only sub-tolerance jitter counts as unchanged.
+const QUOTA_RESET_JITTER: u64 = 2;
+
+pub(crate) fn quota_history_same(a: &QuotaSnapshot, b: &QuotaSnapshot) -> Result<bool> {
+    let resets_match = a.windows.len() == b.windows.len()
+        && a.windows
+            .iter()
+            .zip(&b.windows)
+            .all(|(x, y)| match (x.resets_at, y.resets_at) {
+                (Some(x), Some(y)) => x.abs_diff(y) <= QUOTA_RESET_JITTER,
+                (None, None) => true,
+                _ => false,
+            });
+    let state = |q: &QuotaSnapshot| -> Result<Value> {
+        let mut value = serde_json::to_value(q)?;
+        if let Some(fields) = value.as_object_mut() {
+            for field in [
+                "updatedAt",
+                "creditsUpdatedAt",
+                "bankUpdatedAt",
+                "observationRevision",
+                "snapshotAt",
+                "sourceId",
+                "subscriptionExpiresAt",
+            ] {
+                fields.remove(field);
+            }
+        }
+        if let Some(identity) = value["identity"].as_object_mut() {
+            identity.remove("checkedAt");
+            identity.remove("subscriptionCheckedAt");
+        }
+        if let Some(windows) = value["windows"].as_array_mut() {
+            for window in windows.iter_mut().filter_map(Value::as_object_mut) {
+                window.remove("resetsAt");
+            }
+        }
+        Ok(value)
+    };
+    Ok(resets_match && state(a)? == state(b)?)
+}
+
 impl Store {
     pub fn open(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root)?;
@@ -66,6 +118,7 @@ impl Store {
         CREATE INDEX IF NOT EXISTS price_model ON price_history(model_id,fetched_at);
         CREATE TABLE IF NOT EXISTS quota_history(id INTEGER PRIMARY KEY,account_key TEXT NOT NULL,stamp INTEGER NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS quota_history_account ON quota_history(account_key,stamp);
+        CREATE INDEX IF NOT EXISTS quota_history_stamp ON quota_history(stamp);
         CREATE TABLE IF NOT EXISTS estimates(kind TEXT NOT NULL CHECK(kind IN ('quota','credits')),id TEXT NOT NULL,account_key TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(kind,id));
         DROP INDEX IF EXISTS estimates_active;
         CREATE UNIQUE INDEX IF NOT EXISTS estimates_manual_active ON estimates(kind,account_key) WHERE status IN ('active','pending') AND COALESCE(json_extract(payload,'$.samplingMode'),'')!='automatic';
@@ -1258,6 +1311,8 @@ impl Store {
             {
                 return Ok(());
             } else if q.origin == "log" {
+                // Session logs carry no subscription end; keep the last live one.
+                next.subscription_expires_at = old.subscription_expires_at;
                 if old.bank_reset.is_some() {
                     next.bank_reset = old.bank_reset;
                     next.bank_updated_at = old.bank_updated_at.or(Some(old.updated_at));
@@ -1267,6 +1322,12 @@ impl Store {
                     next.credits_origin = old.credits_origin;
                     next.credits_updated_at = old.credits_updated_at.or(Some(old.updated_at));
                 }
+            } else if next.subscription_expires_at.is_none() && old.plan == next.plan {
+                // The end date comes from a local login file read beside the quota
+                // response; a missed read says nothing about the subscription.
+                next.subscription_expires_at = old
+                    .subscription_expires_at
+                    .filter(|end| *end > q.updated_at);
             }
         }
         // A failed read retains the previous data. Replaying that same failure
@@ -1287,15 +1348,120 @@ impl Store {
         self.learn_capacity(observed)?;
         self.observe_estimates(observed)?;
         if q.error.is_none() && q.origin != "log" {
-            self.db.execute(
-                "INSERT INTO quota_history(account_key,stamp,payload) VALUES(?1,?2,?3)",
-                params![key, q.updated_at, serde_json::to_string(observed)?],
-            )?;
+            self.record_quota_history(&key, prior.as_deref(), observed)?;
         }
         self.db.execute("INSERT INTO quotas VALUES(?1,?2) ON CONFLICT(account_key) DO UPDATE SET payload=excluded.payload",params![key,serde_json::to_string(&next)?])?;
         if let Some(tx) = tx {
             tx.commit()?;
         }
+        Ok(())
+    }
+    /// Idle polling repeats the same state. Keep every change, both sides of
+    /// its edge, each read shortly after it, and a heartbeat that never widens
+    /// the gap between real reads.
+    fn record_quota_history(
+        &self,
+        key: &str,
+        prior: Option<&str>,
+        observed: &QuotaSnapshot,
+    ) -> Result<()> {
+        let insert = |stamp: i64, payload: String| {
+            self.db.execute(
+                "INSERT INTO quota_history(account_key,stamp,payload) VALUES(?1,?2,?3)",
+                params![key, stamp, payload],
+            )
+        };
+        let mut recent = self.db.prepare_cached(
+            "SELECT stamp,payload FROM quota_history WHERE account_key=?1 ORDER BY stamp DESC,id DESC LIMIT 64",
+        )?;
+        let mut rows = recent.query([key])?;
+        let mut newest: Option<(i64, QuotaSnapshot)> = None;
+        let mut changed_recently = false;
+        let mut newer: Option<(i64, QuotaSnapshot)> = None;
+        while let Some(row) = rows.next()? {
+            let stamp: i64 = row.get(0)?;
+            let snapshot: QuotaSnapshot = serde_json::from_str(&row.get::<_, String>(1)?)?;
+            if newest.is_none() {
+                newest = Some((stamp, snapshot.clone()));
+            }
+            if let Some((newer_stamp, newer_snapshot)) = &newer {
+                if observed.updated_at - newer_stamp >= QUOTA_HISTORY_ACTIVE_HOLD {
+                    break;
+                }
+                if !quota_history_same(newer_snapshot, &snapshot)? {
+                    changed_recently = true;
+                    break;
+                }
+            }
+            newer = Some((stamp, snapshot));
+        }
+        drop(rows);
+        if let Some((stamp, written)) = newest {
+            let age = observed.updated_at - stamp;
+            let same = quota_history_same(&written, observed)?;
+            if same && !changed_recently && (0..QUOTA_HISTORY_HEARTBEAT).contains(&age) {
+                return Ok(());
+            }
+            if let Some(raw) = prior.filter(|_| !same || age > QUOTA_OBSERVATION_MAX_GAP) {
+                let before: QuotaSnapshot = serde_json::from_str(raw)?;
+                if before.error.is_none()
+                    && before.origin != "log"
+                    && before.updated_at > stamp
+                    && before.updated_at < observed.updated_at
+                    && quota_history_same(&written, &before)?
+                {
+                    insert(before.updated_at, raw.to_string())?;
+                }
+            }
+        }
+        insert(observed.updated_at, serde_json::to_string(observed)?)?;
+        Ok(())
+    }
+    /// Removes expired quota history. After an upgrade, also returns freed
+    /// pages to the disk; a busy database simply retries on the next launch.
+    pub fn maintain_quota_history(&self) -> Result<()> {
+        // Every core process starts this; a second pass would only compete for
+        // the write lock, so it leaves the work to the one already running.
+        let file = std::fs::File::options()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.root.join("store-maintenance.lock"))?;
+        let _pass = match crate::file_lock::FileLock::try_exclusive(file) {
+            Ok(lock) => lock,
+            Err(std::fs::TryLockError::WouldBlock) => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        loop {
+            let removed = self.db.execute(
+                "DELETE FROM quota_history WHERE id IN (SELECT id FROM quota_history WHERE stamp<?1 LIMIT 5000)",
+                [now() - QUOTA_HISTORY_RETENTION],
+            )?;
+            if removed == 0 {
+                break;
+            }
+        }
+        const MARKER: &str = "database.vacuumed.version";
+        let version = env!("CARGO_PKG_VERSION");
+        let seen: Option<String> = self
+            .db
+            .query_row("SELECT value FROM kv WHERE key=?1", [MARKER], |r| r.get(0))
+            .optional()?;
+        if seen.as_deref() == Some(version) {
+            return Ok(());
+        }
+        let pages: i64 = self.db.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+        let free: i64 = self
+            .db
+            .query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
+        // Rewriting the whole file only pays off with real free space to return.
+        if free * 5 >= pages {
+            self.db.execute_batch("VACUUM")?;
+        }
+        self.db.execute(
+            "INSERT INTO kv VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![MARKER, version],
+        )?;
         Ok(())
     }
     pub fn source_status(&self, id: &str, status: &Value) -> Result<()> {

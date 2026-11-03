@@ -1392,6 +1392,10 @@ fn recovery_failed(app: &AppHandle, generation: u64, error: &str) {
     {
         state.recovery = "failed".into();
     }
+    // A close during the rebuild may have hidden the main window; don't leave the app unreachable.
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+    }
     emit_shell(app);
     let _ = app.emit("desktop:error", error);
 }
@@ -2754,6 +2758,10 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                     {
                         let _ = window.hide();
                         background_hint(app);
+                    } else {
+                        // No pet bridge or tray could reopen a hidden window, so close means quit.
+                        // Use the normal quit flow so unsaved settings drafts are still protected.
+                        let _ = app.emit_to("main", "desktop:quit-requested", ());
                     }
                     return;
                 }
@@ -2782,7 +2790,11 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                         true
                     }
                 } else {
-                    false
+                    // The floating window is being rebuilt and will reappear on its own.
+                    app.state::<Desktop>()
+                        .state
+                        .lock()
+                        .is_ok_and(|s| s.recovery == "refreshing")
                 };
                 if ready {
                     let _ = window.hide();

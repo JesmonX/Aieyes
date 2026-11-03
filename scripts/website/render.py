@@ -52,8 +52,25 @@ for source in (ROOT / "apps/macos/Sources/Aieyes").glob("*.swift"):
     return store
 }
 '''
+    if source.name == "MainWindowView.swift":
+        # cacheDisplay cannot draw the split view's floating glass sidebar. Lay out the same two columns in
+        # an HStack and draw the sidebar with the app's own navigation buttons and group labels.
+        for old, new in [("NavigationSplitView {", "HStack(spacing: 0) {"),
+                         (".navigationSplitViewColumnWidth(min:collapsed ? 62 : 190,ideal:collapsed ? 62 : 214,max:collapsed ? 62 : 260)", ""),
+                         ("} detail: {", "Divider()"), (".navigationSplitViewStyle(.balanced).toolbar(removing:.sidebarToggle)", ""),
+                         ("if collapsed {\n                    ScrollView { VStack(spacing:4) {\n                        ForEach(monitoring",
+                          "if true {\n                    ScrollView { VStack(alignment: .leading, spacing:4) {\n                        groupLabel(L(\"监测\"))\n                        ForEach(monitoring"),
+                         ("Divider()\n                        ForEach(configuration", "groupLabel(L(\"配置\"))\n                        ForEach(configuration"),
+                         ("    private func navigationButton(", "    private func groupLabel(_ text: String) -> some View { Text(text).font(AppFont.caption).foregroundStyle(.secondary).padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 3) }\n    private func navigationButton(")]:
+            assert text.count(old) == 1, old
+            text = text.replace(old, new)
     if source.name == "AieyesApp.swift":
         text = text.replace("200_000_000", "1_200_000_000")
+        # Keep invisible capture windows on a real screen so AppKit draws layers.
+        offscreen = "window.setFrameOrigin(NSPoint(x: -20000, y: -20000))"
+        assert text.count(offscreen) == 1
+        text = text.replace(offscreen, """window.alphaValue = 0
+        if let screen = NSScreen.main { window.setFrameOrigin(NSPoint(x: screen.frame.maxX - size.width, y: screen.frame.minY)) }""")
         capture_anchor = 'if let data = bitmap.representation(using: .png, properties: [:]) { try data.write(to: url) }'
         assert text.count(capture_anchor) == 1
         text = text.replace(capture_anchor, capture_anchor + '\n        try websiteLayoutSnapshot(view, to: url.deletingPathExtension().appendingPathExtension("json"))')

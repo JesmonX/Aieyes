@@ -142,6 +142,8 @@
       if (kind === 'edit') {edit(r.task);return;}
       if (['remove', 'delete'].includes(kind)) {
         confirmDestructive(kind === 'remove' ? AieyesI18n.t("移除自动任务") : AieyesI18n.t("删除任务草稿"), `<p>${AieyesI18n.t(kind === 'remove' ? "确认移除「{0}」？" : "确认删除「{0}」？", escapeHTML(r.task.name))}</p><p>${AieyesI18n.t("目标：{0}", escapeHTML(r.deployment?.target ?? state.settings.sources.find(s => s.id === r.task.sourceId)?.name ?? AieyesI18n.t("本机")))}</p><p>${kind === 'remove' ? AieyesI18n.t("后续自动唤醒停止，运行历史保留。") : AieyesI18n.t("仅删除尚未部署的草稿，运行历史保留。")}</p>`, async () => {if (!(await action(id, kind))) throw new Error(taskErrors.get(id)?.get(kind) || AieyesI18n.t("移除失败"));}, kind === 'remove' ? AieyesI18n.t("确认移除") : AieyesI18n.t("删除草稿"));
+      } else if (kind === 'run') {
+        confirmDestructive(AieyesI18n.t("立即运行任务？"), `<p>${AieyesI18n.t("将立即调用「{0}」的模型，可能消耗订阅额度。", escapeHTML(r.task.name))}</p><p>${AieyesI18n.t("目标：{0}", escapeHTML(r.deployment?.target ?? AieyesI18n.t("本机")))}</p>`, async () => {await action(id, kind);}, AieyesI18n.t("确认运行"), { danger: false });
       } else action(id, kind);
     });
   }

@@ -38,6 +38,8 @@ struct Process {
 #[derive(Default)]
 pub(crate) struct Snapshot {
     processes: Vec<Process>,
+    /// Start time of every process seen by this scan, agent or not.
+    running: HashMap<u32, u64>,
 }
 #[derive(Clone, Copy)]
 pub(crate) struct Evidence {
@@ -276,6 +278,11 @@ impl Snapshot {
             true,
             ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
         );
+        let running = system
+            .processes()
+            .iter()
+            .map(|(pid, process)| (pid.as_u32(), process.start_time()))
+            .collect();
         let ids: Vec<_> = system
             .processes()
             .iter()
@@ -433,7 +440,42 @@ impl Snapshot {
                 processes.push(process);
             }
         }
-        Self { processes }
+        Self { processes, running }
+    }
+    pub(crate) fn is_running(&self, pid: u32, start: u64) -> bool {
+        self.running
+            .get(&pid)
+            .is_some_and(|seen| start == 0 || *seen == start)
+    }
+    /// Cheap pre-filter for transcripts past the discovery age limit: name
+    /// matches come first so stale files cost no filesystem call. A false
+    /// positive only re-reads a file; `associate` still decides liveness.
+    pub(crate) fn holds(&self, provider: &str, path: &Path) -> bool {
+        let Some(name) = path.file_name() else {
+            return false;
+        };
+        let stem = path.file_stem().and_then(|v| v.to_str()).unwrap_or("");
+        let resolved = std::cell::OnceCell::new();
+        let target = || resolved.get_or_init(|| canonical(path));
+        let parent = std::cell::OnceCell::new();
+        let directory = || parent.get_or_init(|| path.parent().map(canonical));
+        self.processes
+            .iter()
+            .filter(|p| p.provider == provider)
+            .any(|p| {
+                let selected = p.selected_session.as_deref().is_some_and(|value| {
+                    value.len() >= 8 && stem.contains(value)
+                        || Path::new(value).file_name() == Some(name)
+                            && absolute(value).as_ref() == Some(target())
+                });
+                selected
+                    || p.files.iter().any(|file| {
+                        file.file_name() == Some(name) && file == target()
+                            || provider == "deepseek-harness"
+                                && file.file_name().is_some_and(|v| v == "session.lock")
+                                && directory().as_deref() == file.parent()
+                    })
+            })
     }
     pub(crate) fn associate(
         &self,
@@ -628,6 +670,7 @@ mod tests {
                 process(1, "/project/a", &["pi", "-p", "fixture"]),
                 process(2, "/project/b", &["pi"]),
             ],
+            ..Default::default()
         };
         let result = snapshot.associate("pi", &sessions);
         assert_eq!(
@@ -662,6 +705,7 @@ mod tests {
         process.internal = true;
         let snapshot = Snapshot {
             processes: vec![process],
+            ..Default::default()
         };
         let result = snapshot.associate("pi", &sessions);
         assert_eq!(
@@ -684,6 +728,55 @@ mod tests {
         );
     }
     #[test]
+    fn running_check_uses_the_scan_and_rejects_a_reused_pid() {
+        let snapshot = Snapshot {
+            running: HashMap::from([(7, 100)]),
+            ..Default::default()
+        };
+        assert!(snapshot.is_running(7, 100));
+        assert!(snapshot.is_running(7, 0));
+        assert!(
+            !snapshot.is_running(7, 101),
+            "a reused PID is another process"
+        );
+        assert!(!snapshot.is_running(8, 100));
+    }
+
+    #[test]
+    fn holds_matches_only_the_transcript_a_process_owns() {
+        let dir = tempfile::tempdir().unwrap();
+        let open = dir.path().join("open.jsonl");
+        let resumed = dir.path().join("rollout-0190aaaa-bbbb.jsonl");
+        let other = dir.path().join("other.jsonl");
+        for path in [&open, &resumed, &other] {
+            std::fs::write(path, "").unwrap();
+        }
+        let process = |session: Option<&str>, files: HashSet<PathBuf>| Process {
+            pid: 1,
+            start: 1,
+            provider: "codex".into(),
+            classification: None,
+            selected_session: session.map(str::to_string),
+            workspace: None,
+            root: dir.path().to_owned(),
+            root_observed: true,
+            internal: false,
+            files,
+            observed: Instant::now(),
+        };
+        let snapshot = Snapshot {
+            processes: vec![
+                process(None, HashSet::from([canonical(&open)])),
+                process(Some("0190aaaa-bbbb"), HashSet::new()),
+            ],
+            ..Default::default()
+        };
+        assert!(snapshot.holds("codex", &open));
+        assert!(snapshot.holds("codex", &resumed));
+        assert!(!snapshot.holds("codex", &other));
+        assert!(!snapshot.holds("claude", &open));
+    }
+    #[test]
     fn title_rewrite_keeps_launch_verdict_and_root_only_for_the_same_process_lifetime() {
         let mut launched = process(
             1,
@@ -702,6 +795,7 @@ mod tests {
         assert!(rewritten.internal);
         let snapshot = Snapshot {
             processes: vec![rewritten],
+            ..Default::default()
         };
         let sessions = [session("a", "/project/a")];
         assert_eq!(
@@ -730,6 +824,7 @@ mod tests {
         b.1.path = b.0.clone().into();
         let mut snapshot = Snapshot {
             processes: vec![writer],
+            ..Default::default()
         };
         let source = Source {
             provider: "deepseek-harness".into(),

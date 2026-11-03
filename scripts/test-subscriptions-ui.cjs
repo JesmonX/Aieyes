@@ -46,7 +46,7 @@ function fixture(){window.setInterval=()=>0;window.__TAURI__={event:{async liste
   const settings=await rpc('settings.get');settings.sources=[];settings.accounts=[];
   const providers=['zcode','qoder','grok','opencode','kimi','deepseek'];
   // Cursor quota comes from the IDE/CLI login (api2); the session Cookie form is gone.
-  for(const p of ['cursor','trae']){const a=settings.agents.find(a=>a.provider===p);a.enabled=true;a.machineIds=['local'];}
+  for(const p of ['cursor','trae','trae-cn']){const a=settings.agents.find(a=>a.provider===p);a.enabled=true;a.machineIds=['local'];}
   for(const p of providers){const a=settings.agents.find(a=>a.provider===p);a.enabled=true;a.machineIds=['local'];}
   await rpc('settings.save',settings);
   const web=path.join(project,'apps/desktop/web');
@@ -84,9 +84,10 @@ function fixture(){window.setInterval=()=>0;window.__TAURI__={event:{async liste
     const detected=await rpc('settings.get');detected.accounts=detected.accounts.filter(a=>a.id!=='qoder-detected');await rpc('settings.save',detected);
     await page.evaluate(async()=>{state.settings=await api('settings.get');});
 
-    await page.evaluate(()=>{state.page='settings';state.settingsTab='integrations';AieyesAgentSettings.navigate({provider:'trae'});render();});
-    assert.equal(await page.locator('[data-account-add="trae"]').count(),0,'Encrypted Trae login has no credential form');
     for(const provider of ['trae','trae-cn']){
+      await page.evaluate(p=>{state.page='settings';state.settingsTab='integrations';AieyesAgentSettings.navigate({provider:p});render();},provider);
+      assert.equal(await page.locator(`[data-account-add="${provider}"]`).count(),0,'Encrypted Trae login has no credential form');
+      assert.equal(await page.locator('[data-usage-page]').count(),1,'Each edition has its own Agent page');
       const before=calls.length;
       await page.locator(`[data-usage-page="${provider}"]`).click();
       await page.waitForFunction(()=>!state.busy);

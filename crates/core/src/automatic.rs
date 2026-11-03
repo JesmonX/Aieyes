@@ -132,12 +132,24 @@ fn valid(q: &QuotaSnapshot) -> bool {
             .all(|w| w.used_percent.is_finite() && (0.0..=100.0).contains(&w.used_percent))
 }
 
+/// History skips repeated reads, so its last row can be minutes older than the
+/// read it stands for. The current row supplies that time only for the same
+/// state: a session-log update or another reading must not re-date old usage.
+fn observation_time(history: &QuotaSnapshot, current: Option<&QuotaSnapshot>) -> Result<i64> {
+    Ok(match current {
+        Some(row) if valid(row) && crate::store::quota_history_same(history, row)? => {
+            history.updated_at.max(row.updated_at)
+        }
+        _ => history.updated_at,
+    })
+}
+
 /// A zero percentage delta is not evidence of credit-only usage: quota must already be exhausted.
 fn interval_kind(a: &QuotaSnapshot, b: &QuotaSnapshot) -> Option<&'static str> {
     if !valid(a)
         || !valid(b)
         || b.updated_at <= a.updated_at
-        || b.updated_at - a.updated_at > 300
+        || b.updated_at - a.updated_at > crate::store::QUOTA_OBSERVATION_MAX_GAP
         || a.plan != b.plan
     {
         return None;
@@ -1317,8 +1329,25 @@ impl Engine {
                 && last.config == fingerprint
                 && last.source_ids == ids;
             let observed: Option<String> = self.store.db.query_row("SELECT payload FROM quota_history WHERE account_key=?1 ORDER BY stamp DESC,id DESC LIMIT 1", [&key], |r|r.get(0)).optional()?;
+            let current: Option<String> = self
+                .store
+                .db
+                .query_row(
+                    "SELECT payload FROM quotas WHERE account_key=?1",
+                    [&key],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let current = current
+                .map(|raw| serde_json::from_str::<QuotaSnapshot>(&raw))
+                .transpose()?;
             let observed = observed
                 .map(|raw| serde_json::from_str::<QuotaSnapshot>(&raw))
+                .transpose()?
+                .map(|mut q| {
+                    q.updated_at = observation_time(&q, current.as_ref())?;
+                    anyhow::Ok(q)
+                })
                 .transpose()?
                 .filter(|q| {
                     // A cache can predate a login switch (including A -> B -> A).
@@ -1506,6 +1535,38 @@ impl Drop for Background {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_same_live_state_supplies_the_read_time() {
+        let history = QuotaSnapshot {
+            provider: "codex".into(),
+            account_id: "a".into(),
+            origin: "live".into(),
+            plan: Some("plus".into()),
+            updated_at: 1000,
+            windows: vec![QuotaWindow {
+                id: "five".into(),
+                window_minutes: Some(300),
+                resets_at: Some(10000),
+                used_percent: 5.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut current = history.clone();
+        current.updated_at = 1200;
+        assert_eq!(observation_time(&history, None).unwrap(), 1000);
+        assert_eq!(observation_time(&history, Some(&current)).unwrap(), 1200);
+        let mut log = current.clone();
+        log.origin = "log".into();
+        assert_eq!(observation_time(&history, Some(&log)).unwrap(), 1000);
+        let mut moved = current.clone();
+        moved.windows[0].used_percent = 6.0;
+        assert_eq!(observation_time(&history, Some(&moved)).unwrap(), 1000);
+        let mut failed = current.clone();
+        failed.error = Some("failed".into());
+        assert_eq!(observation_time(&history, Some(&failed)).unwrap(), 1000);
+    }
     #[test]
     fn other_account_devices_need_fresh_negative_identity_or_complete_coverage() {
         let (_dir, e, _q) = setup(true);

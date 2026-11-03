@@ -922,6 +922,8 @@
   "（已归档）": " (archived)",
   "（已删除）": " (deleted)",
   "订阅 {0}": "Subscription {0}",
+  "订阅到期 {0}": "Subscription ends {0}",
+  "订阅到期 ": "Subscription ends ",
   "{0}背景柱形图配色预览": "Bar chart palette preview on a {0} background",
   "磁盘 I/O": "Disk I/O",
   "CPU 时间分布": "CPU time breakdown",
@@ -1942,6 +1944,9 @@
   "」的任务草稿。": "” task draft.",
   "将从目标机器移除「": "Remove the scheduled deployment for “",
   "」的定时部署，后续自动唤醒会停止。运行历史保留。": "” from the target machine. Future automatic wakeups stop; run history is retained.",
+  "立即运行任务？": "Run task now?",
+  "确认运行": "Run",
+  "将立即调用「{0}」的模型，可能消耗订阅额度。": "This calls the model for “{0}” now and may consume subscription quota.",
   "立即调用模型，可能消耗订阅额度": "Call the model now; may consume subscription quota",
   "重试状态": "Retry status",
   "最近运行记录（{0}）": "Recent runs ({0})",
@@ -3882,5 +3887,13 @@
   "CLI · 凭据登录（PAT）": "CLI · Personal access token (PAT)",
   "CLI · 浏览器认证登录": "CLI · Browser authentication",
   "不再显示": "Hide account",
-  "账户 ID": "Account ID"
+  "账户 ID": "Account ID",
+  "移除模型映射「{0}」？": "Remove model mapping “{0}”?",
+  "从配置草稿中移除，保存配置后生效。": "Removed from the settings draft; takes effect when you save settings.",
+  "正在重新计价…": "Repricing…",
+  "请等待当前操作完成后再关闭窗口。": "Wait for the current operation to finish before closing the window.",
+  "完成后将自动退出。": "Aieyes will quit when this finishes.",
+  "取消退出": "Cancel Quit",
+  "好": "OK",
+  "桌宠图片加载失败，请重新导入或选择其他桌宠": "Couldn't load pet images. Re-import or choose another pet."
 }

@@ -1055,7 +1055,7 @@ mod tests {
         let mut legacy: Settings = serde_json::from_value(json!({"version":7,"hosts":[{"id":"old","target":"fixture.invalid","enabled":false}],"localMonitor":{"enabled":false}})).unwrap();
         assert!(legacy.local_device_enabled && legacy.hosts[0].monitoring_enabled);
         legacy.migrate();
-        assert_eq!(legacy.version, 11);
+        assert_eq!(legacy.version, 12);
         assert!(legacy.monitored_hosts().iter().all(|host| !host.enabled));
         legacy.local_device_enabled = false;
         legacy.local_monitor.enabled = true;
@@ -1355,6 +1355,50 @@ mod tests {
                 .contains("其他窗口")
         );
         assert_eq!(engine.call("settings.get", json!({})).unwrap(), merged);
+    }
+
+    #[test]
+    fn trae_cn_keeps_monitoring_through_the_agent_split() {
+        // The grouped toggle before the split wrote one row per edition.
+        let mut settings: Settings = serde_json::from_value(json!({"version":11,
+            "localDeviceEnabled":true,
+            "agents":[{"provider":"trae","enabled":true,"machineIds":["local"]},
+                {"provider":"trae-cn","enabled":true,"machineIds":["local"]}],
+            "sources":[{"id":"cn","provider":"trae-cn","name":"Trae CN","path":"/tmp/cn","enabled":true}],
+            "appearance":{"settingsAgentIds":["trae"]}}))
+        .unwrap();
+        let before = settings.source_enabled(&settings.sources[0].clone());
+        settings.migrate();
+        let agent = settings
+            .agents
+            .iter()
+            .find(|a| a.provider == "trae-cn")
+            .unwrap();
+        assert!(agent.enabled);
+        assert_eq!(agent.machine_ids, ["local"]);
+        assert!(before);
+        assert!(settings.source_enabled(&settings.sources[0].clone()));
+        assert_eq!(
+            settings.appearance.settings_agent_ids.unwrap(),
+            ["trae", "trae-cn"]
+        );
+    }
+
+    #[test]
+    fn trae_cn_entry_survives_the_agent_split_once() {
+        let mut settings: Settings = serde_json::from_value(json!({"version":11,
+            "agents":[{"provider":"trae-cn","enabled":true,"machineIds":["local"]}],
+            "appearance":{"settingsAgentIds":["trae","kiro"]}}))
+        .unwrap();
+        settings.migrate();
+        assert_eq!(
+            settings.appearance.settings_agent_ids.clone().unwrap(),
+            ["trae", "trae-cn", "kiro"]
+        );
+        // Removing the entry later must stick.
+        settings.appearance.settings_agent_ids = Some(vec!["trae".into()]);
+        settings.migrate();
+        assert_eq!(settings.appearance.settings_agent_ids.unwrap(), ["trae"]);
     }
 
     #[test]

@@ -82,8 +82,9 @@ function fixture(){
     await page.waitForTimeout(60);
     assert.equal(await action('slow','deploy').count(),0,'a late pre-deployment status cannot restore the stale missing-task state');
 
-    for(const id of ['fast','bad']){await row(id).locator('.wake-more summary').click();await action(id,'run').click();await row(id).getByText(id+' 运行失败',{exact:false}).waitFor();}
-    await page.evaluate(()=>wakeupFixture.failRun.fast=false);await row('fast').locator('.error [data-wake-action=run]').click();
+    const confirmRun=()=>page.locator('#editor-form button[type=submit]').click();
+    for(const id of ['fast','bad']){await row(id).locator('.wake-more summary').click();await action(id,'run').click();await confirmRun();await row(id).getByText(id+' 运行失败',{exact:false}).waitFor();}
+    await page.evaluate(()=>wakeupFixture.failRun.fast=false);await row('fast').locator('.error [data-wake-action=run]').click();await confirmRun();
     await page.waitForFunction(()=>!document.querySelector('[data-wake-row=fast]').textContent.includes('fast 运行失败'));
     assert.match(await row('bad').textContent(),/bad 运行失败/,'successful retry clears only that task and operation error');
 

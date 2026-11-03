@@ -1261,8 +1261,7 @@
   },
   "agentAliases": {
     "deepseek-harness": "deepseek",
-    "chatgpt-work": "codex",
-    "trae-cn": "trae"
+    "chatgpt-work": "codex"
   },
   "agentProviders": [
     "codex",
@@ -1286,6 +1285,7 @@
     "roo",
     "kiro",
     "trae",
+    "trae-cn",
     "custom"
   ],
   "providerCapabilities": {
@@ -1546,7 +1546,7 @@
       "monochrome": false
     }
   },
-  "contractHash": "87c48550dabe4e44a6a6a10b942139d00d65a27c7e650c2ada1300ea41618e07",
+  "contractHash": "0189d10a11f31d39054643c0c4725567316f9a2f638249e1926e71ccfbef17fd",
   "petFrameDurations": [
     [
       280,
