@@ -45,6 +45,9 @@ struct MainWindowView: View {
                 else { Rectangle().fill(.ultraThinMaterial) }
             }
             .navigationSplitViewColumnWidth(min:collapsed ? 62 : 190,ideal:collapsed ? 62 : 214,max:collapsed ? 62 : 260)
+            // Remove the default toggle from the column that owns it; applying this
+            // to the split view leaves the system button beside our recovery control.
+            .toolbar(removing: .sidebarToggle)
         } detail: {
             VStack(alignment: .leading, spacing: 0) {
                 if guideActive && model.detailPage == "settings" {
@@ -70,7 +73,7 @@ struct MainWindowView: View {
                         .accessibilityIdentifier("main.sidebarToggle")
                 }
             }
-        }.navigationSplitViewStyle(.balanced).toolbar(removing: .sidebarToggle)
+        }.navigationSplitViewStyle(.balanced)
         .frame(minWidth: 760, minHeight: 480).aieyesAccent()
         .background(WindowPageTitle(title:title + " — Aieyes"))
         .environment(\.workspaceCardColumns, workspaceWidth >= 1800 ? 4 : workspaceWidth >= 1390 ? 3 : workspaceWidth >= 974 ? 2 : 1)
