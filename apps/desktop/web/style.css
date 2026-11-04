@@ -458,6 +458,12 @@ input[name=port] { appearance:textfield; -moz-appearance:textfield; }
 input[name=port]::-webkit-inner-spin-button,input[name=port]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
 .wake-more { position:relative; }
 .wake-times { border:1px solid var(--card-border); border-radius:var(--radius-control); margin-bottom:14px; }
+#wake-time-rows { display:grid; gap:10px; margin-bottom:12px; }
+.wake-time-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:6px 8px; }
+.wake-time-row > [data-local-time] { grid-column:1 / -1; grid-row:2; }
+.wake-time-row > button { grid-column:2; grid-row:1; }
+.wake-time-picker { display:inline-flex; align-items:center; gap:6px; }
+.wake-time-picker select,.wake-time-picker > .win-select { width:76px; min-width:76px; font-variant-numeric:tabular-nums; }
 .monitor-options { margin-top:12px; }
 .server-summary { display: flex; flex-wrap: wrap; margin: 17px 0; color: var(--muted); font-size: var(--font-secondary); gap: 20px; list-style:none; }
 .server-card > .server-summary { display:block; margin:0; }

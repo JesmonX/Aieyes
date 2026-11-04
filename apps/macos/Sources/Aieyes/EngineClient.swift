@@ -270,7 +270,22 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
 }
 
+struct AccountFlowResult {
+    let kind: String
+    let accountID: String
+    let sourceID: String
+}
+
 @MainActor final class AppModel: ObservableObject {
+    @Published var accountNotice: String?
+    private var accountNoticeTask: Task<Void, Never>?
+    func showAccountNotice(_ text: String) {
+        accountNoticeTask?.cancel(); accountNotice = text
+        accountNoticeTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(8)) } catch { return }
+            self?.accountNotice = nil
+        }
+    }
     let resetNotifications = QuotaNotificationService()
     private let automaticEngine = EngineClient(configurationOnly: true)
     private var automaticTask: Task<Void, Never>?

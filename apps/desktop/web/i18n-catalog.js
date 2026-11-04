@@ -3912,5 +3912,8 @@ globalThis.AieyesMessages = {
   "Antigravity 服务暂不可用，请稍后重试": "Antigravity is temporarily unavailable. Try again later.",
   "无法运行 agy，请检查 CLI 路径与安装": "Could not run agy. Check the CLI path and installation.",
   "agy 额度查询失败，请在 agy 中运行 /usage 检查登录状态": "agy quota query failed. Run /usage in agy to check sign-in.",
-  "agy 未返回模型组额度，请更新 CLI 后重试": "agy returned no model-group quota. Update the CLI and try again."
+  "agy 未返回模型组额度，请更新 CLI 后重试": "agy returned no model-group quota. Update the CLI and try again.",
+  "账户已保存，设备状态刷新失败，请重试读取。": "The account was saved, but device status could not be refreshed. Retry reading the status.",
+  "目标时间 {0}：小时": "Target time {0}: hour",
+  "目标时间 {0}：分钟": "Target time {0}: minute"
 };

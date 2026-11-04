@@ -48,9 +48,16 @@ import SwiftUI
 struct AccountTargetsView: View {
     @ObservedObject var model: AppModel
     let accountKey: String
+    var onClose: (Bool) -> Void = { _ in }
     @StateObject private var targets = AccountTargetsModel()
     @State private var loginSource: AgentSource?
     @State private var intent = "login"
+    @State private var finished = false
+    @State private var visible = false
+    private func enter(_ target: AccountTarget) {
+        intent = target.canSwitch ? "switch" : "login"
+        loginSource = model.settings.sources.first { $0.id == target.sourceId }
+    }
     private var account: AgentAccount? { model.settings.accounts.first { $0.key == accountKey && $0.archived != true } }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
@@ -62,7 +69,7 @@ struct AccountTargetsView: View {
                     ForEach(targets.errors, id: \.self) { Text($0).foregroundStyle(Palette.warn).textSelection(.enabled) }
                     if targets.rows.isEmpty {
                         Text(L("暂无可登录或切换的机器。请启用 Agent、选择机器并开启目录采集。")).foregroundStyle(.secondary)
-                        Button(L("打开机器与采集设置")) { model.openSettings(.init(provider: "codex", section: "machines")) }
+                        Button(L("打开机器与采集设置")) { model.openSettings(.init(provider: "codex", section: "machines")); onClose(false) }
                     }
                     ForEach(targets.rows) { target in
                         HStack {
@@ -77,8 +84,7 @@ struct AccountTargetsView: View {
                             // Native references are detected automatically; there is nothing to scan or switch.
                             if target.nativeConnectionId == nil && (target.current != true || target.bound == false || target.canDraft == false) {
                                 Button(target.bound == false ? L("完成关联") : target.canSwitch ? L("切换") : target.credential == false ? L("登录") : L("检查 / 登录")) {
-                                    intent = target.canSwitch ? "switch" : "login"
-                                    loginSource = model.settings.sources.first { $0.id == target.sourceId }
+                                    enter(target)
                                 }.disabled(targets.checking.contains(target.sourceId) && !target.canSwitch)
                             }
                         }.padding(12).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
@@ -86,9 +92,17 @@ struct AccountTargetsView: View {
                 }
             }
         }.padding(20).frame(minWidth: DesignTokens.dialogTargetsWidth, minHeight: 360).aieyesAccent()
-        .task { await targets.load(model, accountKey: accountKey) }
-        .sheet(item: $loginSource, onDismiss: { Task { await targets.load(model, accountKey: accountKey) } }) { source in
-            AccountConnectionView(model: model, account: account, initialSourceID: source.id, intent: intent)
+        .onAppear { visible = true }
+        .onDisappear { visible = false }
+        .task {
+            await targets.load(model, accountKey: accountKey)
+            guard visible, !Task.isCancelled, loginSource == nil, targets.errors.isEmpty,
+                  targets.rows.count == 1, let target = targets.rows.first,
+                  target.canSwitch, target.bound != false, target.available != false else { return }
+            enter(target)
+        }
+        .sheet(item: $loginSource, onDismiss: { if finished { onClose(true) } else { Task { await targets.load(model, accountKey: accountKey) } } }) { source in
+            AccountConnectionView(model: model, account: account, initialSourceID: source.id, intent: intent, onCompleted: { _ in guard visible else { return }; finished = true; loginSource = nil })
         }
     }
 }

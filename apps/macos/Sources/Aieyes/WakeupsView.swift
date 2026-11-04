@@ -126,7 +126,7 @@ struct WakeEditor: View {
                     Button(L("重新检查登录")) { Task { await targets.load(model, includeUnavailable: true) } }.disabled(!targets.checking.isEmpty)
                     Text(L("离线时可先保存草稿。更换运行位置前请移除旧部署。")).font(AppFont.secondary).foregroundStyle(.secondary)
                     ForEach(task.times.indices, id: \.self) { index in
-                        HStack { DatePicker(L("目标时刻"), selection: wakeTime(index), displayedComponents: .hourAndMinute).environment(\.timeZone, WakeTimeOfDay.zone).fixedSize(); Text(localTime(task.times[index])).font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(L("移除")) { task.times.remove(at: index) }.accessibilityLabel(L("移除时刻 {0}", task.times[index])) }
+                        timeRow(index)
                     }
                     Button(L("添加时刻")) { task.times.append("08:00") }
                     Text(L("跟随目标机器时区，错过时刻不补发。")).font(AppFont.secondary).foregroundStyle(.secondary)
@@ -150,6 +150,7 @@ struct WakeEditor: View {
                 }.textFieldStyle(.aieyes)
             }.frame(maxHeight: 490)
             if let error { ErrorNotice(message: error) }
+            AccountFlowNotice(model: model)
             HStack { if busy { ProgressView().controlSize(.small) }; Spacer(); Button(L("取消")) { if initialDraft != draftSnapshot(task) { confirmDiscard = true } else { dismiss() } }.keyboardShortcut(.cancelAction); Button(L("保存草稿")) { submit() }.buttonStyle(.aieyesPrimary).disabled(task.sourceId.isEmpty || task.model.isEmpty) }
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogWakeupWidth).font(AppFont.body).disabled(busy).onAppear { if task.sourceId.isEmpty { task.sourceId = sources.first?.id ?? "" }; initialDraft = draftSnapshot(task) }
         .interactiveDismissDisabled(busy || initialDraft != draftSnapshot(task))
@@ -167,11 +168,35 @@ struct WakeEditor: View {
         .onChange(of: task.binary) { _, _ in capabilities = nil; task.model = "" }
         .onChange(of: task.model) { _, _ in if !efforts.contains(task.effort) { task.effort = efforts.contains("low") ? "low" : "" } }
     }
-    /// Edits a stored "HH:mm" target time. Times are wall-clock values on the target machine, so the picker works in
-    /// UTC on a fixed day: the viewer's time zone and daylight-saving changes never shift the stored value.
-    private func wakeTime(_ index: Int) -> Binding<Date> {
-        Binding(get: { WakeTimeOfDay.date(task.times.indices.contains(index) ? task.times[index] : "") },
-                set: { if task.times.indices.contains(index) { task.times[index] = WakeTimeOfDay.text($0) } })
+    private func timeRow(_ index: Int) -> some View {
+        HStack(spacing: 8) {
+            Text(L("目标时刻"))
+            Picker(L("目标时间 {0}：小时", index + 1), selection: timePart(index, component: 0)) {
+                ForEach(0..<24, id: \.self) { Text(String(format: "%02d", $0)).tag($0) }
+            }.pickerStyle(.menu).labelsHidden().frame(width: 76)
+            Text(":").accessibilityHidden(true)
+            Picker(L("目标时间 {0}：分钟", index + 1), selection: timePart(index, component: 1)) {
+                ForEach(0..<60, id: \.self) { Text(String(format: "%02d", $0)).tag($0) }
+            }.pickerStyle(.menu).labelsHidden().frame(width: 76)
+            Text(localTime(task.times[index])).font(AppFont.secondary).foregroundStyle(.secondary)
+            Spacer()
+            Button(L("移除")) { task.times.remove(at: index) }
+                .accessibilityLabel(L("移除时刻 {0}", task.times[index]))
+        }
+    }
+    // Select wall-clock components directly: the viewer's time zone never changes the stored time.
+    private func timePart(_ index: Int, component: Int) -> Binding<Int> {
+        func parts() -> [Int] {
+            guard task.times.indices.contains(index) else { return [8, 0] }
+            let values = task.times[index].split(separator: ":").compactMap { Int($0) }
+            guard values.count == 2, (0..<24).contains(values[0]), (0..<60).contains(values[1]) else { return [8, 0] }
+            return values
+        }
+        return Binding(get: { parts()[component] }, set: { value in
+            guard task.times.indices.contains(index) else { return }
+            var next = parts(); next[component] = value
+            task.times[index] = String(format: "%02d:%02d", next[0], next[1])
+        })
     }
     private func localTime(_ time: String) -> String {
         WakeupTime.next(time, zone: capabilities?.timezone).label
@@ -191,20 +216,5 @@ struct WakeEditor: View {
         busy = true; error = nil
         defer { busy = false }
         do { guard deployed || targets.rows.contains(where: { $0.accountKey == selectedAccount && $0.sourceId == task.sourceId && $0.profileId == task.codexProfileId && ($0.canDraft ?? $0.canWake) }) else { throw ClientError.message(L("此账户与所选目录的关联或身份尚未确认，请检查账户设置")) }; try await save(task); return true } catch { self.error = error.localizedDescription; return false }
-    }
-}
-
-private enum WakeTimeOfDay {
-    static let zone = TimeZone(identifier: "UTC")!
-    private static let calendar: Calendar = { var value = Calendar(identifier: .gregorian); value.timeZone = zone; return value }()
-    /// Unparseable text (older free-form drafts) shows as 08:00, the default for a new time.
-    static func date(_ text: String) -> Date {
-        let parts = text.split(separator: ":").compactMap { Int($0) }
-        let valid = parts.count == 2 && (0...23).contains(parts[0]) && (0...59).contains(parts[1])
-        return calendar.date(from: DateComponents(year: 2001, month: 1, day: 1, hour: valid ? parts[0] : 8, minute: valid ? parts[1] : 0)) ?? Date(timeIntervalSinceReferenceDate: 0)
-    }
-    static func text(_ date: Date) -> String {
-        let parts = calendar.dateComponents([.hour, .minute], from: date)
-        return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
     }
 }

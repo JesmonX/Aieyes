@@ -41,6 +41,7 @@ struct SettingsView: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(spacing: 0) {
+            AccountFlowNotice(model: model)
             if model.settingsSaving || model.settingsMessage != nil || !model.settingsLoaded {
             HStack {
                 ErrorNotice(message: model.settingsSaving ? L("正在保存…") : model.settingsMessage ?? L("正在读取配置…"), context: L("设置操作未完成"), tint: .secondary)

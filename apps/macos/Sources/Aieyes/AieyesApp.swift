@@ -52,6 +52,7 @@ struct AieyesCommands: Commands {
     private var estimateWindows: [String: NSWindow] = [:]
     private var approvingSettingsClose = false
     private var quitWaitCancelled = false
+    private var accountSwitchFlow = UUID()
     private var accountSwitchKey: String?
     // Unsaved-draft state reported by the account order / panel accounts editors, keyed by window.
     private var auxiliaryDirty: [ObjectIdentifier: Bool] = [:]
@@ -376,11 +377,13 @@ struct AieyesCommands: Commands {
         fitToVisibleScreen(window); showWindow(window)
     }
     private func openAccountSwitch(_ key: String) {
+        let returnToPopover = popover.isShown
         popover.performClose(nil)
         if let existing = accountSwitchWindow, accountSwitchKey == key, existing.isVisible || existing.isMiniaturized { showWindow(existing); return }
         let window = accountSwitchWindow ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 470), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = L("切换账户"); window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: AccountTargetsView(model: model, accountKey: key))
+        let flow = UUID(); accountSwitchFlow = flow
+        window.contentView = NSHostingView(rootView: AccountTargetsView(model: model, accountKey: key, onClose: { [weak self, weak window] success in guard let self, self.accountSwitchFlow == flow else { return }; window?.close(); if success && returnToPopover { self.showPopover() } }))
         if accountSwitchWindow == nil { window.center() }
         accountSwitchWindow = window; accountSwitchKey = key; fitToVisibleScreen(window); showWindow(window)
     }

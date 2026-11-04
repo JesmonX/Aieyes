@@ -25,6 +25,25 @@ struct CodexAccountsView: View {
     var initialSourceID: String? = nil
     var intent = "login"
     var onBusyChanged: (Bool) -> Void = { _ in }
+    var onCompleted: (AccountFlowResult) -> Void = { _ in }
+    @State private var pendingConnection: (kind: String, message: String)?
+    @State private var completed = false
+    @State private var visible = false
+    private func finish(_ kind: String, message: String) {
+        guard visible, !completed else { return }
+        completed = true
+        let label = [account?.name, source.map { model.machineName($0.hostId ?? "local") }].compactMap { $0 }.joined(separator: " · ")
+        model.showAccountNotice(label.isEmpty ? message : label + "：" + message)
+        onCompleted(AccountFlowResult(kind: kind, accountID: accountID, sourceID: sourceID))
+    }
+    private func completeConnection(_ kind: String, message: String) async throws {
+        pendingConnection = (kind, message)
+        try await settingsChanged(); try await refresh()
+        guard await model.refreshCodexAccountStatuses(sourceID: sourceID, using: engine) else {
+            error = L("账户已保存，设备状态刷新失败，请重试读取。"); return
+        }
+        pendingConnection = nil; notice = message; finish(kind, message: message)
+    }
     @State private var restoredAccountID = ""
     @State private var sourceID = ""
     @State private var info: CodexInspection?
@@ -66,11 +85,11 @@ struct CodexAccountsView: View {
                 Picker(L("运行位置"), selection: $sourceID) { Text(L("请选择来源")).tag(""); ForEach(sources) { Text(model.machineName($0.hostId ?? "local") + " · " + $0.displayLocation).tag($0.id).help($0.path) } }.disabled(busy || operation != nil)
                 if sources.isEmpty { Text(L("暂无可用运行位置。请启用 Codex、选择机器并开启目录采集。")).foregroundStyle(.secondary); Button(L("机器与采集设置")) { model.openSettings(.init(provider: "codex", section: "machines")); dismiss() } }
                 if let source { Text(source.path).font(AppFont.secondary).textSelection(.enabled) }
-                if let error { HStack { ErrorNotice(message: error); Button(L("重试读取")) { perform { if let id = switchedProfileID { await refreshAfterSwitch(profileID: id) } else { try await refresh() } } }.disabled(busy) } }
+                if let error { HStack { ErrorNotice(message: error); Button(L("重试读取")) { perform { if let id = switchedProfileID { await refreshAfterSwitch(profileID: id) } else if let pendingConnection { try await completeConnection(pendingConnection.kind, message: pendingConnection.message) } else { try await refresh() } } }.disabled(busy) } }
                 if let notice { Text(L(notice)).foregroundStyle(Palette.ok) }
                 if busy { ProgressView().controlSize(.small) }
                 if intent == "login" { HStack {
-                    Button(L("读取当前登录账户")) { perform { try await ensureManaged(); let _: Acknowledgement = try await call("adopt", ["accountId":accountID]); try await settingsChanged(); try await refresh() } }
+                    Button(L("读取当前登录账户")) { perform { try await ensureManaged(); let _: Acknowledgement = try await call("adopt", ["accountId":accountID]); try await completeConnection("bind", message: L("账户已添加")) } }
                     Button(account == nil ? L("登录新账户") : L("登录此账户")) { reauthID = nil; loginSheet = true }
 
                 }.disabled(busy || source == nil || operation != nil) }
@@ -88,7 +107,7 @@ struct CodexAccountsView: View {
                     Text("\(profile.identity.email) · \(profile.identity.plan)").font(AppFont.secondary).textSelection(.enabled)
                     HStack {
                         if intent == "login" && !model.settings.accounts.contains(where: { $0.profileRefs.contains((source?.codexHomeId ?? "") + ":" + profile.id) }) {
-                            Button(L("添加此账户")) { perform { let _: Acknowledgement = try await call("profiles.bind", ["profileId":profile.id, "accountId":accountID]); try await settingsChanged(); notice = L("账户已添加") } }
+                            Button(L("添加此账户")) { perform { let _: Acknowledgement = try await call("profiles.bind", ["profileId":profile.id, "accountId":accountID]); try await completeConnection("bind", message: L("账户已添加")) } }
                         }
                         if intent == "login" { Button(L("重新登录")) { reauthID = profile.id; loginSheet = true } }
                         if profile.current != true {
@@ -109,6 +128,8 @@ struct CodexAccountsView: View {
             }
         }.formStyle(.grouped).aieyesAccent()
         .updateOperation(L("Codex 账户操作"), active: busy)
+        .onAppear { visible = true }
+        .onDisappear { visible = false }
         .onChange(of: busy) { _, value in onBusyChanged(value) }
         .onChange(of: sources.map(\.id)) { _, _ in if source == nil && operation == nil { sourceID = "" } }
         .task {
@@ -118,7 +139,7 @@ struct CodexAccountsView: View {
             }
         }
         .task(id: sourceID) {
-            info = nil; prepared = nil; switchSheet = false; switchedProfileID = nil
+            info = nil; prepared = nil; switchSheet = false; switchedProfileID = nil; pendingConnection = nil
             if source != nil { perform {
                 try await refresh()
                 if intent == "switch", targetAccountID != nil,
@@ -133,9 +154,9 @@ struct CodexAccountsView: View {
                 do {
                     let result: CodexOperation = try await loginCall("login.status", ["operationId":id, "accountId":accountID])
                     if ["succeeded","failed","cancelled"].contains(result.status) {
-                        operation = nil; UserDefaults.standard.removeObject(forKey:"codexLogin.operation")
-                        if result.status == "succeeded" { notice = result.accountArchived == true ? L("登录已保存，该账户已归档，可在账户页恢复。") : result.quotaEnabled == false ? L("登录成功，该账户的额度查询已暂停。") : L("登录成功，已启用此账户的额度查询。"); try await settingsChanged(); try await refresh() }
-                        else { error = result.error ?? L("登录已结束") }; break
+                        UserDefaults.standard.removeObject(forKey:"codexLogin.operation")
+                        if result.status == "succeeded" { notice = result.accountArchived == true ? L("登录已保存，该账户已归档，可在账户页恢复。") : result.quotaEnabled == false ? L("登录成功，该账户的额度查询已暂停。") : L("登录成功，已启用此账户的额度查询。"); if result.accountArchived != true, result.quotaEnabled != false, result.statusWarning == nil { try await completeConnection("login", message: notice ?? L("账户已添加")) } else { try await settingsChanged(); try await refresh(); if let warning = result.statusWarning { error = warning } } }
+                        else { error = result.error ?? L("登录已结束") }; operation = nil; break
                     }
                     operation = result
                 } catch { self.error = error.localizedDescription }
@@ -222,7 +243,7 @@ struct CodexAccountsView: View {
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogApiWidth).interactiveDismissDisabled(busy).aieyesAccent()
     }
     private func prepareSwitch(_ profile: CodexProfile) async {
-        switchTarget = profile; switchSourceID = sourceID; switchError = nil
+        pendingConnection = nil; switchTarget = profile; switchSourceID = sourceID; switchError = nil
         switchedProfileID = nil; prepared = nil; switchSheet = true
         do {
             let result: CodexOperation = try await call("switch.prepare", ["profileId": profile.id])
@@ -253,6 +274,7 @@ struct CodexAccountsView: View {
                 notice = L("账户已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话")
                 if !updated { error = L("账户已切换，设备状态刷新失败，请重试读取。") }
                 else if let switchWarning { error = switchWarning }
+                else { finish("switch", message: notice ?? L("账户已添加")) }
             } else {
                 notice = nil; error = L("当前登录与目标账户不一致，请重新检查。")
             }

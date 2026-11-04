@@ -11,8 +11,11 @@ function fixture(){
   if(method==='hello')return {version:'test'};if(method==='settings.get')return structuredClone(settings);
   if(method==='dashboard')return {generatedAt:Date.now()/1000,summary:{tokens:{input:0,output:0,cacheRead:0,cacheWrite:0},total:0,cost:0,pricedTokens:0,events:0},quotas:[],quotaOrder:[],modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:[],pricingGaps:[]};
   if(['sources.scan','prices.list','quotas.refresh','wakeups.list'].includes(method))return [];
+  if(method==='accounts.targets')return settings.accounts.filter(a=>!params.accountKey||'codex:'+a.id===params.accountKey).map(a=>({accountKey:'codex:'+a.id,accountName:a.name,provider:'codex',sourceId:'s',machineId:'local',machineName:'本机',path:'/fixture/.codex',bound:true,available:true,current:authTest.loggedIn&&authTest.active===a.identityKey,credential:authTest.loggedIn,canSwitch:authTest.loggedIn&&authTest.active!==a.identityKey,canDraft:true}));
+  if(method==='codexAuth.reconcile')return {issues:[]};
   if(method==='accounts.status.get')return settings.accounts.map(a=>({accountKey:a.provider+':'+a.id,sourceId:'s',machineId:'local',current:authTest.loggedIn&&authTest.active===a.identityKey,credential:authTest.loggedIn}));
   if(method==='accounts.status.refresh'){
+    if(authTest.statusFailure)throw new Error('status unavailable');
     const row={accountKey:params.accountKey,sourceId:params.sourceId,machineId:'local',current:authTest.loggedIn&&authTest.active===(params.accountKey==='codex:a'?'one':'two'),credential:authTest.loggedIn};
     if(authTest.pauseNextStatus){authTest.pauseNextStatus=false;return new Promise(resolve=>{authTest.releaseStatus=()=>resolve(row);});}
     return row;
@@ -81,7 +84,7 @@ function fixture(){
   await page.waitForFunction(()=>typeof authTest.releaseStatus==='function');
   const preparations=await page.evaluate(()=>authTest.preparedCount);
   await page.locator('[data-auth="commit"]').click();
-  await page.getByText('账户已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话',{exact:true}).waitFor();
+  await page.getByText('账户已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话',{exact:false}).waitFor();
   assert.equal(await page.evaluate(()=>authTest.active),'two');
   assert.equal(await page.evaluate(()=>authTest.preparedCount),preparations,'refresh must not prepare another switch');
   assert.equal(await page.evaluate(()=>authTest.calls.find(c=>c.method==='codexAuth.switch.commit').params.closeProcesses),true);
@@ -105,7 +108,7 @@ function fixture(){
   await page.getByText('切换已提交，当前账户待确认。',{exact:true}).waitFor();
   const commits=await page.evaluate(()=>authTest.calls.filter(c=>c.method==='codexAuth.switch.commit').length);
   await page.locator('[data-auth="refresh"]').click();
-  await page.getByText('账户已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话',{exact:true}).waitFor();
+  await page.getByText('账户已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话',{exact:false}).waitFor();
   assert.equal(await page.evaluate(()=>authTest.active),'one');
   assert.equal(await page.evaluate(()=>authTest.calls.filter(c=>c.method==='codexAuth.switch.commit').length),commits,'state retry must not resubmit a switch');
 
@@ -116,7 +119,7 @@ function fixture(){
   await page.evaluate(()=>authTest.ignoreCommit=true);
   await page.locator('[data-auth="commit"]').click();
   await page.getByText('当前登录与目标账户不一致，请重新检查。',{exact:false}).waitFor();
-  assert.equal(await page.getByText('账户已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话',{exact:true}).count(),0);
+  assert.equal(await page.getByText('账户已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话',{exact:false}).count(),0);
   await page.evaluate(async()=>{
     authTest.ignoreCommit=false;authTest.forgetSecond();
     AieyesAgentSettings.accept(await api('settings.get'));renderSettings(false);
@@ -124,14 +127,16 @@ function fixture(){
   await page.locator('[data-auth="switch"][data-profile="two"]').click();
   await page.locator('#codex-switch[open]').waitFor();
   await page.locator('[data-auth="commit"]').click();
-  await page.getByText('账户已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话',{exact:true}).waitFor();
+  await page.getByText('账户已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话',{exact:false}).waitFor();
   assert.equal(await page.evaluate(()=>state.settings.accounts.some(a=>a.id==='b')),true,'a switched saved profile must appear in this installation account list');
   await page.setViewportSize({width:1180,height:900});
-  await page.evaluate(()=>authTest.loggedIn=false);await page.locator('#accounts-back').click();if(await page.locator('#account-detail-back').count())await page.locator('#account-detail-back').click();await page.locator('.machine-menu > summary').first().click();await page.locator('[data-device-manage][data-intent="login"]').first().click();await page.locator('[data-auth="reauth"][data-profile="one"]').click();assert.equal(await page.locator('#field-name').count(),0);await page.locator('#editor-form button[type="submit"]').click();await page.getByText('FIXTURE-CODE',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>authTest.calls.find(c=>c.method==='codexAuth.login.start').params.profileId),'one');
+  await page.evaluate(()=>authTest.loggedIn=false);assert.equal(await page.locator('#auth-source').count(),0,'successful switch returns to its caller');if(await page.locator('#account-detail-back').count())await page.locator('#account-detail-back').click();await page.locator('.machine-menu > summary').first().click();await page.locator('[data-device-manage][data-intent="login"]').first().click();await page.locator('[data-auth="reauth"][data-profile="one"]').click();assert.equal(await page.locator('#field-name').count(),0);await page.locator('#codex-login-confirm [data-login-start]').click();await page.getByText('FIXTURE-CODE',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>authTest.calls.find(c=>c.method==='codexAuth.login.start').params.profileId),'one');
   await page.locator('[data-auth="open"]').click();assert.equal(await page.evaluate(()=>authTest.calls.find(c=>c.method==='codexAuth.openUrl').params.url),'https://auth.openai.com/device');
   await page.screenshot({path:path.resolve(__dirname,'../.local/codex-accounts.png'),fullPage:true});
-  await page.locator('[data-auth="cancelLogin"]').click();await page.getByText('登录成功，已启用此账户的额度查询。',{exact:true}).waitFor();
-  await page.evaluate(()=>{authTest.cliMissing=true;document.querySelector('#auth-source').dispatchEvent(new Event('change'));});
+  await page.locator('[data-auth="cancelLogin"]').click();await page.getByText('登录成功，已启用此账户的额度查询。',{exact:false}).waitFor();
+  assert.equal(await page.locator('#auth-source').count(),0,'successful login returns to its caller');
+  await page.evaluate(()=>{authTest.cliMissing=true;AieyesCodexAuth.open('','s','login');});
+  await page.locator('.machine-menu > summary').first().click();await page.locator('[data-device-manage][data-intent="login"]').first().click();
   await page.getByText('未找到 Codex CLI，请检查程序路径和 PATH',{exact:false}).waitFor();
   await page.getByRole('button',{name:'机器与 CLI 设置',exact:true}).waitFor();
   assert(!await page.locator('[data-auth="adopt"]').isDisabled(),'existing profiles may be adopted even when CLI is unavailable');
@@ -139,6 +144,32 @@ function fixture(){
   await page.evaluate(()=>{state.settingsDraft.sources[0].name='未保存';renderSettings();});assert(!await page.locator('[data-auth="adopt"]').isDisabled());
   await page.evaluate(()=>AieyesAgentSettings.accept(structuredClone(state.settings)));
   assert.equal(await page.evaluate(()=>state.settingsDraft.sources[0].name),'未保存','account refresh retains unrelated source draft');
+  await page.evaluate(()=>{authTest.loggedIn=true;authTest.active='two';AieyesAccountTargets.open('codex:a');});
+  await page.locator('#codex-switch[open]').waitFor();
+  await page.locator('[data-auth="commit"]').click();
+  await page.waitForFunction(()=>!document.querySelector('#account-targets').open);
+  assert.equal(await page.locator('#codex-switch[open]').count(),0,'success closes the whole temporary switch flow');
+  await page.evaluate(()=>{
+    authTest.loggedIn=false;authTest.loginDone=false;
+    showEditor('Draft', '<textarea name="prompt">untouched draft</textarea>', async()=>{});
+    AieyesAccountTargets.open('codex:a');
+  });
+  await page.locator('#account-targets [data-account-target]').click();
+  await page.locator('#account-targets [data-auth="reauth"][data-profile="one"]').click();
+  assert(await page.locator('#editor').evaluate(el=>el.open),'nested login keeps the draft dialog open');
+  assert.equal(await page.locator('#editor-form [name=prompt]').inputValue(),'untouched draft');
+  await page.locator('[data-login-start]').click();
+  await page.getByText('FIXTURE-CODE',{exact:true}).waitFor();
+  await page.evaluate(()=>{authTest.statusFailure=true;authTest.loginDone=true;});
+  await page.locator('#account-targets').getByText('账户已保存，设备状态刷新失败，请重试读取。',{exact:false}).waitFor();
+  assert(await page.locator('#account-targets').evaluate(el=>el.open),'failed refresh keeps the completed login review available');
+  const loginStarts=await page.evaluate(()=>authTest.calls.filter(c=>c.method==='codexAuth.login.start').length);
+  await page.evaluate(()=>authTest.statusFailure=false);
+  await page.locator('#account-targets [data-auth="refresh"]').click();
+  await page.waitForFunction(()=>!document.querySelector('#account-targets').open);
+  assert.equal(await page.evaluate(()=>authTest.calls.filter(c=>c.method==='codexAuth.login.start').length),loginStarts,'status retry does not authorize again');
+  assert(await page.locator('#editor').evaluate(el=>el.open));
+  assert.equal(await page.locator('#editor-form [name=prompt]').inputValue(),'untouched draft');
   assert.deepEqual(errors,[]);console.log('Codex auth UI: visible confirmation, helper blocking/recheck, actual identity, stale observations, retry without recommit, reauthorization and dirty settings passed');
  }finally{if(browser)await browser.close();server.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

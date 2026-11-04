@@ -592,7 +592,8 @@
     document.querySelectorAll('[data-source-advanced]').forEach((b) => b.onclick = () => advanced(state.settings.sources.find((s) => s.id === b.dataset.sourceAdvanced)));
     document.querySelectorAll('[data-source-add]').forEach((b) => b.onclick = () => advanced(null, b.dataset.sourceAdd));
     document.querySelectorAll('[data-agent-host]').forEach((b) => b.onclick = () => {state.settingsTab = 'hosts';renderSettings(false);editItem();});
-    if ($('#accounts-back')) $('#accounts-back').onclick = () => {showCodex = false;statusLoaded = false;statusFullLoaded = false;statusError = '';renderSettings(false);};
+    if ($('#accounts-back')) $('#accounts-back').disabled = window.AieyesCodexAuth.busy;
+    if ($('#accounts-back')) $('#accounts-back').onclick = () => {window.AieyesCodexAuth.leave();showCodex = false;statusLoaded = false;statusFullLoaded = false;statusError = '';renderSettings(false);};
     if ($('#account-detail-back')) $('#account-detail-back').onclick = () => {detailKey = '';renderSettings(false);};
     if ($('#account-status-refresh')) $('#account-status-refresh').onclick = () => refreshStatuses(true);
     document.querySelectorAll('[data-deployment-sync]').forEach((b) => b.onclick = syncDeployments);
@@ -661,7 +662,7 @@
     if (event.key === 'Escape' && document.querySelector('.machine-menu[open]')) {event.preventDefault();event.stopImmediatePropagation();closeMachineMenus(null, true);} else
     if (event.key === 'Tab') closeMachineMenus();
   }, true);
-  window.AieyesAgentSettings = { deleteAccount, flush, navigate, integrationsHTML, agentsHTML, accountsHTML, bind, commit, accept, advanced, editAccount, addAccount, profiles, linked, deviceCounts, countsHTML, ensureStatuses, refreshStatuses, refreshCodexSource, refreshAntigravitySource, syncIdentitySettings, syncDeployments, updateSession, get statusLoaded() {return statusLoaded;}, get statusBusy() {return statusLoading;}, get antigravityRefreshing() {return antigravityRefreshTasks.size > 0;}, openDetails(a) {return openSettings({ provider: a.provider, accountKey: accountKey(a) });} };
+  window.AieyesAgentSettings = { completeAuth() {if (showCodex) {showCodex = false;renderSettings(false);}}, deleteAccount, flush, navigate, integrationsHTML, agentsHTML, accountsHTML, bind, commit, accept, advanced, editAccount, addAccount, profiles, linked, deviceCounts, countsHTML, ensureStatuses, refreshStatuses, refreshCodexSource, refreshAntigravitySource, syncIdentitySettings, syncDeployments, updateSession, get statusLoaded() {return statusLoaded;}, get statusBusy() {return statusLoading;}, get antigravityRefreshing() {return antigravityRefreshTasks.size > 0;}, openDetails(a) {return openSettings({ provider: a.provider, accountKey: accountKey(a) });} };
   void window.AieyesApp.ready.then(() => ensureStatuses('codex'));
 })();
 
@@ -673,7 +674,7 @@ async function openCopilotAuth() {
   const dialog = document.createElement('dialog');dialog.id = 'copilot-auth';dialog.setAttribute('aria-label', AieyesI18n.t("GitHub 授权"));
   dialog.innerHTML = `<h2>${AieyesI18n.t("GitHub 授权")}</h2><p id="copilot-auth-status" role="status"></p><div id="copilot-auth-code" hidden><p>${AieyesI18n.t("在 GitHub 页面输入授权码")}</p><code id="copilot-user-code" class="auth-code"></code><p class="muted"><code id="copilot-verify-url"></code></p><button type="button" id="copilot-copy-code">${AieyesI18n.t("复制授权码")}</button></div><div id="copilot-auth-commands" hidden><pre><code>copilot login</code></pre><pre><code>gh auth login</code></pre></div><div id="copilot-auth-error" class="error" role="alert"></div><div class="actions"><button type="button" id="copilot-auth-detect" hidden>${AieyesI18n.t("重新检测")}</button><button type="button" id="copilot-auth-close">${AieyesI18n.t("完成")}</button></div>`;
   document.body.append(dialog);dialog.showModal();
-  let session = null,sending = false,closed = false;
+  let session = null,sending = false,closed = false,authorizing = false;
   const waiting = () => ['waiting', 'authorized'].includes(session?.phase);
   function draw() {
     dialog.querySelector('#copilot-auth-status').textContent = AieyesI18n.message(session?.message || AieyesI18n.t("正在检查 GitHub 登录…"));
@@ -686,8 +687,9 @@ async function openCopilotAuth() {
     dialog.querySelector('#copilot-auth-close').textContent = waiting() ? AieyesI18n.t("取消授权") : AieyesI18n.t("完成");
   }
   async function call(method) {
-    if (sending) return;sending = true;draw();
-    try {session = await api('copilotAuth.' + method, {});dialog.querySelector('#copilot-auth-error').textContent = '';if (['detected', 'authorized'].includes(session?.phase)) {state.settings = await api('settings.get');}} catch (error) {dialog.querySelector('#copilot-auth-error').textContent = AieyesI18n.message(String(error));} finally {sending = false;draw();}
+    if (sending) return;if (method === 'cancel') authorizing = false;sending = true;draw();
+    try {session = await api('copilotAuth.' + method, {});if (session?.phase === 'waiting' || method === 'status' && ['authorized', 'detected'].includes(session?.phase)) authorizing = true;dialog.querySelector('#copilot-auth-error').textContent = '';if (['detected', 'authorized'].includes(session?.phase)) {state.settings = await api('settings.get');}} catch (error) {dialog.querySelector('#copilot-auth-error').textContent = AieyesI18n.message(String(error));} finally {sending = false;draw();}
+    if (!closed && authorizing && ['detected', 'authorized'].includes(session?.phase) && !dialog.querySelector('#copilot-auth-error').textContent) {notify(AieyesI18n.message(session.message || AieyesI18n.t("账户已添加")));await close();}
   }
   async function close() {if (sending) return;if (waiting() && session?.phase === 'waiting') await call('cancel');closed = true;dialog.close();if (window.AieyesMotion) AieyesMotion.removeAfterExit(dialog);else dialog.remove();if (['detected', 'authorized'].includes(session?.phase)) renderSettings(false);}
   dialog.oncancel = (e) => {e.preventDefault();close();};dialog.querySelector('#copilot-auth-close').onclick = close;
@@ -755,10 +757,10 @@ async function openAntigravityLogin(sourceId) {
   const dialog = document.createElement('dialog');dialog.id = 'agy-login';dialog.setAttribute('aria-label', AieyesI18n.t("Antigravity 登录"));
   dialog.innerHTML = `<h2>${AieyesI18n.t("Antigravity 登录")}</h2><p>${AieyesI18n.t("读取机器现有登录，或通过浏览器授权。凭据保存在登录机器。")}</p><p id="agy-login-status" role="status"></p><p id="agy-login-identity"></p><p id="agy-login-metadata" class="muted"></p><div id="agy-auth-url" hidden><button type="button" id="agy-open-url">${AieyesI18n.t("打开授权网页")}</button><button type="button" id="agy-copy-url">${AieyesI18n.t("复制授权网址")}</button><label>${AieyesI18n.t("浏览器返回的授权码")}<input id="agy-code" type="password" autocomplete="off"></label><button type="button" id="agy-submit-code">${AieyesI18n.t("提交授权码")}</button></div><div id="agy-login-error" class="error"></div><div class="actions"><button id="agy-trust" hidden>${AieyesI18n.t("确认临时目录")}</button><button id="agy-verify">${AieyesI18n.t("验证登录")}</button><button id="agy-retry" hidden>${AieyesI18n.t("重新登录 / 检查")}</button><button id="agy-close">${AieyesI18n.t("完成")}</button></div>`;
   document.body.append(dialog);dialog.showModal();
-  let session = null,sending = false,closed = false,refreshedSession = null;
+  let session = null,sending = false,closed = false,refreshedSession = null,authorizing = false;
   const active = () => !session || ['checking', 'starting', 'authorizing', 'verifying'].includes(session.phase);
   function draw() {AieyesAgyAuth.busy = active() || sending;dialog.querySelector('#agy-login-status').textContent = AieyesI18n.message(session?.message || AieyesI18n.t("正在检查现有登录…"));dialog.querySelector('#agy-login-identity').textContent = session?.identity ? [session.identity.email, session.identity.subscription || AieyesI18n.t("订阅未知")].join(' · ') : '';dialog.querySelector('#agy-login-metadata').textContent = AieyesI18n.message(session?.metadataError);dialog.querySelector('#agy-auth-url').hidden = !session?.authUrl;dialog.querySelector('#agy-trust').hidden = session?.workspaceConfirmationRequired !== true;dialog.querySelector('#agy-trust').disabled = sending;dialog.querySelector('#agy-submit-code').disabled = sending;dialog.querySelector('#agy-retry').disabled = sending;dialog.querySelector('#agy-retry').hidden = active();dialog.querySelector('#agy-verify').disabled = sending || !session || ['checking', 'verifying'].includes(session.phase);dialog.querySelector('#agy-close').disabled = sending;dialog.querySelector('#agy-close').textContent = active() ? AieyesI18n.t("取消授权") : AieyesI18n.t("完成");}
-  async function call(method, extra = {}) {if (sending) return;sending = true;if (['start', 'verify'].includes(method)) refreshedSession = null;draw();try {session = await api('agyAuth.' + method, { sourceId, id: session?.id, ...extra });dialog.querySelector('#agy-login-error').textContent = '';draw();if (session?.authenticated && refreshedSession !== session.id) {await window.AieyesAgentSettings.refreshAntigravitySource(sourceId, session.accountStatus);refreshedSession = session.id;}} catch (error) {dialog.querySelector('#agy-login-error').textContent = AieyesI18n.message(String(error));} finally {sending = false;draw();}}
+  async function call(method, extra = {}) {if (sending) return;sending = true;if (['verify', 'submitCode', 'confirmWorkspace'].includes(method) || method === 'start' && session) authorizing = true;if (method === 'cancel') authorizing = false;if (['start', 'verify'].includes(method)) refreshedSession = null;draw();try {session = await api('agyAuth.' + method, { sourceId, id: session?.id, ...extra });dialog.querySelector('#agy-login-error').textContent = '';if (session?.phase === 'authorizing') authorizing = true;draw();if (session?.authenticated && refreshedSession !== session.id) {await window.AieyesAgentSettings.refreshAntigravitySource(sourceId, session.accountStatus);refreshedSession = session.id;}} catch (error) {dialog.querySelector('#agy-login-error').textContent = AieyesI18n.message(String(error));} finally {sending = false;draw();}if (!closed && authorizing && !active() && session?.authenticated && refreshedSession === session.id && !session.metadataError && session.current !== false && !dialog.querySelector('#agy-login-error').textContent) {notify(AieyesI18n.message(session.message || AieyesI18n.t("账户已添加")));await close();}}
   async function close() {if (sending) return;if (active() && session) await call('cancel');closed = true;AieyesAgyAuth.busy = false;dialog.close();if (window.AieyesMotion) AieyesMotion.removeAfterExit(dialog);else dialog.remove();}
   dialog.oncancel = (e) => {e.preventDefault();close();};dialog.querySelector('#agy-close').onclick = close;
   dialog.querySelector('#agy-verify').onclick = () => call('verify');dialog.querySelector('#agy-retry').onclick = () => call('start');dialog.querySelector('#agy-trust').onclick = () => call('confirmWorkspace');
@@ -777,7 +779,7 @@ async function openBuddyLogin(provider) {
   const dialog = document.createElement('dialog');dialog.id = 'buddy-login';dialog.setAttribute('aria-label', AieyesI18n.t("登录查看余额"));
   dialog.innerHTML = `<h2>${AieyesI18n.t("登录查看余额")}</h2><p>${AieyesI18n.t("可选登录，使用非公开接口；可随时退出登录。仅用于查看余额。")}</p><label>${AieyesI18n.t("登录地区")}<select id="buddy-region"><option value="cn">${AieyesI18n.t("中国大陆")}</option><option value="global">${AieyesI18n.t("国际版")}</option></select></label><p id="buddy-status" role="status"></p><a id="buddy-url" target="_blank" rel="noopener noreferrer" hidden>${AieyesI18n.t("打开授权网页")}</a><p id="buddy-error" class="error"></p><div class="actions"><button id="buddy-start">${AieyesI18n.t("登录查看余额")}</button><button id="buddy-logout" hidden>${AieyesI18n.t("退出所有余额登录")}</button><button id="buddy-close">${AieyesI18n.t("完成")}</button></div>`;
   document.body.append(dialog);dialog.showModal();
-  let session = null,sending = false,closed = false;
+  let session = null,sending = false,closed = false,authorizing = false;
   const waiting = () => ['waiting', 'authorized'].includes(session?.phase);
   function draw() {
     dialog.querySelector('#buddy-status').textContent = AieyesI18n.message(session?.message || '');
@@ -791,12 +793,13 @@ async function openBuddyLogin(provider) {
     dialog.querySelector('#buddy-close').textContent = waiting() ? AieyesI18n.t("取消授权") : AieyesI18n.t("完成");
   }
   async function call(method) {
-    if (sending) return;sending = true;draw();
+    if (sending) return;if (method === 'start') authorizing = true;if (['cancel', 'logout'].includes(method)) authorizing = false;sending = true;draw();
     try {session = await api('buddyAuth.' + method, {provider, region: dialog.querySelector('#buddy-region').value, id: session?.id});dialog.querySelector('#buddy-error').textContent = '';if (session?.connected || method === 'logout') state.settings = await api('settings.get');}
     catch (error) {dialog.querySelector('#buddy-error').textContent = AieyesI18n.message(String(error));}
     finally {sending = false;draw();}
+    if (!closed && authorizing && session?.connected && !dialog.querySelector('#buddy-error').textContent) {notify(AieyesI18n.message(session.message || AieyesI18n.t("账户已添加")));await close();}
   }
-  async function close() {if (sending) return;if (waiting()) await call('cancel');closed = true;dialog.close();dialog.remove();renderSettings(false);}
+  async function close() {if (sending) return;if (waiting() && !session?.connected) await call('cancel');closed = true;dialog.close();dialog.remove();renderSettings(false);}
   dialog.oncancel = (event) => {event.preventDefault();close();};dialog.querySelector('#buddy-close').onclick = close;
   dialog.querySelector('#buddy-start').onclick = () => call('start');dialog.querySelector('#buddy-logout').onclick = () => call('logout');
   await call('status');

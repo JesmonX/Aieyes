@@ -17,7 +17,7 @@ function fixture(){
     if(method==='settings.get')return structuredClone(settings);
     if(method==='accounts.status.get')return statusRows();
     if(method==='accounts.status.refresh'){const row=statusRows().find(r=>r.accountKey===params.accountKey&&r.sourceId===params.sourceId);if(t.holdStatus)await new Promise(resolve=>t.releaseStatus=resolve);return row;}
-    if(method==='accounts.targets')return rows().filter(r=>!params.accountKey||r.accountKey===params.accountKey);
+    if(method==='accounts.targets')return (t.onlyRemote?rows().filter(r=>r.sourceId==='remote'):rows()).filter(r=>!params.accountKey||r.accountKey===params.accountKey);
     if(method==='codexAuth.reconcile'){
       if(params.sourceId==='offline'){
         if(t.holdOffline)await new Promise(resolve=>t.releaseOffline=()=>{t.holdOffline=false;resolve();});
@@ -63,7 +63,7 @@ function fixture(){
     await page.waitForTimeout(50);
     assert.match(await page.locator('[data-device-counts="codex:a"]').innerText(),/使用中 0\/3/,'late status cannot restore the previous account');
 
-    await page.evaluate(()=>{AieyesCodexAuth.open=(...args)=>targetsTest.opened=args;AieyesCodexAuth.html=()=>'<p>登录或切换确认</p>';AieyesCodexAuth.bind=()=>{};});
+    await page.evaluate(()=>{AieyesCodexAuth.open=(a,b,c,done)=>{targetsTest.opened=[a,b,c];targetsTest.completed=done;};AieyesCodexAuth.html=()=>'<p>登录或切换确认</p>';AieyesCodexAuth.bind=()=>{};});
     await page.locator('[data-switch-account="codex:b"]').click();
     const remote=page.locator('#account-targets .list-row').filter({hasText:'144 服务器'});
     await remote.getByRole('button',{name:'切换',exact:true}).waitFor();
@@ -106,6 +106,31 @@ function fixture(){
     await page.screenshot({path:path.resolve(__dirname,'../.local/ui-previews/codex-target-unbound.png')});
     await unbound.getByRole('button',{name:'完成关联',exact:true}).click();
     assert.deepEqual(await page.evaluate(()=>targetsTest.opened),['a','remote','login']);
+    await page.locator('#target-close').click();
+    // One confirmed directory skips the chooser, without committing a switch.
+    await page.evaluate(()=>{targetsTest.onlyRemote=true;targetsTest.linked=true;targetsTest.failRemote=false;targetsTest.reconcileIssue=false;targetsTest.opened=null;AieyesAccountTargets.open('codex:b');});
+    await page.waitForFunction(()=>targetsTest.opened?.[2]==='switch');
+    assert.equal(await page.locator('#target-back').count(),1);
+    await page.evaluate(()=>{targetsTest.oldCompletion=targetsTest.completed;return true;});
+    await page.locator('#target-close').click();
+    await page.evaluate(()=>AieyesAccountTargets.open('codex:a'));
+    await page.evaluate(()=>targetsTest.oldCompletion({kind:'switch'}));
+    assert(await page.locator('#account-targets').evaluate(el=>el.open),'stale completion must not close a new chooser');
+    await page.locator('#target-close').click();
+    // Returning from association preserves the entire wakeup editor, including unsaved text.
+    await page.evaluate(()=>{targetsTest.onlyRemote=false;state.page='settings';state.settingsTab='wakeups';renderSettings();});
+    await page.locator('#wake-add:not([disabled])').click();
+    await page.locator('#wake-account').selectOption('codex:b');
+    await page.locator('#wake-source').selectOption('remote');
+    await page.locator('#wake-model').fill('keep-model');
+    await page.locator('[name=prompt]').fill('keep unsaved prompt');
+    await page.locator('#wake-manage-account').click();
+    await page.locator('#account-targets .list-row').filter({hasText:'144 服务器'}).getByRole('button').click();
+    await page.evaluate(()=>targetsTest.completed({kind:'bind'}));
+    await page.waitForFunction(()=>!document.querySelector('#account-targets').open);
+    assert(await page.locator('#editor').evaluate(el=>el.open));
+    assert.equal(await page.locator('#wake-model').inputValue(),'keep-model');
+    assert.equal(await page.locator('[name=prompt]').inputValue(),'keep unsaved prompt');
     assert.deepEqual(errors,[]);
     console.log('Account targets: deduplicated device counts, settings parity, offline/paused devices, late status rejection, independent machines, archived eligibility, login/switch routing, reconciled wakeup selection and stale capabilities passed');
   }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

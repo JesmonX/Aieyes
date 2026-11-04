@@ -5,6 +5,30 @@
   const storage = (mode) => ({ file: AieyesI18n.t("文件"), keyring: AieyesI18n.t("系统凭据库"), auto: AieyesI18n.t("自动") })[mode] ?? mode;
   let intent = 'login',needsRefresh = false,targetAccountId = '',sourceId = '',info = null,busy = false,error = '',notice = '',prepared = null,operation = null,timer;
   let switchReview = null,switchError = '',switchedReview = null,prepareOnOpen = false;
+  let flow = 0, onComplete = null, completion = null, loginReview = null, returnFocus = '', pendingConnection = null;
+  function finish(kind, revision = flow) {
+    if (revision !== flow || error) return;
+    const source = selected(),machine = source?.hostId ? state.settings.hosts.find(h => h.id === source.hostId)?.name || source.hostId : AieyesI18n.t("本机");
+    completion = { context: [targetAccount()?.name, machine].filter(Boolean).join(' · '), kind, sourceId, accountId: targetAccountId, message: notice || AieyesI18n.t("账户已添加"), revision };
+  }
+  async function completeConnection(kind, message = AieyesI18n.t("账户已添加"), revision = flow) {
+    pendingConnection = { kind, message, revision };
+    await settingsChanged();await refresh();
+    const updated = await window.AieyesAgentSettings.refreshCodexSource(sourceId);
+    if (revision !== flow) return;
+    if (!updated) {error = AieyesI18n.t("账户已保存，设备状态刷新失败，请重试读取。");return;}
+    notice = message;pendingConnection = null;finish(kind, revision);
+  }
+  function deliver() {
+    if (!completion || busy || operation) return;
+    const result = completion;completion = null;
+    if (result.revision !== flow) return;
+    const callback = onComplete;onComplete = null;switchedReview = null;
+    clearTimeout(timer);
+    if (callback) callback(result);else window.AieyesAgentSettings?.completeAuth(result);
+    if (!callback && returnFocus) document.querySelector(returnFocus)?.focus({ preventScroll: true });
+    notify([result.context, result.message].filter(Boolean).join(' · '), 'info', 'account-flow');
+  }
   const savedSources = () => (state.settings?.sources ?? []).filter((s) => s.provider === 'codex' && AieyesUI.sourceEnabled(state.settings, s));
   const selected = () => savedSources().find((s) => s.id === sourceId);
   const targetAccount = () => state.settings.accounts.find((a) => a.provider === 'codex' && a.id === targetAccountId);
@@ -23,8 +47,8 @@
   async function prepareSwitch(profileId) {
     const profile = info?.profiles.find((p) => p.id === profileId);
     if (!profile) return;
-    const review = { sourceId, accountId: targetAccountId, profileId, name: profile.name, currentName: info.selected?.kind === 'api' ? info.selected.name || AieyesI18n.t("当前 API") : info.profiles.find((p) => p.current)?.name || AieyesI18n.t("当前登录"), sourceName: selected()?.name || '', path: selected()?.path || '' };
-    switchReview = review;switchedReview = null;prepared = null;switchError = '';paint();
+    const review = { revision: flow, sourceId, accountId: targetAccountId, profileId, name: profile.name, currentName: info.selected?.kind === 'api' ? info.selected.name || AieyesI18n.t("当前 API") : info.profiles.find((p) => p.current)?.name || AieyesI18n.t("当前登录"), sourceName: selected()?.name || '', path: selected()?.path || '' };
+    switchReview = review;switchedReview = null;pendingConnection = null;prepared = null;switchError = '';paint();
     try {
       const result = await call('switch.prepare', { profileId });
       if (switchReview === review && sourceId === review.sourceId) prepared = result;
@@ -37,10 +61,12 @@
       await refresh();
       const current = info?.profiles.find((p) => p.id === review.profileId)?.current === true;
       const updated = await window.AieyesAgentSettings.refreshCodexSource(review.sourceId);
+      if (review.revision !== flow) return;
       if (current) {
         notice = AieyesI18n.t("账户已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话");
         if (!updated) error = AieyesI18n.t("账户已切换，设备状态刷新失败，请重试读取。");else
         if (review.warning) error = review.warning;
+        if (updated && !review.warning) finish('switch', review.revision);
       } else {
         notice = '';error = AieyesI18n.t("当前登录与目标账户不一致，请重新检查。");
       }
@@ -83,7 +109,7 @@
     if (busy) return;
     busy = true;error = '';notice = '';paint();
     try {await body();} catch (err) {error = err.message ?? String(err);} finally
-    {busy = false;paint();}
+    {busy = false;paint();deliver();}
   }
   function remember() {
     if (operation) localStorage.setItem('aieyes.codexLogin', JSON.stringify({ sourceId, operationId: operation.operationId, accountId: targetAccountId }));else
@@ -92,15 +118,18 @@
   async function poll() {
     clearTimeout(timer);
     if (!operation) return;
+    const revision = flow;
     try {
-      operation = await call('login.status', { operationId: operation.operationId, accountId: targetAccountId });
+      const result = await call('login.status', { operationId: operation.operationId, accountId: targetAccountId });
+      if (revision !== flow) return;
+      operation = result;error = '';
       if (['succeeded', 'failed', 'cancelled'].includes(operation.status)) {
-        if (operation.status === 'succeeded') {notice = operation.accountArchived ? AieyesI18n.t("登录已保存，该账户已归档，可在账户页恢复。") : operation.quotaEnabled === false ? AieyesI18n.t("登录成功，该账户的额度查询已暂停。") : AieyesI18n.t("登录成功，已启用此账户的额度查询。");await settingsChanged();await refresh();} else
+        if (operation.status === 'succeeded') {notice = operation.accountArchived ? AieyesI18n.t("登录已保存，该账户已归档，可在账户页恢复。") : operation.quotaEnabled === false ? AieyesI18n.t("登录成功，该账户的额度查询已暂停。") : AieyesI18n.t("登录成功，已启用此账户的额度查询。");if (!operation.accountArchived && operation.quotaEnabled !== false && !operation.statusWarning) await completeConnection('login', notice, revision);else {await settingsChanged();await refresh();if (operation.statusWarning) error = operation.statusWarning;}} else
         error = operation.error || AieyesI18n.t("登录已结束");
         operation = null;remember();
       }
     } catch (err) {error = err.message ?? String(err);}
-    paint();if (operation) timer = setTimeout(poll, 1800);
+    paint();deliver();if (operation) timer = setTimeout(poll, 1800);
   }
   function visibleProfiles() {
     const a = state.settings.accounts.find((a) => a.provider === 'codex' && a.id === targetAccountId);
@@ -122,14 +151,30 @@
   }
   async function ensureManaged() {if (!selected()?.codexHomeId) {await call('enable');await settingsChanged();}}
   function login(profileId) {
-    const p = info?.profiles.find((p) => p.id === profileId);
-    showEditor(p ? AieyesI18n.t("重新登录") : AieyesI18n.t("添加 Codex 账户"), `<p>${AieyesI18n.t("默认以邮箱命名，可在账户设置中修改。")}</p><p>${AieyesI18n.t("将在{0}保存登录。{1}", selected().hostId ? AieyesI18n.t("服务器") : AieyesI18n.t("本机"), p ? AieyesI18n.t("请使用原账户。") : '')}</p>`, async () => {
-      await ensureManaged();
-      prepared = null;operation = await call('login.start', { profileId: profileId ?? null, deviceCode: !!selected().hostId });
-      remember();poll();
-    }, 'confirmation');
+    if (loginReview || busy || operation) return;
+    const revision = flow,p = info?.profiles.find((p) => p.id === profileId),dialog = document.createElement('dialog');
+    loginReview = dialog;
+    dialog.className = 'editor-dialog';dialog.id = 'codex-login-confirm';
+    dialog.innerHTML = `<h2>${p ? AieyesI18n.t("重新登录") : AieyesI18n.t("添加 Codex 账户")}</h2><p>${AieyesI18n.t("默认以邮箱命名，可在账户设置中修改。")}</p><p>${AieyesI18n.t("将在{0}保存登录。{1}", selected().hostId ? AieyesI18n.t("服务器") : AieyesI18n.t("本机"), p ? AieyesI18n.t("请使用原账户。") : '')}</p><p class="error" role="alert"></p><div class="dialog-foot"><button data-login-cancel>${AieyesI18n.t("取消")}</button><button data-login-start class="primary">${AieyesI18n.t("开始登录")}</button></div>`;
+    let sending = false;
+    const close = () => {dialog.close();dialog.remove();if (loginReview === dialog) loginReview = null;paint();};
+    dialog.oncancel = (event) => {event.preventDefault();if (!sending) close();};
+    dialog.querySelector('[data-login-cancel]').onclick = () => {if (!sending) close();};
+    dialog.querySelector('[data-login-start]').onclick = async () => {
+      if (sending || revision !== flow) return;
+      sending = true;dialog.querySelectorAll('button').forEach(b => b.disabled = true);
+      try {
+        await ensureManaged();
+        const result = await call('login.start', { profileId: profileId ?? null, deviceCode: !!selected().hostId });
+        if (revision !== flow) return;
+        prepared = null;operation = result;remember();close();poll();
+      } catch (err) {dialog.querySelector('.error').textContent = AieyesI18n.message(err.message ?? String(err));}
+      finally {sending = false;dialog.querySelectorAll('button').forEach(b => b.disabled = false);}
+    };
+    document.body.append(dialog);dialog.showModal();
   }
   function bind() {
+    const root = document.querySelector('#account-targets[open]') || document;
     if (needsRefresh && !busy && !operation && sourceId) {needsRefresh = false;queueMicrotask(() => run(async () => {
         await refresh();
         if (prepareOnOpen) {
@@ -138,22 +183,22 @@
           if (profile) await prepareSwitch(profile.id);
         }
       }));}
-    const dialog = document.getElementById('codex-switch');
+    const dialog = root.querySelector('#codex-switch');
     if (dialog) {
       if (!dialog.open) dialog.showModal();
       dialog.oncancel = (event) => {event.preventDefault();if (!busy) {switchReview = null;prepared = null;paint();}};
     }
-    document.querySelector('[data-auth-settings]')?.addEventListener('click', () => openSettings({ provider: 'codex', section: 'machines' }));
-    const selector = document.getElementById('auth-source');
-    if (selector) selector.onchange = () => {sourceId = selector.value;info = null;prepared = null;switchReview = null;switchedReview = null;run(refresh);};
-    document.querySelectorAll('[data-auth]').forEach((button) => button.onclick = () => {
+    root.querySelector('[data-auth-settings]')?.addEventListener('click', () => openSettings({ provider: 'codex', section: 'machines' }));
+    const selector = root.querySelector('#auth-source');
+    if (selector) selector.onchange = () => {pendingConnection = null;sourceId = selector.value;info = null;prepared = null;switchReview = null;switchedReview = null;run(refresh);};
+    root.querySelectorAll('[data-auth]').forEach((button) => button.onclick = () => {
       const action = button.dataset.auth,profileId = button.dataset.profile;
       if (action === 'login' || action === 'reauth') return login(profileId);
-      if (action === 'bind') return run(async () => {await call('profiles.bind', { profileId, accountId: targetAccountId });await settingsChanged();await refresh();});
+      if (action === 'bind') return run(async () => {await call('profiles.bind', { profileId, accountId: targetAccountId });await completeConnection('bind');});
       if (action === 'remove') return confirmDestructive(AieyesI18n.t("移除账户档案"), `<p>${AieyesI18n.t("删除此位置保存的登录凭据，历史记录保留。")}</p>`, async () => {await call('profiles.remove', { profileId });await settingsChanged();await refresh();paint();}, AieyesI18n.t("确认移除"));
       run(async () => {
-        if (action === 'refresh') {if (switchedReview) await refreshAfterSwitch(switchedReview);else await refresh();}
-        if (action === 'adopt') {await ensureManaged();await call('adopt', { accountId: targetAccountId });await settingsChanged();await refresh();}
+        if (action === 'refresh') {if (switchedReview) await refreshAfterSwitch(switchedReview);else if (pendingConnection) await completeConnection(pendingConnection.kind, pendingConnection.message, pendingConnection.revision);else await refresh();}
+        if (action === 'adopt') {await ensureManaged();await call('adopt', { accountId: targetAccountId });await completeConnection('bind');}
         if (action === 'switch') await prepareSwitch(profileId);
         if (action === 'retrySwitch' && switchReview) await prepareSwitch(switchReview.profileId);
         if (action === 'cancelSwitch') {prepared = null;switchReview = null;switchError = '';}
@@ -165,5 +210,5 @@
     });
     if (!operation) {try {const saved = JSON.parse(localStorage.getItem('aieyes.codexLogin') || 'null');if (saved && savedSources().some((s) => s.id === saved.sourceId)) {sourceId = saved.sourceId;targetAccountId = saved.accountId || '';operation = { operationId: saved.operationId };poll();}} catch {localStorage.removeItem('aieyes.codexLogin');}}
   }
-  window.AieyesCodexAuth = { get busy() {return busy || Boolean(operation) || Boolean(switchReview);}, html, bind, open(accountId = '', selectedSource = '', action = 'login') {if (!operation) {intent = action;needsRefresh = true;targetAccountId = accountId;if (selectedSource) sourceId = selectedSource;info = null;prepared = null;switchReview = null;switchedReview = null;prepareOnOpen = action === 'switch' && !!accountId;error = '';notice = '';}} };
+  window.AieyesCodexAuth = { get busy() {return busy || Boolean(operation) || Boolean(switchReview) || Boolean(loginReview);}, html, bind, leave() {flow++;completion = null;pendingConnection = null;onComplete = null;clearTimeout(timer);}, open(accountId = '', selectedSource = '', action = 'login', completed = null) {if (!operation && !busy && !loginReview) {flow++;completion = null;pendingConnection = null;onComplete = completed;returnFocus = [...(document.activeElement?.attributes ?? [])].filter(a => ['data-account-login', 'data-device-manage', 'data-account-connect', 'data-account-add', 'data-source', 'data-intent'].includes(a.name)).map(a => `[${a.name}="${CSS.escape(a.value)}"]`).join('');if (document.querySelector('#message')?.dataset.source === 'account-flow' && document.querySelector('#message')?.dataset.kind === 'info') notify('');intent = action;needsRefresh = true;targetAccountId = accountId;if (selectedSource) sourceId = selectedSource;info = null;prepared = null;switchReview = null;switchedReview = null;prepareOnOpen = action === 'switch' && !!accountId;error = '';notice = '';return true;}return false;} };
 })();

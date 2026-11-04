@@ -21,14 +21,19 @@ struct CopilotAuthView: View {
     @State private var status: CopilotAuthState?
     @State private var error: String?
     @State private var sending = false
+    @State private var authorizing = false
+    @State private var closed = false
     private var waiting: Bool { ["waiting", "authorized"].contains(status?.phase ?? "") }
     private var finished: Bool { ["detected", "authorized"].contains(status?.phase ?? "") }
     private func call(_ method: String) async {
         guard !sending else { return }
         sending = true; defer { sending = false }; error = nil
+        if ["cancel", "logout"].contains(method) { authorizing = false }
         do {
             status = try await engine.call("copilotAuth." + method)
-            if finished { await model.refreshIdentitySettings(); await model.refreshQuotas() }
+            if status?.phase == "waiting" || method == "status" && finished { authorizing = true }
+            if finished { let saved: Settings = try await engine.call("settings.get"); model.acceptConfiguration(saved); Task { await model.refreshQuotas() } }
+            if authorizing, finished, !closed, !Task.isCancelled { closed = true; model.showAccountNotice(status?.message ?? L("账户已添加")); dismiss() }
         } catch { self.error = L(error.localizedDescription) }
     }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
@@ -61,11 +66,11 @@ struct CopilotAuthView: View {
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogAgyWidth).interactiveDismissDisabled(sending)
         .task {
             await call("start")
-            while !Task.isCancelled, waiting {
+            while !Task.isCancelled, !closed, waiting {
                 do { try await Task.sleep(for: .seconds(2)) } catch { break }
                 if !sending { await call("status") }
             }
         }
-        .onDisappear { if status?.phase == "waiting" { Task { let _: CopilotAuthState? = try? await engine.call("copilotAuth.cancel") } } }
+        .onDisappear { closed = true; if status?.phase == "waiting" { Task { let _: CopilotAuthState? = try? await engine.call("copilotAuth.cancel") } } }
     }
 }

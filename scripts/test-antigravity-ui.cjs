@@ -71,6 +71,29 @@ function fixture(){
     await page.mouse.move(2,2);
     await page.screenshot({path:path.join(out,`${surface}-${width}-${theme}.png`),fullPage:true});
   }
+  if (!panel) {
+    await page.evaluate(()=>{
+      const invoke=window.__TAURI__.core.invoke;
+      agyFixture.authWarning=null;
+      window.__TAURI__.core.invoke=async(command,args)=>{
+        if(command==='engine_call' && args.method.startsWith('agyAuth.'))return {id:'auth-fixture',phase:'authenticated',authenticated:true,current:true,message:'验证成功',metadataError:agyFixture.authWarning,accountStatus:{accountKey:'antigravity:legacy-shared',sourceId:'agy-source',machineId:'local',credential:true,current:true}};
+        return invoke(command,args);
+      };
+      showEditor('Draft','<textarea name="prompt">keep draft</textarea>',async()=>{});
+      void openAntigravityLogin('agy-source');
+    });
+    await page.locator('#agy-verify:not([disabled])').waitFor();
+    assert(await page.locator('#agy-login').evaluate(el=>el.open),'existing login remains inspectable');
+    await page.evaluate(()=>agyFixture.authWarning='metadata warning');
+    await page.locator('#agy-verify').click();
+    await page.locator('#agy-login-metadata').filter({hasText:'metadata warning'}).waitFor();
+    assert(await page.locator('#agy-login').evaluate(el=>el.open),'warnings retain the authorization dialog');
+    await page.evaluate(()=>agyFixture.authWarning=null);
+    await page.locator('#agy-verify').click();
+    await page.waitForFunction(()=>!document.querySelector('#agy-login'));
+    assert(await page.locator('#editor').evaluate(el=>el.open));
+    assert.equal(await page.locator('#editor-form [name=prompt]').inputValue(),'keep draft');
+  }
   assert.deepEqual(errors,[]);await page.close();
  }console.log('Antigravity UI: provider preference migration, independent group values, sampling selection/refresh, unsupported groups, credits and large amounts at 360–1120px passed');}
  finally{await browser.close();await new Promise(r=>server.close(r));}

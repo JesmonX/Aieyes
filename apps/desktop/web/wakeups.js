@@ -76,13 +76,24 @@
     // Adding or removing a time keeps keyboard focus in the list instead of dropping it to <body>.
     function drawTimes(focus) {
       const root = $('#wake-time-rows');
-      root.innerHTML = times.map((time, i) => `<div class="actions"><input type="time" data-wake-time="${i}" value="${escapeHTML(time)}" aria-label="${escapeHTML(AieyesI18n.t("目标时间 {0}", i + 1))}" required><span data-local-time="${i}" class="muted tiny"></span><button type="button" data-remove-time="${i}" aria-label="${escapeHTML(AieyesI18n.t("移除时刻 {0}", time))}">${AieyesI18n.t("移除")}</button></div>`).join('');
-      root.querySelectorAll('[data-wake-time]').forEach((input) => input.oninput = () => {times[Number(input.dataset.wakeTime)] = input.value;$('#field-times').value = times.join(',');updateLocalTimes();});
+      root.innerHTML = times.map((time, i) => {
+        const [hour, minute] = time.split(':');
+        const choices = (count, selected) => Array.from({ length: count }, (_, value) => {const text = String(value).padStart(2, '0');return option(text, text, selected);}).join('');
+        return `<div class="wake-time-row"><div class="wake-time-picker" role="group" aria-label="${escapeHTML(AieyesI18n.t("目标时间 {0}", i + 1))}"><select data-wake-time="${i}" data-time-part="hour" aria-label="${escapeHTML(AieyesI18n.t("目标时间 {0}：小时", i + 1))}">${choices(24, hour)}</select><span aria-hidden="true">:</span><select data-wake-time="${i}" data-time-part="minute" aria-label="${escapeHTML(AieyesI18n.t("目标时间 {0}：分钟", i + 1))}">${choices(60, minute)}</select></div><span data-local-time="${i}" class="muted tiny"></span><button type="button" data-remove-time="${i}" aria-label="${escapeHTML(AieyesI18n.t("移除时刻 {0}", time))}">${AieyesI18n.t("移除")}</button></div>`;
+      }).join('');
+      root.querySelectorAll('[data-wake-time]').forEach((input) => input.onchange = () => {
+        const index = Number(input.dataset.wakeTime),row = input.closest('.wake-time-row');
+        times[index] = row.querySelector('[data-time-part="hour"]').value + ':' + row.querySelector('[data-time-part="minute"]').value;
+        $('#field-times').value = times.join(',');
+        row.querySelector('[data-remove-time]').setAttribute('aria-label', AieyesI18n.t("移除时刻 {0}", times[index]));
+        updateLocalTimes();
+      });
       root.querySelectorAll('[data-remove-time]').forEach((b) => b.onclick = () => {const i = Number(b.dataset.removeTime);times.splice(i, 1);$('#field-times').value = times.join(',');drawTimes(times.length ? `[data-remove-time="${Math.min(i, times.length - 1)}"]` : '#wake-add-time');});
       updateLocalTimes();
-      if (focus) $(focus)?.focus();
+      window.AieyesSingleSelect?.mountAll(root);
+      if (focus) {const field = $(focus);(window.AieyesSingleSelect?.visible(field) ?? field)?.focus();}
     }
-    drawTimes();$('#wake-add-time').onclick = () => {times.push('08:00');$('#field-times').value = times.join(',');drawTimes(`[data-wake-time="${times.length - 1}"]`);};
+    drawTimes();$('#wake-add-time').onclick = () => {times.push('08:00');$('#field-times').value = times.join(',');drawTimes(`[data-wake-time="${times.length - 1}"][data-time-part="hour"]`);};
     let models = [],capabilityRevision = 0;
     const updateEffort = () => {const m = models.find((m) => m.id === $('#wake-model').value);if (!m) return;const value = $('#wake-effort').value,efforts = m.efforts ?? [];$('#wake-effort').innerHTML = ['', ...efforts].map((e) => option(e, e || AieyesI18n.t("模型默认"), efforts.includes(value) ? value : efforts.includes('low') ? 'low' : '')).join('');};
     $('#wake-model').onchange = updateEffort;
@@ -115,7 +126,7 @@
     $('#wake-source').onchange = () => {task.codexProfileId = null;$('#wake-profile').innerHTML = '';clearCapabilities();profilePicker();};
     $('#field-binary').addEventListener('input', clearCapabilities);
     populate();
-    $('#wake-manage-account').onclick = () => window.AieyesAccountTargets.open(accountSelection);
+    $('#wake-manage-account').onclick = () => window.AieyesAccountTargets.open(accountSelection, async () => {try {const next = await api('accounts.targets', { includeUnavailable: true });if (editorRevision !== editorGeneration || formElement !== $('#editor-form') || !$('#editor').open) return;targets = next;populate();} catch (error) {if (formElement === $('#editor-form')) $('#wake-target-reason').textContent = AieyesI18n.message(error.message ?? String(error));}});
     $('#wake-reconcile').onclick = async () => {
       const button = $('#wake-reconcile'),sourceId = $('#wake-source').value,account = accountSelection;button.disabled = true;
       try {

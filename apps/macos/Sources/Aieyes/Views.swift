@@ -226,6 +226,7 @@ struct RootView: View, Equatable {
     var body: some View {
         let _ = interfaceLanguage;
         accountObservedContent
+            .overlay(alignment: .top) { AccountFlowNotice(model: model) }
             .onChange(of: tab) { _, value in if compact { model.setServerVisible(value == "servers", window: "panel"); if value == "servers" { Task { await model.sampleHosts() } } } }
             .onAppear { if compact { model.setServerVisible(activePage == "servers", window: "panel") } }
     }
@@ -1996,5 +1997,20 @@ private struct AccountCardActions: ViewModifier {
             if archive { next.accounts[i].archived = true } else { next.accounts[i].quotaEnabled = false }
             try await model.persistConfiguration(next, base: base)
         } catch { failure = error.localizedDescription } }
+    }
+}
+
+struct AccountFlowNotice: View {
+    @ObservedObject var model: AppModel
+    var body: some View {
+        if let notice = model.accountNotice {
+            HStack {
+                Label(notice, systemImage: "checkmark.circle").font(AppFont.secondary).textSelection(.enabled)
+                Spacer()
+                Button { model.accountNotice = nil } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain).accessibilityLabel(L("关闭提示"))
+            }.padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10)).padding(10)
+                .accessibilityAddTraits(.updatesFrequently)
+        }
     }
 }

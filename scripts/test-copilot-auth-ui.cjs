@@ -92,11 +92,9 @@ function bridge(){window.setInterval=()=>0;window.__TAURI__={event:{async listen
     assert.equal(await dialog.locator('#copilot-auth-detect').isDisabled(),false,'A failed request must leave retry enabled');
     assert.equal(await dialog.locator('#copilot-auth-commands').isVisible(),true);assert.equal(verifiedFixture.settingsReads,0,'A failed detection must not adopt settings');
     await dialog.locator('#copilot-auth-detect').click();
-    await page.waitForFunction(()=>document.querySelector('#copilot-auth-commands').hidden);
-    assert.match(await dialog.locator('#copilot-auth-status').innerText(),/已识别 GitHub 登录|GitHub login detected/);
-    assert.equal(await dialog.locator('#copilot-auth-error').innerText(),'','Successful retry clears the error');assert.equal(verifiedFixture.statusCalls,2);assert.equal(verifiedFixture.settingsReads,1);
-    assert.deepEqual(await page.evaluate(()=>{const r=state.settings.nativeConnections.find(r=>r.accountKey==='copilot:verified-fixture');return [r?.identityKey,r?.upstreamIdentity];}),['copilot:71','github:71'],'The UI reloads the verified numeric identity fixture');
-    await dialog.locator('#copilot-auth-close').click();await page.waitForFunction(()=>!document.querySelector('#copilot-auth'));
+    await page.waitForFunction(()=>!document.querySelector('#copilot-auth'));
+    assert.equal(verifiedFixture.statusCalls,2);assert.equal(verifiedFixture.settingsReads,1);
+    assert.deepEqual(await page.evaluate(()=>{const r=state.settings.nativeConnections.find(r=>r.accountKey==='copilot:verified-fixture');return [r?.identityKey,r?.upstreamIdentity];}),['copilot:71','github:71']);
     await page.waitForFunction(()=>!document.querySelector('[data-copilot-auth]'));
     unassignedCopilot(await rpc('settings.get'),['env:COPILOT_GITHUB_TOKEN',appsFile]);
     const all=JSON.stringify(calls)+await page.content();assert(!all.includes(secret)&&!all.includes(envSecret),'Tokens never reach the page');

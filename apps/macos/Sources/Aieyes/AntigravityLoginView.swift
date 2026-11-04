@@ -9,17 +9,23 @@ struct AntigravityLoginView: View {
     @State private var code = ""
     @State private var error: String?
     @State private var sending = false
+    @State private var authorizing = false
+    @State private var closed = false
     @State private var refreshedSession: String?
     private var active: Bool { status.map { ["checking", "starting", "authorizing", "verifying"].contains($0.phase) } ?? true }
     private func call(_ method: String, extra: [String: Any] = [:]) async {
         guard !sending else { return }
         sending = true; defer { sending = false }; error = nil
         if ["start", "verify"].contains(method) { refreshedSession = nil }
+        if ["verify", "submitCode", "confirmWorkspace"].contains(method) || method == "start" && status != nil { authorizing = true }
+        if method == "cancel" { authorizing = false }
         do {
             status = try await engine.call("agyAuth." + method, params: ["sourceId":source.id, "id":status?.id ?? ""].merging(extra) { _,new in new }); model.agyLoginActive = active
+            if status?.phase == "authorizing" { authorizing = true }
             if status?.authenticated == true, refreshedSession != status?.id {
                 try await model.refreshAntigravityAccount(sourceID: source.id, status: status?.accountStatus)
                 refreshedSession = status?.id
+                if authorizing, !active, status?.metadataError == nil, status?.current != false, !closed, !Task.isCancelled { closed = true; model.showAccountNotice(status?.message ?? L("账户已添加")); dismiss() }
             }
         }
         catch { self.error = error.localizedDescription }
@@ -52,11 +58,11 @@ struct AntigravityLoginView: View {
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogAgyWidth).textFieldStyle(.aieyes).interactiveDismissDisabled(active || sending)
         .task {
             model.agyLoginActive = true; await call("start")
-            while !Task.isCancelled {
+            while !Task.isCancelled, !closed {
                 do { try await Task.sleep(for: .seconds(1)) } catch { break }
                 if !sending, status != nil, active || (status?.authenticated == true && refreshedSession != status?.id) { await call("status") }
             }
         }
-        .onDisappear { model.agyLoginActive = false; if active, let id = status?.id { Task { let _: AntigravityLoginState? = try? await engine.call("agyAuth.cancel", params: ["sourceId":source.id,"id":id]) } } }
+        .onDisappear { closed = true; model.agyLoginActive = false; if active, let id = status?.id { Task { let _: AntigravityLoginState? = try? await engine.call("agyAuth.cancel", params: ["sourceId":source.id,"id":id]) } } }
     }
 }

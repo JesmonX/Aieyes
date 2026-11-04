@@ -655,7 +655,7 @@ struct AccountDevicesView: View {
             }
             // Toggles apply at once; Done also commits the text fields still being edited.
             HStack { Spacer(); Button(L("完成")) { focusedField = nil; guard saveEditedText(force: error != nil) else { return }; Task { await saveTask?.value; if error == nil { dismiss() } } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(busy) }.padding(20)
-        }.frame(width: 680, height: 650).aieyesAccent().interactiveDismissDisabled(busy || error != nil || focusedField != nil)
+        }.overlay(alignment: .top) { AccountFlowNotice(model: model) }.frame(width: 680, height: 650).aieyesAccent().interactiveDismissDisabled(busy || error != nil || focusedField != nil)
         .updateDraftGuard(L("账户设置"), snapshot: draftSnapshot(account) + intervalText + draftSnapshot(commands), dirty: account != current || !commands.isEmpty || intervalText != (current.quotaRefreshSeconds.map(String.init) ?? ""), saving: busy, save: { focusedField = nil; guard saveEditedText(force: true) else { return false }; await saveTask?.value; if error == nil { dismiss(); return true }; return false }, discard: { dismiss() })
         .onAppear { intervalText = account.quotaRefreshSeconds.map(String.init) ?? "" }
         .onChange(of: current.name) { old, value in if focusedField != "name" && account.name == old { account.name = value } }
@@ -794,6 +794,7 @@ struct AccountConnectionView: View {
     var initialProvider: String? = nil
     var initialSourceID: String? = nil
     var intent = "login"
+    var onCompleted: (AccountFlowResult) -> Void = { _ in }
     @State private var provider = ""
     @State private var selection = Set<String>()
     @State private var apiKey = ""
@@ -817,7 +818,7 @@ struct AccountConnectionView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(intent == "switch" ? L("切换账户") : account == nil ? L("添加账户") : provider == "deepseek" ? L("更新 API Key") : CoreContract.subscriptionModes[provider] != nil ? L("更新额度凭据") : L("连接机器")).font(AppFont.title).padding(.horizontal, 20).padding(.top, 20)
             Text(Format.provider(provider)).font(AppFont.section).padding(.horizontal, 20)
-            if provider == "codex" { CodexAccountsView(model: model, targetAccountID: account?.id, initialSourceID: initialSourceID, intent: intent, onBusyChanged: { busy = $0 }) }
+            if provider == "codex" { CodexAccountsView(model: model, targetAccountID: account?.id, initialSourceID: initialSourceID, intent: intent, onBusyChanged: { busy = $0 }, onCompleted: { result in dismiss(); onCompleted(result) }) }
             else {
                 Form {
                     if usesSubscription, let modes = CoreContract.subscriptionModes[provider] {

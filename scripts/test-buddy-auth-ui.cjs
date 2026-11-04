@@ -31,7 +31,14 @@ function bridge(){window.setInterval=()=>0;window.__TAURI__={event:{async listen
     rejectStart=false;await dialog.locator('#buddy-region').selectOption('global');await dialog.locator('#buddy-start').click();await dialog.locator('#buddy-url').waitFor({state:'visible'});assert.equal(calls.at(-1).params.provider,provider);assert.equal(calls.at(-1).params.region,'global');assert.equal(await dialog.locator('#buddy-start').isDisabled(),true);
     await dialog.locator('#buddy-close').click();await page.waitForFunction(()=>!document.querySelector('#buddy-login'));assert.equal(calls.at(-1).method,'buddyAuth.cancel');
   }
+  await revealControl(page,'[data-buddy-login="codebuddy"]');await page.locator('[data-buddy-login="codebuddy"]').click();
+  await page.locator('#buddy-start').click();
+  await page.locator('#buddy-url').waitFor({state:'visible'});
+  const cancellations=calls.filter(c=>c.method==='buddyAuth.cancel').length;
   auth={id:'fixture',phase:'connected',connected:true,message:'Buddy 登录完成，余额与 CodeBuddy / WorkBuddy 共用'};
+  await page.waitForFunction(()=>!document.querySelector('#buddy-login'));
+  assert.equal(calls.filter(c=>c.method==='buddyAuth.cancel').length,cancellations,'success must not cancel authorization');
+
   await revealControl(page,'[data-buddy-login="codebuddy"]');await page.locator('[data-buddy-login="codebuddy"]').click();const dialog=page.locator('#buddy-login');await dialog.locator('#buddy-logout').waitFor({state:'visible'});await dialog.locator('#buddy-logout').click();await dialog.locator('#buddy-logout').waitFor({state:'hidden'});await dialog.locator('#buddy-close').click();assert.deepEqual(errors,[]);
   console.log('Buddy UI: optional sign-in, no auto-login, retry, region/provider, cancellation and shared logout passed');
 }finally{if(browser)await browser.close();if(server)await new Promise(r=>server.close(r));core.kill();await new Promise(r=>core.exitCode!==null?r():core.once('exit',r));fs.rmSync(root,{recursive:true,force:true});}})().catch(e=>{console.error(e);process.exitCode=1;});
