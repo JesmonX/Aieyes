@@ -74,9 +74,9 @@ function fixture(){
   if (!panel) {
     await page.evaluate(()=>{
       const invoke=window.__TAURI__.core.invoke;
-      agyFixture.authWarning=null;
+      agyFixture.authWarning=null;agyFixture.identityConfirmed=false;agyFixture.current=null;
       window.__TAURI__.core.invoke=async(command,args)=>{
-        if(command==='engine_call' && args.method.startsWith('agyAuth.'))return {id:'auth-fixture',phase:'authenticated',authenticated:true,current:true,message:'验证成功',metadataError:agyFixture.authWarning,accountStatus:{accountKey:'antigravity:legacy-shared',sourceId:'agy-source',machineId:'local',credential:true,current:true}};
+        if(command==='engine_call' && args.method.startsWith('agyAuth.'))return {id:'auth-fixture',phase:'authenticated',authenticated:true,identityConfirmed:agyFixture.identityConfirmed,current:agyFixture.current,message:'验证成功',metadataError:agyFixture.authWarning,accountStatus:{accountKey:'antigravity:legacy-shared',sourceId:'agy-source',machineId:'local',credential:true,current:true}};
         return invoke(command,args);
       };
       showEditor('Draft','<textarea name="prompt">keep draft</textarea>',async()=>{});
@@ -84,7 +84,14 @@ function fixture(){
     });
     await page.locator('#agy-verify:not([disabled])').waitFor();
     assert(await page.locator('#agy-login').evaluate(el=>el.open),'existing login remains inspectable');
-    await page.evaluate(()=>agyFixture.authWarning='metadata warning');
+    await page.locator('#agy-verify').click();
+    await page.locator('#agy-verify:not([disabled])').waitFor();
+    assert(await page.locator('#agy-login').evaluate(el=>el.open),'authenticated alone does not confirm account identity');
+    await page.evaluate(()=>{agyFixture.identityConfirmed=true;agyFixture.current=false;});
+    await page.locator('#agy-verify').click();
+    await page.locator('#agy-verify:not([disabled])').waitFor();
+    assert(await page.locator('#agy-login').evaluate(el=>el.open),'a different confirmed account must remain visible');
+    await page.evaluate(()=>{agyFixture.current=true;agyFixture.authWarning='metadata warning';});
     await page.locator('#agy-verify').click();
     await page.locator('#agy-login-metadata').filter({hasText:'metadata warning'}).waitFor();
     assert(await page.locator('#agy-login').evaluate(el=>el.open),'warnings retain the authorization dialog');

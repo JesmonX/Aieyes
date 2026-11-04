@@ -25,7 +25,7 @@ struct AntigravityLoginView: View {
             if status?.authenticated == true, refreshedSession != status?.id {
                 try await model.refreshAntigravityAccount(sourceID: source.id, status: status?.accountStatus)
                 refreshedSession = status?.id
-                if authorizing, !active, status?.metadataError == nil, status?.current != false, !closed, !Task.isCancelled { closed = true; model.showAccountNotice(status?.message ?? L("账户已添加")); dismiss() }
+                if authorizing, !active, status?.metadataError == nil, status?.identityConfirmed == true, status?.current == true, !closed, !Task.isCancelled { closed = true; model.showAccountNotice(status?.message ?? L("账户已添加")); dismiss() }
             }
         }
         catch { self.error = error.localizedDescription }
