@@ -6,18 +6,15 @@ import SwiftUI
     @MainActor static func main() async throws {
         _ = NSApplication.shared
         NSApp.finishLaunching()
-        let defaults = UserDefaults.standard
-        let saved = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
-        defer { defaults.setVolatileDomain(saved, forName: UserDefaults.argumentDomain) }
-        func collapse(_ value: Bool) {
-            defaults.setVolatileDomain(saved.merging(["main.sidebarCollapsed": value]) { _, next in next }, forName: UserDefaults.argumentDomain)
-            NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
-        }
-        collapse(false)
+        AXUIElementSetAttributeValue(AXUIElementCreateApplication(getpid()), "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        let suite = "aieyes.navigation-check." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "main.sidebarCollapsed")
         let model = AppModel(autostart: false)
         model.settingsLoaded = true
         defer { model.stop() }
-        let view = NSHostingView(rootView: MainWindowView(model: model))
+        var view = NSHostingView(rootView: MainWindowView(model: model).defaultAppStorage(defaults))
         let window = NSWindow(contentRect: NSRect(x:100,y:100,width:1000,height:700), styleMask:[.titled,.closable,.resizable,.fullSizeContentView], backing:.buffered, defer:false)
         window.isReleasedWhenClosed = false
         window.toolbar = NSToolbar(identifier: "VerifyNavigationToolbar")
@@ -51,6 +48,26 @@ import SwiftUI
                 NSApp.sendEvent(event)
             }
         }
+        func clickEye() {
+            var visited = Set<ObjectIdentifier>()
+            func find(_ node: NSObject, depth: Int = 0) -> NSObject? {
+                guard depth < 40, visited.insert(ObjectIdentifier(node)).inserted else { return nil }
+                func value(_ name: String) -> AnyObject? {
+                    let selector = NSSelectorFromString(name)
+                    return node.responds(to: selector) ? node.perform(selector)?.takeUnretainedValue() : nil
+                }
+                if value("accessibilityIdentifier") as? String == "main.sidebarEyeToggle" { return node }
+                let children = ((value("accessibilityChildren") as? [NSObject]) ?? []) + ((node as? NSView)?.subviews ?? [])
+                for child in children { if let found = find(child, depth: depth + 1) { return found } }
+                return nil
+            }
+            let selector = NSSelectorFromString("accessibilityPerformPress")
+            guard let eye = find(view), eye.responds(to: selector), let implementation = eye.method(for: selector) else {
+                fatalError("Missing eye button")
+            }
+            typealias Action = @convention(c) (AnyObject, Selector) -> Bool
+            precondition(unsafeBitCast(implementation, to: Action.self)(eye, selector), "Eye button must accept presses")
+        }
         guard let list = descendants(view).compactMap({ $0 as? NSOutlineView }).first else { fatalError("Missing native navigation List") }
         precondition(list.numberOfRows == 11)
         let overview = pageHost()!
@@ -63,38 +80,44 @@ import SwiftUI
         try await settle()
         precondition(model.detailPage == "agent" && window.title == "总览 — Aieyes")
         precondition(pageHost() === overview, "Returning to a page retains its native view identity")
-        collapse(true)
-        try await settle()
-        _ = sidebarToggle()
-        let rail = descendants(view).compactMap { $0 as? NSScrollView }.first { $0.frame.width > 0 && $0.frame.width < 100 }
-        precondition(rail != nil && abs(rail!.frame.width - 62) < 1, "Collapsed rail must remain 62pt")
-        window.setContentSize(NSSize(width:760,height:480))
-        try await settle()
-        precondition(pageHost() === overview && model.detailPage == "agent")
-        collapse(false)
-        try await settle()
-        precondition(descendants(view).contains { $0 is NSOutlineView })
         for width: CGFloat in [1000, 760] {
-            window.setContentSize(NSSize(width: width, height: 700))
+            window.setContentSize(NSSize(width: width, height: width == 760 ? 480 : 700))
             try await settle()
-            for collapsed in [true, false] {
-                // Change the eye button's preference and immediately click the toolbar,
-                // without waiting for the rail's layout/animation to finish.
-                collapse(collapsed)
-                clickSidebarToggle()
+            for useEye in [true, false] {
+                let expandedDetailWidth = overview.frame.width
+                if useEye { clickEye() } else { clickSidebarToggle() }
                 try await settle()
-                precondition(list.isHiddenOrHasHiddenAncestor, "Toolbar toggle must hide the sidebar")
+                precondition(list.isHiddenOrHasHiddenAncestor, "Either toggle must fully hide the sidebar")
+                precondition(defaults.bool(forKey: "main.sidebarCollapsed"), "Hidden state must be saved")
+                precondition(overview.frame.width > expandedDetailWidth + 180, "Hiding must release the entire sidebar width")
                 _ = sidebarToggle()
                 clickSidebarToggle()
                 try await settle()
                 precondition(!list.isHiddenOrHasHiddenAncestor, "Toolbar toggle must restore the sidebar")
+                precondition(!defaults.bool(forKey: "main.sidebarCollapsed"), "Restored state must be saved")
                 _ = sidebarToggle()
-                if collapsed {
-                    precondition(abs(list.enclosingScrollView!.frame.width - 62) < 1, "Restoring the sidebar must preserve the eye's collapsed rail")
-                }
+                precondition(list.enclosingScrollView!.frame.width >= 190, "Restoring must show full navigation, not a compact rail")
                 precondition(pageHost() === overview && model.detailPage == "agent")
             }
+            // The toolbar must also recover an eye collapse while its animation is in flight.
+            clickEye()
+            try await Task.sleep(for: .milliseconds(50))
+            clickSidebarToggle()
+            try await settle()
+            precondition(!list.isHiddenOrHasHiddenAncestor && !defaults.bool(forKey: "main.sidebarCollapsed"))
+            precondition(pageHost() === overview && model.detailPage == "agent")
         }
-        print("Native navigation: List selection, page titles, retained pages, 62pt rail, minimum width and one persistent sidebar toggle through interleaved collapse/hide/show passed")
+        clickEye()
+        try await settle()
+        view = NSHostingView(rootView: MainWindowView(model: model).defaultAppStorage(defaults))
+        window.contentView = view
+        try await settle()
+        guard let restoredList = descendants(view).compactMap({ $0 as? NSOutlineView }).first else { fatalError("Missing restored navigation List") }
+        precondition(restoredList.isHiddenOrHasHiddenAncestor, "Reopening must honor the saved collapsed state")
+        clickSidebarToggle()
+        try await settle()
+        precondition(!restoredList.isHiddenOrHasHiddenAncestor && restoredList.enclosingScrollView!.frame.width >= 190)
+        precondition(!defaults.bool(forKey: "main.sidebarCollapsed"))
+        print("Native navigation: eye/toolbar fully hide and restore, retained pages, full-width recovery, saved visibility, minimum width and one persistent toolbar toggle passed")
     }
 }

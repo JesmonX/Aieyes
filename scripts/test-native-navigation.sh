@@ -1,5 +1,5 @@
 #!/bin/sh
-# Requires a macOS GUI session. Uses only an isolated core directory and volatile UI preferences.
+# Requires a macOS GUI session. Uses an isolated core directory and temporary UI preferences.
 set -eu
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$PROJECT_DIR"

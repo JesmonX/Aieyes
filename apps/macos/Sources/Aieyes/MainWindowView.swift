@@ -14,7 +14,10 @@ struct MainWindowView: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.previewAccessibleSurfaces) private var previewAccessible
     @State private var guideActive = false
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    // Both controls and native split-view changes share the persisted visibility.
+    private var columnVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(get: { collapsed ? .detailOnly : .all }, set: { collapsed = $0 == .detailOnly })
+    }
     @State private var workspaceWidth: CGFloat = 1120
     private var monitoring: [(String, String, String)] { [("agent", L("总览"), "square.grid.2x2"), ("analysis", L("用量分析"), "chart.xyaxis.line"), ("servers", L("服务器"), "server.rack")] }
     private var configuration: [(String, String, String)] { [("integrations", L("接入与账户"), "person.crop.circle"), ("servers", L("机器与采集"), "desktopcomputer"), ("prices", L("模型价格"), "dollarsign.circle"), ("wakeups", L("定时唤醒"), "alarm")] }
@@ -26,25 +29,23 @@ struct MainWindowView: View {
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        NavigationSplitView(columnVisibility: columnVisibility) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Button { withMotion(.expand) { collapsed.toggle() } } label: { BrandMark().frame(width: 30, height: 30).frame(width: 34, height: 34).contentShape(Rectangle()) }.buttonStyle(.plain).help(collapsed ? L("展开导航") : L("收起导航")).accessibilityLabel(collapsed ? L("展开导航") : L("收起导航")).accessibilityValue(collapsed ? L("已收起") : L("已展开"))
-                    if !collapsed { Text("Aieyes").font(AppFont.title); Spacer() }
+                    Button(action: toggleSidebar) { BrandMark().frame(width: 30, height: 30).frame(width: 34, height: 34).contentShape(Rectangle()) }.buttonStyle(.plain).help(collapsed ? L("展开导航") : L("收起导航")).accessibilityLabel(collapsed ? L("展开导航") : L("收起导航")).accessibilityValue(collapsed ? L("已收起") : L("已展开")).accessibilityIdentifier("main.sidebarEyeToggle")
+                    Text("Aieyes").font(AppFont.title); Spacer()
                 }.padding(.horizontal, 12).padding(.top, 18)
-                // One native List in both widths: collapsing only fades the labels, so icons and the
-                // selection highlight stay where they are while the column animates.
                 List(selection:Binding<String?>(get:{selectedNavigation},set:{ if let value = $0 { choose(value) } })) {
                     Section { ForEach(monitoring,id:\.0) { key,title,icon in navigationRow(title,icon:icon).tag(key) } } header: { sectionHeader(L("监测")) }
                     Section { ForEach(configuration,id:\.0) { key,title,icon in navigationRow(title,icon:icon).tag("settings:" + key) } } header: { sectionHeader(L("配置")) }
                     navigationRow(L("设置"),icon:"gearshape").tag("settings:general")
                     navigationRow(L("配置向导"),icon:"questionmark.circle").tag("setup")
                 }.listStyle(.sidebar)
-            }.frame(width: collapsed ? 62 : 214).background {
+            }.frame(width: 214).background {
                 if reduceTransparency || previewAccessible || contrast == .increased { Color(nsColor: .windowBackgroundColor) }
                 else { Rectangle().fill(.ultraThinMaterial) }
             }
-            .navigationSplitViewColumnWidth(min:collapsed ? 62 : 190,ideal:collapsed ? 62 : 214,max:collapsed ? 62 : 260)
+            .navigationSplitViewColumnWidth(min: 190, ideal: 214, max: 260)
             // Remove the default toggle from the column that owns it; applying this
             // to the split view leaves the system button beside our recovery control.
             .toolbar(removing: .sidebarToggle)
@@ -65,11 +66,10 @@ struct MainWindowView: View {
                 // Keep the recovery control in the detail toolbar: the sidebar's
                 // own toolbar disappears when its column is fully hidden.
                 ToolbarItem(placement: .navigation) {
-                    Button {
-                        withMotion(.expand) { columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly }
-                    } label: { Image(systemName: "sidebar.left") }
-                        .help(columnVisibility == .detailOnly ? L("展开导航") : L("收起导航"))
-                        .accessibilityLabel(columnVisibility == .detailOnly ? L("展开导航") : L("收起导航"))
+                    Button(action: toggleSidebar) { Image(systemName: "sidebar.left") }
+                        .help(collapsed ? L("展开导航") : L("收起导航"))
+                        .accessibilityLabel(collapsed ? L("展开导航") : L("收起导航"))
+                        .accessibilityValue(collapsed ? L("已收起") : L("已展开"))
                         .accessibilityIdentifier("main.sidebarToggle")
                 }
             }
@@ -83,18 +83,18 @@ struct MainWindowView: View {
         .onChange(of: model.detailPage) { _, page in select(page) }
         .onChange(of: model.visibleWindows) { _, _ in model.settingsWindowVisible = model.detailPage == "settings" && model.isWindowVisible("detail") }
     }
+    private func toggleSidebar() { withMotion(.expand) { collapsed.toggle() } }
     private var selectedNavigation: String { model.detailPage == "settings" ? "settings:" + model.settingsTab : model.detailPage }
     private func choose(_ value:String) {
         if value.hasPrefix("settings:") { model.openSettings(.init(category:String(value.dropFirst(9))));select("settings") }
         else { select(value) }
     }
     private func navigationRow(_ title: String, icon: String) -> some View {
-        Label { Text(title).lineLimit(1).opacity(collapsed ? 0 : 1) } icon: { Image(systemName: icon) }
-            .help(collapsed ? title : "").accessibilityLabel(title)
+        Label { Text(title).lineLimit(1) } icon: { Image(systemName: icon) }
+            .accessibilityLabel(title)
     }
-    /// Headers keep their height while collapsed, so rows never shift vertically.
     private func sectionHeader(_ title: String) -> some View {
-        Text(title).lineLimit(1).opacity(collapsed ? 0 : 1).accessibilityHidden(collapsed)
+        Text(title).lineLimit(1)
     }
     private func select(_ value: String) {
         let page = ["agent", "analysis", "servers", "settings", "setup"].contains(value) ? value : "agent"
