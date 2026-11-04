@@ -7,7 +7,7 @@ case "$BUILD_MODE" in debug|release) ;; *) echo 'Usage: scripts/build-macos.sh [
 PACKAGE_MODE=${2:-}
 case "$PACKAGE_MODE" in ''|--dmg) ;; *) echo 'Optional second argument: --dmg' >&2; exit 2 ;; esac
 if [ "$PACKAGE_MODE" = --dmg ] && [ "$BUILD_MODE" != release ]; then echo 'DMG requires release mode' >&2; exit 2; fi
-export MACOSX_DEPLOYMENT_TARGET=14.0
+. "$PROJECT_DIR/scripts/macos-toolchain.sh"
 export PATH="$HOME/.cargo/bin:$PATH"
 export CLANG_MODULE_CACHE_PATH="$PROJECT_DIR/.build/clang-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$PROJECT_DIR/.build/swift-module-cache"

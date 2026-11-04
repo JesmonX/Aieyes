@@ -1,7 +1,7 @@
 """Read agy's public account summary on the login machine (also used over SSH).
 
-No credentials are written, refreshed, passed in argv, or returned. Only the CLI
-may refresh its credential. curl reads its authorization header through stdin.
+No credentials are written, passed in argv, or returned by this helper. The CLI's
+built-in /usage may renew its own login. curl reads authorization through stdin.
 """
 import base64
 import datetime
@@ -12,8 +12,10 @@ import os
 import pathlib
 import re
 import sqlite3
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 LIMIT = 1024 * 1024
@@ -27,10 +29,19 @@ RELOGIN_IDE = 'Antigravity IDE 登录已过期，请在 IDE 中重新登录'
 IDE_INVALID = 'Antigravity IDE 登录凭据无法读取，请在 IDE 中重新登录'
 
 
+class PublicError(ValueError):
+    """Only fixed, credential-free diagnostics may be returned to the UI."""
+
+
+def public_error(error, fallback):
+    return str(error) if isinstance(error, PublicError) else fallback
+
+
+
 def proto_fields(raw):
     """Bounded protobuf wire reader for the IDE's saved public schema only."""
     if len(raw) > LIMIT:
-        raise ValueError(IDE_INVALID)
+        raise PublicError(IDE_INVALID)
     index, out = 0, []
 
     def varint():
@@ -38,29 +49,29 @@ def proto_fields(raw):
         number = 0
         for shift in range(0, 70, 7):
             if index >= len(raw):
-                raise ValueError(IDE_INVALID)
+                raise PublicError(IDE_INVALID)
             byte = raw[index]
             index += 1
             number |= (byte & 127) << shift
             if byte < 128:
                 return number
-        raise ValueError(IDE_INVALID)
+        raise PublicError(IDE_INVALID)
 
     while index < len(raw):
         tag = varint()
         field, wire = tag >> 3, tag & 7
         if field == 0 or len(out) >= 4096:
-            raise ValueError(IDE_INVALID)
+            raise PublicError(IDE_INVALID)
         if wire == 0:
             value = varint()
         elif wire in (1, 2, 5):
             size = varint() if wire == 2 else (8 if wire == 1 else 4)
             if size > len(raw) - index:
-                raise ValueError(IDE_INVALID)
+                raise PublicError(IDE_INVALID)
             value = raw[index:index + size]
             index += size
         else:
-            raise ValueError(IDE_INVALID)
+            raise PublicError(IDE_INVALID)
         out.append((field, wire, value))
     return out
 
@@ -68,13 +79,13 @@ def proto_fields(raw):
 def proto_one(fields, field, wire, default=b''):
     matches = [(w, v) for f, w, v in fields if f == field]
     if len(matches) > 1 or matches and matches[0][0] != wire:
-        raise ValueError(IDE_INVALID)
+        raise PublicError(IDE_INVALID)
     return matches[0][1] if matches else default
 
 
 def proto_base64(raw):
     if not isinstance(raw, (str, bytes)) or len(raw) > LIMIT:
-        raise ValueError(IDE_INVALID)
+        raise PublicError(IDE_INVALID)
     if isinstance(raw, str):
         raw = raw.encode('ascii')
     return proto_fields(base64.b64decode(raw + b'=' * (-len(raw) % 4), validate=True))
@@ -88,7 +99,7 @@ def ide_token(raw):
         if field != 1:
             continue
         if wire != 2:
-            raise ValueError(IDE_INVALID)
+            raise PublicError(IDE_INVALID)
         entry = proto_fields(entry)
         if proto_one(entry, 1, 2) != b'oauthTokenInfoSentinelKey':
             continue
@@ -97,7 +108,7 @@ def ide_token(raw):
     if not matches:
         return None
     if len(matches) != 1:
-        raise ValueError(IDE_INVALID)
+        raise PublicError(IDE_INVALID)
     raw = matches[0]
     if raw.lstrip().startswith(b'{'):
         value = json.loads(raw)
@@ -113,7 +124,7 @@ def ide_token(raw):
         expires = proto_one(expiry, 1, 0, 0)
         enterprise = bool(proto_one(fields, 6, 0, 0))
     if not isinstance(access, str) or not access or not isinstance(expires, (int, float)):
-        raise ValueError(IDE_INVALID)
+        raise PublicError(IDE_INVALID)
     expiry = datetime.datetime.fromtimestamp(expires, datetime.timezone.utc).isoformat()
     return {'_origin': 'ide', 'auth_method': 'enterprise' if enterprise else 'consumer',
             'token': {'access_token': access, 'token_type': kind, 'expiry': expiry}}
@@ -128,7 +139,7 @@ def read_ide_credential():
     else:
         base = pathlib.Path(os.environ.get('XDG_CONFIG_HOME', str(home / '.config')))
     if not base.is_absolute():
-        raise ValueError(IDE_INVALID)
+        raise PublicError(IDE_INVALID)
     # The current product's application store takes precedence over legacy IDE
     # storage, even when signed out. Custom --user-data-dir is not guessed.
     for name in ('Antigravity IDE', 'Antigravity'):
@@ -144,13 +155,13 @@ def read_ide_credential():
             if row is None:
                 return None
             if not isinstance(row[0], int) or row[0] > LIMIT:
-                raise ValueError(IDE_INVALID)
+                raise PublicError(IDE_INVALID)
             value = ide_token(row[1])
             if value is not None:
                 value['_store_path'] = str(path)
             return value
         except (sqlite3.Error, ValueError, TypeError, OverflowError, OSError):
-            raise ValueError(IDE_INVALID)
+            raise PublicError(IDE_INVALID)
         finally:
             if db is not None:
                 db.close()
@@ -159,23 +170,23 @@ def read_ide_credential():
 
 def decode(raw):
     if len(raw) > LIMIT:
-        raise ValueError('凭据格式无法识别')
+        raise PublicError('凭据格式无法识别')
     raw = raw.strip()
     if raw.startswith(b'go-keyring-base64:'):
         raw = base64.b64decode(raw.split(b':', 1)[1], validate=True)
     value = json.loads(raw)
     if not isinstance(value, dict):
-        raise ValueError('凭据格式无法识别')
+        raise PublicError('凭据格式无法识别')
     return value
 
 
 def identity(credential):
     if credential.get('auth_method') not in (None, '', 'consumer'):
-        raise ValueError('此登录方式暂不支持账户身份识别')
+        raise PublicError('此登录方式暂不支持账户身份识别')
     token = credential.get('id_token', '')
     parts = token.split('.') if isinstance(token, str) else []
     if len(parts) != 3:
-        raise ValueError('现有登录未提供 Google 账户身份')
+        raise PublicError('现有登录未提供 Google 账户身份')
     claims = json.loads(base64.urlsafe_b64decode(parts[1] + '=' * (-len(parts[1]) % 4)))
     sub, email = claims.get('sub'), claims.get('email')
     # This is an observation of the trusted CLI store, not JWT authentication.
@@ -184,7 +195,7 @@ def identity(credential):
             or claims.get('email_verified') not in (True, 'true')
             or not isinstance(sub, str) or not sub or len(sub) > 255
             or not isinstance(email, str) or not re.fullmatch(r'[^\s@\x00-\x1f]{1,254}@[^\s@\x00-\x1f]{1,254}', email)):
-        raise ValueError('现有登录未提供可靠的 Google 账户身份')
+        raise PublicError('现有登录未提供可靠的 Google 账户身份')
     return {'key': 'google:' + hashlib.sha256(sub.encode()).hexdigest(),
             'email': email, 'checkedAt': int(time.time()), 'stale': False}
 
@@ -210,9 +221,22 @@ def same_owner(left, right):
         return same('access_token') or same('refresh_token')
 
 
+def freshest(credentials):
+    # Call only after every store has been checked for the same owner. An old
+    # file-backend copy must not mask a newer grant in another CLI store.
+    def expiry(value):
+        try:
+            access_token(value)
+            raw = value.get('token', {}).get('expiry')
+            return (True, datetime.datetime.fromisoformat(raw.replace('Z', '+00:00')).timestamp() if raw else 0)
+        except (ValueError, TypeError, AttributeError):
+            return (False, 0)
+    return max(credentials, key=expiry)
+
+
 def read_credential():
     if any(os.environ.get(k) for k in ('GEMINI_API_KEY', 'AGY_ADC_AUTH', 'AGY_LLM_GATEWAY_API_KEY')):
-        raise ValueError('此登录方式暂不支持账户身份识别')
+        raise PublicError('此登录方式暂不支持账户身份识别')
     # Auth belongs to the CLI's home, never the history source directory.
     root = pathlib.Path.home() / '.gemini'
     candidates = [root / 'antigravity-oauth-token',
@@ -222,10 +246,10 @@ def read_credential():
     # generations left different accounts behind, do not guess which is active.
     file_values = [read_file(p) for p in files]
     if file_values and any(not same_owner(file_values[0], v) for v in file_values[1:]):
-        raise ValueError('发现多个不同的 CLI 登录身份，请在 agy 中确认当前账户')
+        raise PublicError('发现多个不同的 CLI 登录身份，请在 agy 中确认当前账户')
     bypass = bool(os.environ.get('SSH_CONNECTION') or os.environ.get('SSH_TTY'))
     if bypass and file_values:
-        return file_values[0]
+        return freshest(file_values)
     command = (['/usr/bin/security', 'find-generic-password', '-s', 'gemini', '-a', 'antigravity', '-w']
                if sys.platform == 'darwin' else
                ['secret-tool', 'lookup', 'service', 'gemini', 'username', 'antigravity'])
@@ -234,23 +258,23 @@ def read_credential():
                                 stderr=subprocess.DEVNULL, timeout=4, check=False)
         if result.returncode == 0:
             if not result.stdout.strip():
-                raise ValueError('无法读取 agy 登录身份，请检查凭据库或 CLI 登录状态')
+                raise PublicError('无法读取 agy 登录身份，请检查凭据库或 CLI 登录状态')
             value = decode(result.stdout)
             # A recent keyring failure can make the CLI use its file backend.
             # Avoid claiming identity when those stores disagree.
             if file_values and not same_owner(value, file_values[0]):
-                raise ValueError('系统凭据与 CLI 文件身份不同，请在 agy 中确认当前账户')
-            return value
+                raise PublicError('系统凭据与 CLI 文件身份不同，请在 agy 中确认当前账户')
+            return freshest([value, *file_values])
     except (OSError, subprocess.TimeoutExpired):
         pass
     if file_values:
-        return file_values[0]
+        return freshest(file_values)
     # A present CLI store, including expired/empty/corrupt credentials, never
     # silently switches the query to an unrelated IDE account.
     value = read_ide_credential()
     if value is not None:
         return value
-    raise ValueError('无法读取 agy 登录身份，请检查凭据库或 CLI 登录状态')
+    raise PublicError('无法读取 agy 登录身份，请检查凭据库或 CLI 登录状态')
 
 
 def subscription(value):
@@ -269,24 +293,24 @@ def subscription(value):
 
 def access_token(credential):
     if credential.get('auth_method') not in (None, '', 'consumer'):
-        raise ValueError('此登录方式暂不支持只读额度查询')
+        raise PublicError('此登录方式暂不支持只读额度查询')
     expiry = credential.get('token', {}).get('expiry')
     if expiry:
         try:
             expires = datetime.datetime.fromisoformat(expiry.replace('Z', '+00:00')).timestamp()
         except (ValueError, TypeError, AttributeError):
-            raise ValueError('Antigravity 登录有效期无法确认')
+            raise PublicError('Antigravity 登录有效期无法确认')
         if expires <= time.time() + 60:
-            raise ValueError(RELOGIN_IDE if credential.get('_origin') == 'ide' else RELOGIN)
+            raise PublicError(RELOGIN_IDE if credential.get('_origin') == 'ide' else RELOGIN)
     token = credential.get('token', {}).get('access_token', '')
     if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9._~+/=-]+', token):
-        raise ValueError('订阅暂不可用：现有登录缺少访问凭据')
+        raise PublicError('订阅暂不可用：现有登录缺少访问凭据')
     return token
 
 
 def request_json(credential, url, body=None):
     if url not in (LICENSE_URL, USERINFO_URL, ASSIST_URL, QUOTA_URL):
-        raise ValueError('Antigravity 查询地址不支持')
+        raise PublicError('Antigravity 查询地址不支持')
     token = access_token(credential)
     config = 'header = "Authorization: Bearer ' + token + '"\n'
     # Code Assist rejects unknown clients (curl/x.y) as UNSUPPORTED_CLIENT: no
@@ -295,21 +319,94 @@ def request_json(credential, url, body=None):
     if body is not None:
         config += 'header = "Content-Type: application/json"\n'
         config += 'data = ' + json.dumps(json.dumps(body, separators=(',', ':'))) + '\n'
-    result = subprocess.run(['curl', '-q', '--silent', '--fail', '--proto', '=https',
+    try:
+        result = subprocess.run(['curl', '-q', '--silent', '--fail', '--proto', '=https',
                              '--connect-timeout', '5', '--max-time', '10',
-                             '--max-filesize', str(LIMIT), '--config', '-', url],
-                            input=config.encode(), stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, timeout=12, check=False)
-    if result.returncode or len(result.stdout) > LIMIT:
-        raise ValueError('订阅查询暂不可用，请稍后刷新')
-    value = json.loads(result.stdout)
+                             '--max-filesize', str(LIMIT), '--write-out', '%{stderr}%{http_code}', '--config', '-', url],
+                                input=config.encode(), stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=12, check=False)
+    except FileNotFoundError:
+        raise PublicError('Antigravity 查询需要 curl，请检查安装与 PATH')
+    except subprocess.TimeoutExpired:
+        raise PublicError('Antigravity 查询超时，请检查网络与代理')
+    if result.returncode:
+        status = (result.stderr or b'').strip()
+        if result.returncode == 22 and status == b'401':
+            raise PublicError(RELOGIN_IDE if credential.get('_origin') == 'ide' else RELOGIN)
+        if result.returncode == 22 and status == b'403':
+            raise PublicError('Antigravity 拒绝访问，请检查当前账户的服务权限')
+        if result.returncode == 22 and status == b'429':
+            raise PublicError('Antigravity 查询过于频繁，请稍后重试')
+        if result.returncode == 28:
+            raise PublicError('Antigravity 查询超时，请检查网络与代理')
+        if result.returncode in (5, 6, 7, 35, 60):
+            raise PublicError('Antigravity 网络连接失败，请检查代理、DNS 与证书')
+        raise PublicError('Antigravity 服务暂不可用，请稍后重试')
+    if len(result.stdout) > LIMIT:
+        raise PublicError('Antigravity 响应格式不支持')
+    try:
+        value = json.loads(result.stdout)
+    except (ValueError, UnicodeError):
+        raise PublicError('Antigravity 响应格式不支持')
     if not isinstance(value, dict):
-        raise ValueError('Antigravity 响应格式不支持')
+        raise PublicError('Antigravity 响应格式不支持')
     return value
 
 
 def fetch_license(credential):
     return subscription(request_json(credential, LICENSE_URL))
+
+
+def native_quota(credential):
+    """Delegate quota and renewal to the installed CLI, never a model prompt."""
+    if credential.get('_origin') == 'ide':
+        return None
+    if credential.get('auth_method') not in (None, '', 'consumer'):
+        raise PublicError('此登录方式暂不支持只读额度查询')
+    binary = os.environ.get('AIEYES_AGY_BINARY') or shutil.which('agy')
+    if not binary:
+        installed = pathlib.Path.home() / '.local' / 'bin' / 'agy'
+        binary = str(installed) if installed.is_file() else None
+    if not binary:
+        return None
+    # The fixed built-in slash command returns a command result without asking
+    # a model to run tools. Use an empty workspace and suppress CLI logs/updates.
+    with tempfile.TemporaryDirectory(prefix='aieyes-agy-quota-') as directory:
+        try:
+            result = subprocess.run([binary, '--log-file', os.devnull, '--print', '/usage',
+                                     '--output-format', 'json'], cwd=directory,
+                                    env=dict(os.environ, AGY_CLI_DISABLE_AUTO_UPDATE='true', AIEYES_INTERNAL='1'),
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, timeout=20, check=False)
+        except subprocess.TimeoutExpired:
+            raise PublicError('Antigravity 查询超时，请检查网络与代理')
+        except OSError:
+            raise PublicError('无法运行 agy，请检查 CLI 路径与安装')
+    if result.returncode or len(result.stdout) > LIMIT:
+        raise PublicError('agy 额度查询失败，请在 agy 中运行 /usage 检查登录状态')
+    try:
+        value = json.loads(result.stdout)
+        command = value.get('command', {})
+        data = command.get('data', {})
+        if value.get('status') != 'SUCCESS' or command.get('name') != 'usage' or not isinstance(data.get('groups'), list):
+            raise ValueError()
+    except (ValueError, TypeError, AttributeError):
+        raise PublicError('agy 未返回模型组额度，请更新 CLI 后重试')
+    return data
+
+
+def identity_credential(credential):
+    try:
+        access_token(credential)
+    except PublicError as error:
+        if str(error) != RELOGIN or native_quota(credential) is None:
+            raise
+        current = read_credential()
+        if not same_owner(credential, current):
+            raise PublicError('登录账户已变化，请重新检查')
+        access_token(current)
+        return current
+    return credential
 
 
 def resolve_identity(credential):
@@ -322,16 +419,22 @@ def resolve_identity(credential):
             or user.get('verified_email') is not True
             or not isinstance(email, str)
             or not re.fullmatch(r'[^\s@\x00-\x1f]{1,254}@[^\s@\x00-\x1f]{1,254}', email)):
-        raise ValueError('现有登录未提供可靠的 Google 账户身份')
+        raise PublicError('现有登录未提供可靠的 Google 账户身份')
     return {'key': 'google:' + hashlib.sha256(subject.encode()).hexdigest(),
             'email': email, 'checkedAt': int(time.time()), 'stale': False}
 
 
 def quota():
-    """Native REST schemas, with the saved access token and no token endpoint."""
+    """CLI quota is authoritative; IDE-only installs use the native REST schema."""
     try:
         credential = read_credential()
-        access_token(credential)  # Expired credentials cause zero network calls.
+        result = native_quota(credential)
+        if result is None:
+            access_token(credential)
+        current = read_credential() if result is not None else credential
+        if not same_owner(credential, current):
+            raise PublicError('登录账户已变化，请重新检查')
+        credential = current
         assist, metadata_error = {}, None
         try:
             assist = request_json(credential, ASSIST_URL, {'metadata': {'ideType': 'ANTIGRAVITY'}})
@@ -339,22 +442,23 @@ def quota():
             metadata_error = 'AI Credits 暂不可用；模型组额度仍可查询'
         project = assist.get('cloudaicompanionProject', assist.get('cloudaicompanion_project'))
         body = {'project': project} if isinstance(project, str) and project else {}
-        result = request_json(credential, QUOTA_URL, body)
+        if result is None:
+            result = request_json(credential, QUOTA_URL, body)
         if not isinstance(result.get('groups'), list):
-            raise ValueError('Antigravity 未返回模型组额度')
+            raise PublicError('Antigravity 未返回模型组额度')
         # Only public quota/tier fields may leave the credential machine.
         groups = []
         for group in result['groups']:
             if not isinstance(group, dict) or not isinstance(group.get('buckets'), list):
-                raise ValueError('Antigravity 模型组格式不支持')
-            name = group.get('displayName', group.get('display_name', ''))
+                raise PublicError('Antigravity 模型组格式不支持')
+            name = group.get('displayName', group.get('display_name', group.get('name', '')))
             buckets = []
             for bucket in group['buckets']:
                 if not isinstance(bucket, dict):
-                    raise ValueError('Antigravity 模型组格式不支持')
+                    raise PublicError('Antigravity 模型组格式不支持')
                 buckets.append({
-                    'id': bucket.get('bucketId', bucket.get('bucket_id')),
-                    'name': bucket.get('displayName', bucket.get('display_name')),
+                    'id': bucket.get('bucketId', bucket.get('bucket_id', bucket.get('id'))),
+                    'name': bucket.get('displayName', bucket.get('display_name', bucket.get('name'))),
                     'window': bucket.get('window'),
                     'remaining_fraction': bucket.get('remainingFraction', bucket.get('remaining_fraction')),
                     'remaining_amount': bucket.get('remainingAmount', bucket.get('remaining_amount')),
@@ -374,20 +478,19 @@ def quota():
                         'creditAmount': c.get('creditAmount', c.get('credit_amount')),
                     } for c in credits if isinstance(c, dict)]
         if not same_owner(credential, read_credential()):
-            raise ValueError('登录账户已变化，请重新检查')
+            raise PublicError('登录账户已变化，请重新检查')
         return {'status': 'SUCCESS', 'command': {'name': 'usage', 'data': {
             'groups': groups, 'loadCodeAssist': tiers}}, 'metadataError': metadata_error}
     except Exception as error:
-        return {'error': str(error) if isinstance(error, ValueError) and str(error) in (RELOGIN, RELOGIN_IDE)
-                else 'Antigravity 只读额度查询失败，请检查客户端登录与网络'}
+        return {'error': public_error(error, 'Antigravity 只读额度查询失败，请检查客户端登录与网络')}
 
 
 def observe(identity_only=False):
     try:
-        credential = read_credential()
+        credential = identity_credential(read_credential())
         summary = resolve_identity(credential)
     except Exception as error:
-        message = str(error) if isinstance(error, ValueError) and str(error) in (RELOGIN, RELOGIN_IDE, IDE_INVALID) else '无法确认账户身份，请检查 Antigravity 登录方式与凭据库'
+        message = public_error(error, '无法确认账户身份，请检查 Antigravity 登录方式与凭据库')
         return {'identity': None, 'metadataError': message}
     if identity_only:
         return {'identity': summary, 'metadataError': None}

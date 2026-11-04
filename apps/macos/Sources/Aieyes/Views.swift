@@ -1,6 +1,46 @@
 import SwiftUI
 import Charts
 
+struct QuotaFullWidth: LayoutValueKey { static let defaultValue = false }
+
+/// Quota cards have different heights, so each next card follows the shortest column.
+/// Multi-account provider sections retain a full-width heading and their own card grid.
+struct QuotaGridLayout: Layout {
+    var columns: Int
+    var spacing: CGFloat = 14
+    var rowSpacing: CGFloat = 10
+
+    private func measure(width: CGFloat, subviews: Subviews) -> (CGSize, [CGRect]) {
+        let count = max(1, columns)
+        let cell = max(0, (width - CGFloat(count - 1) * spacing) / CGFloat(count))
+        var bottoms = Array(repeating: CGFloat.zero, count: count)
+        var frames: [CGRect] = []
+        for view in subviews {
+            let full = view[QuotaFullWidth.self]
+            let column = bottoms.indices.min(by: { bottoms[$0] < bottoms[$1] }) ?? 0
+            let y = full ? bottoms.max() ?? 0 : bottoms[column]
+            let proposal = ProposedViewSize(width: full ? width : cell, height: nil)
+            let height = view.sizeThatFits(proposal).height
+            frames.append(CGRect(x: full ? 0 : CGFloat(column) * (cell + spacing), y: y,
+                                 width: proposal.width!, height: height))
+            if full { bottoms = Array(repeating: y + height + rowSpacing, count: count) }
+            else { bottoms[column] = y + height + rowSpacing }
+        }
+        return (CGSize(width: width, height: max(0, (bottoms.max() ?? 0) - (subviews.isEmpty ? 0 : rowSpacing))), frames)
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        measure(width: max(0, proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 400), subviews: subviews).0
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let frames = measure(width: bounds.width, subviews: subviews).1
+        for index in subviews.indices {
+            let frame = frames[index]
+            subviews[index].place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                                 anchor: .topLeading, proposal: ProposedViewSize(frame.size))
+        }
+    }
+}
+
 /// Fill the available width without reserving empty adaptive columns.
 struct BalancedGridLayout: Layout {
     var minimumWidth: CGFloat
@@ -412,23 +452,12 @@ struct RootView: View, Equatable {
             (usageDashboard.quotaOrder?.firstIndex(of: $0.key) ?? Int.max) < (usageDashboard.quotaOrder?.firstIndex(of: $1.key) ?? Int.max)
         }
     }
-    // Pack consecutive single-account groups into a shared row, preserving provider order.
-    private var quotaProviderRows: [[String]] {
-        var rows: [[String]] = []
-        for provider in quotaProviders {
-            if quotaAccounts(provider).count == 1, let last = rows.last,
-               last.count < quotaColumns, last.allSatisfy({ quotaAccounts($0).count == 1 }) {
-                rows[rows.count - 1].append(provider)
-            } else { rows.append([provider]) }
-        }
-        return rows
-    }
     private func quotaGroup(_ provider: String) -> some View {
         let accounts = quotaAccounts(provider)
         return QuotaGroupSection(key: "quota.group." + scope + "." + provider, model: model, provider: provider,
             accountCount: accounts.count,
             quotas: displayedQuotas.filter { quota in CoreContract.sameAgent(quota.provider, provider) && accounts.contains { $0.key == quota.id } }) {
-            BalancedGridLayout(minimumWidth: 1, spacing: 14, maximumColumns: min(quotaColumns, max(1, accounts.count)), stretchLoneRow: false) {
+            QuotaGridLayout(columns: min(quotaColumns, max(1, accounts.count)), rowSpacing: 14) {
                 ForEach(accounts, id: \.key) { account in
                     Group {
                     if let quota = displayedQuotas.first(where: { $0.id == account.key }) { AccountObservedQuota(model: model, quota: quota, compact: compact, defaultExpanded: false) }
@@ -447,12 +476,10 @@ struct RootView: View, Equatable {
                 Button { model.showQuotaOrder?() } label: { Image(systemName: "arrow.up.arrow.down") }.help(L("调整账户顺序")).accessibilityLabel(L("调整账户顺序"))
                 QuotaRefreshButton(model: model)
             }
-            ForEach(Array(quotaProviderRows.enumerated()), id: \.offset) { _, providers in
-                HStack(alignment: .top, spacing: 14) {
-                    ForEach(providers, id: \.self) { provider in quotaGroup(provider).frame(maxWidth: .infinity, alignment: .topLeading) }
-                    if providers.count < quotaColumns && providers.allSatisfy({ quotaAccounts($0).count == 1 }) {
-                        ForEach(0..<(quotaColumns - providers.count), id: \.self) { _ in Color.clear.frame(maxWidth: .infinity).frame(height: 0) }
-                    }
+            QuotaGridLayout(columns: quotaColumns) {
+                ForEach(quotaProviders, id: \.self) { provider in
+                    quotaGroup(provider).frame(maxWidth: .infinity, alignment: .topLeading)
+                        .layoutValue(key: QuotaFullWidth.self, value: quotaAccounts(provider).count > 1)
                 }
             }
             if displayedQuotaAccounts.isEmpty && onlyFreeQuotaHidden {

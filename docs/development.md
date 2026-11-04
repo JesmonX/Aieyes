@@ -83,7 +83,9 @@ Codex 账户新增 credits 余额及每 500 / 1000 credits 的 API 等价估值�
 
 `python3 scripts/check-localizations.py` 检查精确源文案、未翻译英文和参数一致性；`node scripts/test-i18n.cjs` 使用合成账户覆盖双语页面、弹窗、草稿、跨窗口和窄屏。两项已纳入 CI，原生语言与金额格式回归包含在 `scripts/test-native.sh`。
 
-macOS 需要完成 Xcode 初始化并安装 Rust。首次构建需获取 Cargo 依赖。
+macOS 使用 Xcode 26.x 和 macOS 26.x SDK，需要完成 Xcode 初始化并安装 Rust。首次构建需获取 Cargo 依赖。构建入口会校验工具链并设置匹配的 `SDKROOT`；多版本 Xcode 可通过 `DEVELOPER_DIR` 选择。
+
+发布与分支 CI 的 Intel / Apple Silicon 任务均固定 Xcode 26.3（两种 macOS 15 构建机均提供），避免构建机默认 Xcode 更新或差异改变侧边栏等原生控件的外观。本地开发可使用 26.x；严格复现 CI 时使用 26.3。最低支持系统仍为 macOS 14.0，新 SDK 不提高部署目标；macOS 14/15 的运行兼容性仍需对应系统回归。
 
 ```sh
 cargo test --workspace --locked

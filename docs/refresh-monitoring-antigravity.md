@@ -42,9 +42,9 @@ GPU 使用可用的 `nvidia-smi`，否则显示不可用原因。某些平台没
 缺文件或损坏记录会暂停相关估值采样，保留已确认的区间。
 
 账户和连接机器界面提供“登录 / 检查”：先只读验证已有登录；需要授权时通过受控终端运行 agy 自身的浏览器登录流程，支持授权网址、授权码、验证、取消和超时。
-普通身份及额度检查不提交模型请求，不启动 CLI、不刷新 OAuth。显式登录流程由 CLI 使用原机器的凭据存储；授权码和终端输出不写入 Aieyes 数据库。
+普通身份及额度检查不提交模型请求。CLI 账户通过安装的 agy 内置 `--print /usage --output-format json` 查询，短期访问令牌由 agy 自行续期；身份检查遇到访问令牌过期时也先运行该命令，再验证凭据归属。命令在临时空目录运行，禁止自动更新并关闭 CLI 日志，仅投影额度字段。Aieyes 不直接调用 OAuth token 接口，不复制或改写凭据。显式登录流程由 CLI 使用原机器的凭据存储；授权码和终端输出不写入 Aieyes 数据库。
 取消仅结束本次授权进程。现有登录不会注销。
-额度查询使用 `POST https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` 与 `retrieveUserQuotaSummary`；前者读取套餐 / AI Credits 和 project，后者读取模型组窗口。适配器使用现有 access token，已知过期时零 HTTP 请求。`loadCodeAssist` 失败仍可保留有效模型组额度，并显示 Credits 不可用。
+CLI 的模型组以 `/usage` 为准：2026-11-04 实机对比，同一账户直连 `retrieveUserQuotaSummary` 只返回 Claude/GPT，而 agy 返回 Gemini、Claude/GPT、Argon 三组。IDE-only 或未安装 CLI 时仍使用 `retrieveUserQuotaSummary`，凭据过期时不发 HTTP 请求。`POST https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` 补充套餐 / AI Credits 和 project；失败仍保留有效模型组额度，并显示 Credits 不可用。自定义 agy 路径和本机 / SSH 的代理、前置命令沿用来源设置。
 
 身份适配器优先读取 agy 保存的 Google 登录，支持 macOS Keychain 的 `gemini` / `antigravity` 条目（`go-keyring-base64:` 包装或 JSON）和用户主目录中的 CLI 凭据文件。新 CLI 只有 `id_token_email` 时，邮箱不作为身份；通过 `GET https://www.googleapis.com/oauth2/v2/userinfo` 的已验证 Google ID 建立稳定标识。旧 ID token 仍支持。
 
@@ -56,11 +56,11 @@ GPU 使用可用的 `nvidia-smi`，否则显示不可用原因。某些平台没
 
 仅订阅查询失败不影响额度刷新；身份一致时保留上次订阅并标记待更新。已绑定账户的身份无法再次确认时，拒绝更新额度并保留上次成功快照，避免混入另一登录。查询前后均检查凭据归属。
 
-登录会话返回成功前，将已验证的公开身份写入对应账户设备缓存，并通过 `accountStatus` 返回该状态；首次身份绑定与缓存写入在同一事务完成。成功提交同时更新认证版本，授权期间启动的旧查询不能覆盖新状态。界面直接接收该状态，再独立刷新设置和额度；关闭登录窗口不取消后续刷新，额度查询失败保留已确认身份并显示可重试的错误。`agyAuth.inspect` 仍只读取现有登录，不写入状态。
+登录会话返回成功前，将已验证的公开身份写入对应账户设备缓存，并通过 `accountStatus` 返回该状态；首次身份绑定与缓存写入在同一事务完成。成功提交同时更新认证版本，授权期间启动的旧查询不能覆盖新状态。界面直接接收该状态，再独立刷新设置和额度；关闭登录窗口不取消后续刷新，额度查询失败保留已确认身份并显示可重试的错误。`agyAuth.inspect` 不写入 Aieyes 账户状态；访问令牌过期时可由 agy 的内置额度命令续期现有登录。
 
 `workspaceConfirmationRequired` 明确表示 CLI 正在等待临时目录确认。终端提示增量解析，支持跨读取边界的控制字符与提示文本；提交确认后消费旧提示，同一临时目录的终端重绘不再请求确认。写入失败保留待确认状态，取消清除该状态。不会用一般的工具执行提示触发目录确认。现有轮询负责后续刷新。
 
-适配器在凭据所在机器运行，需要 Python 3 与 curl；SSH Linux 的系统凭据读取可使用 `secret-tool`，无图形会话优先使用 CLI 文件存储。凭据、授权头与原始 API 响应不写入 Aieyes 配置、日志、数据库或 RPC；curl 的授权头通过标准输入传递。其他登录模式和无法确定的多个身份显示未知。Windows 的系统凭据适配及 IDE 实机登录尚未验证。
+适配器在凭据所在机器运行，需要 Python 3 与 curl；SSH Linux 的系统凭据读取可使用 `secret-tool`，无图形会话优先使用 CLI 文件存储。凭据、授权头与原始 API 响应不写入 Aieyes 配置、日志、数据库或 RPC；curl 的授权头通过标准输入传递。其他登录模式和无法确定的多个身份显示具体失败原因。同一身份的多个 CLI 存储优先选用仍有效、到期时间较晚的访问令牌；身份冲突仍拒绝查询。HTTP 401、403、429、超时、连接失败分别显示固定诊断，不透传服务响应或进程错误。Windows 的系统凭据适配及 IDE 实机登录尚未验证。
 
 此前 macOS / SSH 的邮箱、Google AI Pro 和 17 条历史读取是历史验收记录。2026-10-31 本机现有 CLI access token 已过期；本轮只核实字段和发行包源码，没有刷新令牌或取得新的付费登录。IDE 2.6.0 的存储已按官方安装包源码接入并通过隔离回归，未启动 IDE 登录。
 
@@ -93,3 +93,7 @@ GPU 使用可用的 `nvidia-smi`，否则显示不可用原因。某些平台没
 
 授权交互测试使用隔离的假 CLI；实机只验证既有登录和读取历史。
 Windows/Linux 的平台原生采样和 OAuth 浏览器回调仍需在相应系统实机验证。
+
+## macOS 额度排列
+
+额度区按最短列放置下一个单账户分组，保留 10px 纵向间距；多账户分组占满整行，内部卡片也按最短列排列。1–4 列、窗口缩放和展开 / 折叠均重新测量，后续卡片不会被相邻高卡片撑出整行空白。

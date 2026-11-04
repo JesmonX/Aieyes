@@ -25,6 +25,32 @@ private struct Fixture: View {
             .onPreferenceChange(CardFrames.self) { state.heights = $0 }
     }
 }
+private struct GridFrames: PreferenceKey {
+    static let defaultValue: [Int: CGRect] = [:]
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) { value.merge(nextValue(), uniquingKeysWith: { _, next in next }) }
+}
+@MainActor private final class GridState: ObservableObject {
+    @Published var columns = 2
+    @Published var width: CGFloat = 800
+    @Published var heights: [CGFloat] = [140, 350, 114, 180, 90, 120]
+    @Published var full = false
+    var frames: [Int: CGRect] = [:]
+}
+private struct GridFixture: View {
+    @ObservedObject var state: GridState
+    var body: some View {
+        QuotaGridLayout(columns: state.columns) {
+            ForEach(state.heights.indices, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 14).fill(index == 1 ? Color.purple.opacity(0.2) : Color.blue.opacity(0.2))
+                    .overlay(Text(["Qoder CN", "Antigravity", "DeepSeek", "Card 4", "Card 5", "Card 6"][index]))
+                    .frame(height: state.heights[index])
+                    .background(GeometryReader { geometry in Color.clear.preference(key: GridFrames.self, value: [index: geometry.frame(in: .named("grid"))]) })
+                    .layoutValue(key: QuotaFullWidth.self, value: state.full && index == 3)
+            }
+        }.coordinateSpace(name: "grid").frame(width: state.width)
+            .onPreferenceChange(GridFrames.self) { state.frames = $0 }
+    }
+}
 @main struct VerifyQuotaLayout {
     @MainActor static func main() async throws {
         _ = NSApplication.shared
@@ -83,6 +109,37 @@ private struct Fixture: View {
             precondition(abs(panel.view.frame.width-width)<1)
             precondition(panel.view.subviews.allSatisfy { abs($0.frame.width-width)<1 }, "Every first-layout panel layer fills its container: \(panel.view.subviews.map { $0.frame })")
         }
+        let grid = GridState()
+        let gridView = NSHostingView(rootView: GridFixture(state: grid))
+        let gridWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 1600), styleMask: [.borderless], backing: .buffered, defer: false)
+        gridWindow.isReleasedWhenClosed = false; gridWindow.contentView = gridView
+        gridWindow.setFrameOrigin(NSPoint(x: -20000, y: -20000)); gridWindow.orderBack(nil)
+        defer { gridWindow.close() }
+        for columns in [2, 1, 3, 4, 2] {
+            grid.columns = columns; grid.width = columns == 1 ? 360 : 1080
+            for expanded in [false, true] {
+                grid.heights[1] = expanded ? 470 : 350
+                grid.full = expanded
+                try await Task.sleep(for: .milliseconds(300)); gridView.layoutSubtreeIfNeeded()
+                let frames = grid.frames
+                precondition(frames.count == 6)
+                for (i, left) in frames { for (j, right) in frames where i < j { precondition(!left.intersects(right), "Quota cards overlap: \(i), \(j)") } }
+                if columns == 2 {
+                    precondition(abs(frames[2]!.minY - frames[0]!.maxY - 10) < 1, "DeepSeek must follow Qoder, not the taller Antigravity card")
+                    precondition(abs(frames[2]!.minX - frames[0]!.minX) < 1)
+                }
+                if expanded { precondition(abs(frames[3]!.width - grid.width) < 1, "Multi-account section fills the grid") }
+            }
+        }
+        grid.full = false; grid.heights = [140, 350, 114]
+        gridWindow.setContentSize(NSSize(width: 1080, height: 400))
+        try await Task.sleep(for: .milliseconds(300)); gridView.layoutSubtreeIfNeeded()
+        let output = URL(fileURLWithPath: ".local/quota-masonry-native.png")
+        if let bitmap = gridView.bitmapImageRepForCachingDisplay(in: gridView.bounds) {
+            gridView.cacheDisplay(in: gridView.bounds, to: bitmap)
+            try bitmap.representation(using: .png, properties: [:])?.write(to: output)
+        }
+        print("Native masonry: 1–4 columns, expanding cards, shortest-column packing and full-width groups pass")
         print("Native quota layout: collapsed heights match for multiple subscriptions, long text, errors, meters, stale and non-Codex cards and widths; group shrinks; initial panel layers fill their width")
     }
 }

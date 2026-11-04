@@ -2,7 +2,7 @@
 # The debug app is compiled once; each verifier imports it with @testable instead of recompiling app sources.
 export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$PROJECT_DIR/.build/clang-cache}"
 export SWIFTPM_MODULECACHE_OVERRIDE="${SWIFTPM_MODULECACHE_OVERRIDE:-$PROJECT_DIR/.build/swift-module-cache}"
-export MACOSX_DEPLOYMENT_TARGET=14.0
+. "$PROJECT_DIR/scripts/macos-toolchain.sh"
 mkdir -p "$CLANG_MODULE_CACHE_PATH" "$SWIFTPM_MODULECACHE_OVERRIDE" .build/swift-module-cache
 NATIVE_BUILD_DIR="$PROJECT_DIR/.build/swift/debug"
 SPARKLE_FRAMEWORK="$PROJECT_DIR/.build/swift/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64"

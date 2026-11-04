@@ -61,6 +61,60 @@ def ide_store(root, value, name='Antigravity IDE'):
 
 
 class IdentityTests(unittest.TestCase):
+    def setUp(self):
+        # REST fixtures must never discover or launch a developer's real CLI.
+        self.native = patch.object(agy, 'native_quota', return_value=None)
+        self.native_mock = self.native.start()
+        self.addCleanup(self.native.stop)
+
+    def test_cli_groups_are_authoritative_even_when_rest_would_omit_gemini(self):
+        current = credential()
+        groups = [{'name': name, 'buckets': [{'id': name, 'name': 'Weekly', 'window': 'weekly',
+                   'remaining_fraction': 1, 'reset_time': '2099-01-01T00:00:00Z'}]}
+                  for name in ('Gemini Models', 'Claude and GPT models', 'Gemini 4 Argon')]
+        self.native_mock.return_value = {'groups': groups, 'private': 'must-not-return'}
+        with patch.object(agy, 'read_credential', return_value=current), \
+                patch.object(agy, 'request_json', return_value={'paidTier': {'name': 'Google AI Pro'}}) as request:
+            result = agy.quota()
+            self.assertEqual([g['name'] for g in result['command']['data']['groups']], [g['name'] for g in groups])
+            self.assertEqual(request.call_count, 1)
+            self.assertEqual(request.call_args.args[1], agy.ASSIST_URL)
+            self.assertNotIn('must-not-return', json.dumps(result))
+
+    def test_expired_access_is_renewed_by_cli_and_owner_is_rechecked(self):
+        old = credential()
+        old['token']['expiry'] = '2001-01-01T00:00:00Z'
+        new = credential()
+        self.native_mock.return_value = {'groups': []}
+        with patch.object(agy, 'read_credential', return_value=new):
+            self.assertEqual(agy.identity_credential(old), new)
+        with patch.object(agy, 'read_credential', return_value=credential('other')):
+            with self.assertRaisesRegex(agy.PublicError, '账户已变化'):
+                agy.identity_credential(old)
+
+    def test_newer_same_owner_file_is_used_and_conflict_is_reported(self):
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {'HOME': root, 'USERPROFILE': root, 'SSH_CONNECTION': 'fixture'}, clear=True):
+            home = pathlib.Path(root) / '.gemini'
+            (home / 'antigravity-cli').mkdir(parents=True)
+            old = credential(); old['token']['expiry'] = '2001-01-01T00:00:00Z'
+            new = credential(); new['token']['expiry'] = '2099-01-01T00:00:00Z'
+            (home / 'antigravity-oauth-token').write_text(json.dumps(old))
+            target = home / 'antigravity-cli' / 'antigravity-oauth-token'
+            target.write_text(json.dumps(new))
+            self.assertEqual(agy.read_credential(), new)
+            target.write_text(json.dumps(credential('other')))
+            self.assertIn('多个不同', agy.observe()['metadataError'])
+
+    def test_network_diagnostics_do_not_expose_response_or_stderr(self):
+        for code, status, expected in [(22, b'401', agy.RELOGIN), (22, b'403', '拒绝访问'),
+                                       (22, b'429', '过于频繁'), (28, b'000', '超时'), (7, b'000', '网络连接失败')]:
+            result = subprocess.CompletedProcess([], code, b'private-response', status)
+            with patch.object(agy, 'read_credential', return_value=credential()), \
+                    patch.object(agy.subprocess, 'run', return_value=result):
+                value = agy.quota()
+                self.assertIn(expected, value['error'])
+                self.assertNotIn('private', json.dumps(value))
+
     def test_ide_proto_and_legacy_json_are_read_without_writes_or_refresh_tokens(self):
         for legacy in (False, True):
             with tempfile.TemporaryDirectory() as root, \
@@ -141,7 +195,7 @@ class IdentityTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 agy.resolve_identity(current)
 
-    def test_quota_expiry_never_launches_cli_or_calls_refresh(self):
+    def test_quota_expiry_without_cli_never_calls_token_endpoint(self):
         current = credential()
         current['token']['expiry'] = '2001-01-01T00:00:00Z'
         with patch.object(agy, 'read_credential', return_value=current), \
@@ -221,6 +275,25 @@ class IdentityTests(unittest.TestCase):
             self.assertIsNone(agy.observe()['identity'])
         with patch.dict(os.environ, {'GEMINI_API_KEY': 'fixture'}, clear=True):
             self.assertIsNone(agy.observe()['identity'])
+
+
+class NativeUsageTests(unittest.TestCase):
+    def test_only_builtin_usage_runs_in_empty_workspace_and_raw_output_is_not_returned(self):
+        def run(args, **kwargs):
+            self.assertEqual(args[1:], ['--log-file', os.devnull, '--print', '/usage', '--output-format', 'json'])
+            self.assertEqual(list(pathlib.Path(kwargs['cwd']).iterdir()), [])
+            self.assertEqual(kwargs['stdin'], subprocess.DEVNULL)
+            self.assertEqual(kwargs['env']['AIEYES_INTERNAL'], '1')
+            self.assertNotIn('fake-private', str(args))
+            return subprocess.CompletedProcess(args, 0, b'{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[]}},"private":"discard"}')
+        with patch.dict(os.environ, {'AIEYES_AGY_BINARY': '/fixture/agy'}), patch.object(agy.subprocess, 'run', side_effect=run):
+            self.assertEqual(agy.native_quota(credential()), {'groups': []})
+        with patch.object(agy.subprocess, 'run', side_effect=AssertionError('IDE must not run CLI')):
+            self.assertIsNone(agy.native_quota({'_origin': 'ide'}))
+        with patch.dict(os.environ, {'AIEYES_AGY_BINARY': '/fixture/agy'}), \
+                patch.object(agy.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'{"status":"SUCCESS","response":"private"}')):
+            with self.assertRaisesRegex(agy.PublicError, '未返回模型组'):
+                agy.native_quota(credential())
 
 
 if __name__ == '__main__':

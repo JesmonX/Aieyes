@@ -73,7 +73,15 @@ fn request(source: &Source, settings: &Settings, flag: &str) -> anyhow::Result<V
             .ok_or_else(|| anyhow::anyhow!("设备已暂停"))?
             .clone();
         host.pre_command = pre;
-        ssh::account_command(&host, &format!("exec python3 - {flag}"))?
+        let binary = if source.agy_binary.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "export AIEYES_AGY_BINARY={}\n",
+                process::quote(&source.agy_binary)
+            )
+        };
+        ssh::account_command(&host, &format!("{binary}exec python3 - {flag}"))?
     } else {
         let mut args = vec!["-"];
         if !flag.is_empty() {
@@ -86,6 +94,12 @@ fn request(source: &Source, settings: &Settings, flag: &str) -> anyhow::Result<V
             ssh::DEFAULT_SHELL,
         );
         network::apply_env(&mut cmd, source.proxy.as_ref().unwrap_or(&settings.proxy));
+        if !source.agy_binary.is_empty() {
+            cmd.env(
+                "AIEYES_AGY_BINARY",
+                crate::store::expand(&source.agy_binary),
+            );
+        }
         cmd
     };
     cmd.current_dir(std::env::temp_dir());

@@ -14,6 +14,7 @@ struct MainWindowView: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.previewAccessibleSurfaces) private var previewAccessible
     @State private var guideActive = false
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var workspaceWidth: CGFloat = 1120
     private var monitoring: [(String, String, String)] { [("agent", L("总览"), "square.grid.2x2"), ("analysis", L("用量分析"), "chart.xyaxis.line"), ("servers", L("服务器"), "server.rack")] }
     private var configuration: [(String, String, String)] { [("integrations", L("接入与账户"), "person.crop.circle"), ("servers", L("机器与采集"), "desktopcomputer"), ("prices", L("模型价格"), "dollarsign.circle"), ("wakeups", L("定时唤醒"), "alarm")] }
@@ -25,7 +26,7 @@ struct MainWindowView: View {
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Button { withMotion(.expand) { collapsed.toggle() } } label: { BrandMark().frame(width: 30, height: 30).frame(width: 34, height: 34).contentShape(Rectangle()) }.buttonStyle(.plain).help(collapsed ? L("展开导航") : L("收起导航")).accessibilityLabel(collapsed ? L("展开导航") : L("收起导航")).accessibilityValue(collapsed ? L("已收起") : L("已展开"))
@@ -57,7 +58,19 @@ struct MainWindowView: View {
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-        }.navigationSplitViewStyle(.balanced).toolbar(removing:.sidebarToggle)
+            .toolbar {
+                // Keep the recovery control in the detail toolbar: the sidebar's
+                // own toolbar disappears when its column is fully hidden.
+                ToolbarItem(placement: .navigation) {
+                    Button {
+                        withMotion(.expand) { columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly }
+                    } label: { Image(systemName: "sidebar.left") }
+                        .help(columnVisibility == .detailOnly ? L("展开导航") : L("收起导航"))
+                        .accessibilityLabel(columnVisibility == .detailOnly ? L("展开导航") : L("收起导航"))
+                        .accessibilityIdentifier("main.sidebarToggle")
+                }
+            }
+        }.navigationSplitViewStyle(.balanced).toolbar(removing: .sidebarToggle)
         .frame(minWidth: 760, minHeight: 480).aieyesAccent()
         .background(WindowPageTitle(title:title + " — Aieyes"))
         .environment(\.workspaceCardColumns, workspaceWidth >= 1800 ? 4 : workspaceWidth >= 1390 ? 3 : workspaceWidth >= 974 ? 2 : 1)

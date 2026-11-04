@@ -30,7 +30,7 @@ import json, pathlib, sys, time
 marker=pathlib.Path(__file__).with_suffix('.authenticated')
 if '--print' in sys.argv:
     if not marker.exists(): sys.exit(1)
-    print(json.dumps({'command':{'name':'usage','data':{'groups':[]}}}))
+    print(json.dumps({'status':'SUCCESS','command':{'name':'usage','data':{'groups':[]}}}))
 else:
     print('Open https://accounts.google.com/o/oauth2/auth?state=fixture',flush=True)
     code=input()
@@ -196,7 +196,8 @@ fn login_persists_identity_before_success_and_retains_it_on_later_query_failure(
         "another connection sees the committed login"
     );
 
-    // Status polling reuses the observation when later read-only requests fail.
+    // Status polling reuses the observation when later quota requests fail.
+    std::fs::write(root.path().join("agy-fixture"), "#!/bin/sh\nexit 1\n").unwrap();
     std::fs::write(root.path().join("curl"), "#!/bin/sh\nexit 1\n").unwrap();
     assert_eq!(
         engine
@@ -223,6 +224,41 @@ fn login_persists_identity_before_success_and_retains_it_on_later_query_failure(
         reader.call("accounts.status.get", json!({})).unwrap()[0]["identity"],
         row["identity"]
     );
+}
+
+#[test]
+fn cli_renews_expired_access_and_supplies_all_three_model_groups() {
+    let (root, mut engine, source) = identity_fixture();
+    let path = root.path().join(".gemini/antigravity-oauth-token");
+    let mut credential: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    credential["token"]["expiry"] = json!("2001-01-01T00:00:00Z");
+    std::fs::write(&path, credential.to_string()).unwrap();
+    std::fs::write(&source.agy_binary, r#"#!/usr/bin/env python3
+import json, os, pathlib, sys
+assert sys.argv[1:] == ['--log-file', os.devnull, '--print', '/usage', '--output-format', 'json']
+assert os.environ['AIEYES_INTERNAL'] == '1'
+assert list(pathlib.Path.cwd().iterdir()) == []
+path = pathlib.Path(__file__).parent / '.gemini/antigravity-oauth-token'
+credential = json.loads(path.read_text())
+credential['token']['expiry'] = '2099-01-01T00:00:00Z'
+credential['token']['access_token'] = 'fake-private-renewed'
+path.write_text(json.dumps(credential))
+groups = [{'name': name, 'buckets': [{'id': name + window, 'window': window, 'remaining_fraction': 0.8} for window in windows]}
+          for name, windows in [('Gemini Models', ['5h', 'weekly']), ('Claude and GPT models', ['5h', 'weekly']), ('Gemini 4 Argon', ['weekly'])]]
+print(json.dumps({'status':'SUCCESS','command':{'name':'usage','data':{'groups':groups}}, 'private':'fake-private-output'}))
+"#).unwrap();
+    let rows = engine.call("quotas.refresh", json!({})).unwrap();
+    assert!(rows[0]["error"].is_null(), "{rows}");
+    assert_eq!(rows[0]["identity"]["email"], "account@example.test");
+    assert_eq!(rows[0]["windows"].as_array().unwrap().len(), 5);
+    let groups: std::collections::BTreeSet<_> = rows[0]["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["groupName"].as_str().unwrap())
+        .collect();
+    assert_eq!(groups.len(), 3);
+    assert!(!rows.to_string().contains("fake-private"));
 }
 
 #[test]
@@ -277,7 +313,7 @@ import json,pathlib,sys,time
 marker=pathlib.Path(__file__).with_suffix('.authenticated')
 if '--print' in sys.argv:
     if not marker.exists():sys.exit(1)
-    print(json.dumps({'command':{'name':'usage','data':{'groups':[]}}}))
+    print(json.dumps({'status':'SUCCESS','command':{'name':'usage','data':{'groups':[]}}}))
 else:
     for text in ['\x1b[','32mYes, I tru','st this folder\x1b[0m\n']:
         sys.stdout.write(text);sys.stdout.flush();time.sleep(.08)
@@ -522,6 +558,13 @@ print(json.dumps({'groups':[{'displayName':'Gemini','buckets':[{'remainingFracti
 "#,
     )
     .unwrap();
+
+    // The CLI is the quota authority; curl now supplies only metadata.
+    let binary = root.path().join("agy-fixture");
+    let script = std::fs::read_to_string(&binary)
+        .unwrap()
+        .replace("0.7", "0.4");
+    std::fs::write(binary, script).unwrap();
 
     let rows = engine.call("quotas.refresh", json!({})).unwrap();
     assert!(rows[0]["error"].is_null(), "{rows}");

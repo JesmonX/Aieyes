@@ -3903,5 +3903,14 @@ globalThis.AieyesMessages = {
   "完成后将自动退出。": "Aieyes will quit when this finishes.",
   "取消退出": "Cancel Quit",
   "好": "OK",
-  "桌宠图片加载失败，请重新导入或选择其他桌宠": "Couldn't load pet images. Re-import or choose another pet."
+  "桌宠图片加载失败，请重新导入或选择其他桌宠": "Couldn't load pet images. Re-import or choose another pet.",
+  "Antigravity 查询需要 curl，请检查安装与 PATH": "Antigravity queries require curl. Check the installation and PATH.",
+  "Antigravity 查询超时，请检查网络与代理": "Antigravity query timed out. Check the network and proxy.",
+  "Antigravity 拒绝访问，请检查当前账户的服务权限": "Antigravity denied access. Check service access for the current account.",
+  "Antigravity 查询过于频繁，请稍后重试": "Too many Antigravity queries. Try again later.",
+  "Antigravity 网络连接失败，请检查代理、DNS 与证书": "Antigravity connection failed. Check the proxy, DNS, and certificates.",
+  "Antigravity 服务暂不可用，请稍后重试": "Antigravity is temporarily unavailable. Try again later.",
+  "无法运行 agy，请检查 CLI 路径与安装": "Could not run agy. Check the CLI path and installation.",
+  "agy 额度查询失败，请在 agy 中运行 /usage 检查登录状态": "agy quota query failed. Run /usage in agy to check sign-in.",
+  "agy 未返回模型组额度，请更新 CLI 后重试": "agy returned no model-group quota. Update the CLI and try again."
 };
