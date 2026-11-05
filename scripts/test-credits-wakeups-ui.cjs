@@ -43,7 +43,7 @@ function fixture(){
   const expandedBalanceBox=await card().locator('.credit-row').boundingBox(),entryBox=await card().locator('[data-credit-estimate]').boundingBox();assert(entryBox.y>=expandedBalanceBox.y+expandedBalanceBox.height,'Credits estimate is on its own line below the balance');
   const decimals=[['1234.125','1234.13'],['1.005','1.01'],['10','10.00'],['0','0.00'],['-0.004','0.00'],['-1.005','-1.01'],['1e-3','0.00'],['9.999','10.00'],[null,'—'],['','—'],['NaN','—'],['12bad','—'],['Infinity','—']];
   for(const [input,expected] of decimals)assert.equal(await page.evaluate(v=>creditAmount(v),input),expected);
-  const thresholds=[[100,'accent'],[30.01,'accent'],[30,'resource-warn'],[10,'resource-warn'],[9.99,'resource-high'],[0,'resource-high'],[null,'muted']];
+  const thresholds=[[100,'category'],[30.01,'category'],[30,'resource-warn'],[10,'resource-warn'],[9.99,'resource-high'],[0,'resource-high'],[null,'muted']];
   for(const [remaining,tint] of thresholds){
    const result=await page.evaluate(value=>{
     const holder=document.createElement('div');holder.innerHTML=resourceBar(value,'7d 剩余额度',true);
@@ -51,6 +51,20 @@ function fixture(){
    },remaining);
    assert.equal(result.color,'var(--'+tint+')');assert.equal(result.amount,remaining===null?null:String(remaining));
   }
+  // Healthy quota bars resolve to the provider palette; low quotas switch to named warning colors.
+  const barColors=await page.evaluate(()=>{
+   const probe=document.createElement('span'),fixture=document.createElement('div');document.body.append(probe,fixture);
+   const token=name=>{probe.style.background=`var(${name})`;return getComputedStyle(probe).backgroundColor;};
+   const bar=(provider,value)=>{fixture.dataset.provider=provider;fixture.innerHTML=resourceBar(value,'7d 剩余额度',true);return getComputedStyle(fixture.querySelector('span')).backgroundColor;};
+   const result={codex:bar('codex',100),claude:bar('claude',100),warning:bar('codex',30),high:bar('codex',9.99),
+    codexToken:token('--category-codex'),claudeToken:token('--category-claude'),warningToken:token('--resource-warn'),highToken:token('--resource-high')};
+   fixture.remove();probe.remove();return result;
+  });
+  assert.equal(barColors.codex,barColors.codexToken,'Healthy quota bars use the provider palette');
+  assert.notEqual(barColors.codex,barColors.claude,'Provider palettes stay distinct');
+  assert.equal(barColors.claude,barColors.claudeToken,'Each provider resolves its own palette');
+  assert.equal(barColors.warning,barColors.warningToken,'Low quota bars use the warning color');
+  assert.equal(barColors.high,barColors.highToken,'Critical quota bars use the high warning color');
   // Usage bars keep their category color; high load is a red value plus a named warning mark.
   const high=await page.evaluate(()=>{
     const holder=document.createElement('div'),danger=document.createElement('i');holder.innerHTML=resourceBlock('CPU',95,'','cpu');danger.style.color='var(--danger)';document.body.append(holder,danger);

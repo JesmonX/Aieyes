@@ -1247,7 +1247,7 @@ function drawTrend() {
 }
 function resourcePercent(value) {return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : null;}
 function capacityPercent(used, total) {return Number.isFinite(used) && Number.isFinite(total) && total > 0 ? used / total * 100 : null;}
-// Healthy quota text uses the deeper accent so it stays readable on tinted cards; bars keep the accent.
+// Healthy quota text uses the deeper accent so it stays readable on tinted cards; bars follow the provider palette.
 function quotaColor(value, text = false) {return value == null ? 'var(--muted)' : value < 10 ? 'var(--resource-high)' : value <= 30 ? 'var(--resource-warn)' : text ? 'var(--accent-text)' : 'var(--category)';}
 function phaseColor(phase) {return getComputedStyle(document.documentElement).getPropertyValue('--phase-' + phase).trim() || getComputedStyle(document.documentElement).getPropertyValue('--phase-idle').trim();}
 function resourceBar(value, label, quota = false) {
