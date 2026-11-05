@@ -49,7 +49,7 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
             const control=select.closest('.win-select')??select;
             return {name:select.name||select.id,rect:control.getBoundingClientRect().toJSON(),row:select.closest('.form-row').getBoundingClientRect().toJSON()};
           }));
-          assert.deepEqual(appearance.map(choice=>choice.name),['appearanceLanguage','appearanceTheme','appearanceAccent',...(platform==='windows'?['material-main','material-floating']:[]),'appearanceChartPalette','appearanceChartContrast']);
+          assert.deepEqual(appearance.map(choice=>choice.name),['appearanceLanguage','appearanceTheme','appearanceAccent',...(platform==='windows'?['material-main','material-floating']:[]),'quota-style-panel','quota-style-detail','appearanceChartPalette','appearanceChartContrast']);
           for(const {rect,row} of appearance) {
             assert(rect.width>=Math.min(160,row.right-rect.x)&&rect.right<=row.right,'appearance choices have a readable width and fit their form');
             assert.equal(rect.x,appearance[0].rect.x,'selected text starts in the same column');
