@@ -57,6 +57,7 @@ pub(crate) struct LinuxTray {
     summary: String,
     phase: Option<Phase>,
     dark: bool,
+    ring: Option<crate::desktop::TrayRing>,
 }
 
 impl LinuxTray {
@@ -100,7 +101,7 @@ impl Tray for LinuxTray {
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
-        let image = crate::desktop::icon(self.phase, self.dark);
+        let image = crate::desktop::icon(self.phase, self.dark, self.ring.as_ref());
         let mut data = Vec::with_capacity(image.rgba().len());
         for pixel in image.rgba().as_chunks::<4>().0 {
             data.extend_from_slice(&[pixel[3], pixel[0], pixel[1], pixel[2]]);
@@ -156,10 +157,16 @@ impl LinuxTrayHandle {
         });
     }
 
-    pub(crate) fn set_icon(&self, phase: Option<Phase>, dark: bool) {
+    pub(crate) fn set_icon(
+        &self,
+        phase: Option<Phase>,
+        dark: bool,
+        ring: Option<crate::desktop::TrayRing>,
+    ) {
         self.update(|tray| {
             tray.phase = phase;
             tray.dark = dark;
+            tray.ring = ring;
         });
     }
 
@@ -177,6 +184,7 @@ pub(crate) fn start(app: &AppHandle) -> Result<LinuxTrayHandle, String> {
         summary: "Aieyes".into(),
         phase: None,
         dark: false,
+        ring: None,
     };
     let handle = tray
         .spawn()

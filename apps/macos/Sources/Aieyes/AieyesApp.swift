@@ -648,6 +648,21 @@ struct AieyesCommands: Commands {
                 }
                 model.stop(); NSApp.terminate(nil); return
             }
+            if ProcessInfo.processInfo.environment["AIEYES_UI_RINGS_ONLY"] == "1" {
+                // Quota ring styles in the panel and the main window, plus the menu bar ring.
+                for dark in [false, true] {
+                    let theme = dark ? "dark" : "light"
+                    for style in QuotaCardStyle.allCases where style != .card {
+                        var preview = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+                        preview[NativePanelKey.panelQuotaStyle.rawValue] = style.rawValue; preview[NativePanelKey.detailQuotaStyle.rawValue] = style.rawValue
+                        UserDefaults.standard.setVolatileDomain(preview, forName: UserDefaults.argumentDomain)
+                        try await capture(RootView(model: model), size: NSSize(width: 450, height: 1100), dark: dark, to: root.appendingPathComponent("rings-\(style.rawValue)-panel-\(theme).png"))
+                        try await capture(RootView(model: model, compact: false), size: NSSize(width: 1080, height: 1000), dark: dark, to: root.appendingPathComponent("rings-\(style.rawValue)-main-\(theme).png"))
+                    }
+                    try await capture(MenuActivityLabel(model: model), size: NSSize(width: 180, height: 28), dark: dark, to: root.appendingPathComponent("rings-menu-\(theme).png"))
+                }
+                model.stop(); NSApp.terminate(nil); return
+            }
             if ProcessInfo.processInfo.environment["AIEYES_UI_SETUP_ONLY"] == "1" {
                 try await captureSetupGuide(to: root)
                 model.stop(); NSApp.terminate(nil); return

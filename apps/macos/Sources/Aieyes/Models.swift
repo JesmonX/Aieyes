@@ -55,6 +55,7 @@ enum NativePanelKey: String, CaseIterable {
     case panelSessions = "panel.sessionsExpanded", detailSessions = "detail.sessionsExpanded"
     case panelCost = "panel.costMode", detailCost = "detail.costMode"
     case showCount = "menu.showCount"
+    case panelQuotaStyle = "panel.quotaStyle", detailQuotaStyle = "detail.quotaStyle"
     enum Prefix: String, CaseIterable {
         case quota = "quota.expanded.v2.", server = "server.expanded.", metric = "server.metric.expanded."
     }
@@ -70,6 +71,7 @@ enum NativePanelKey: String, CaseIterable {
             case .knownAccounts: result[key.rawValue] = [String]()
             case .panelPage, .detailPage: result[key.rawValue] = "agent"
             case .panelServerFilter, .detailServerFilter, .panelServerSelection, .detailServerSelection: result[key.rawValue] = "all"
+            case .panelQuotaStyle, .detailQuotaStyle: result[key.rawValue] = "card"
             default: result[key.rawValue] = false
             }
         }
@@ -723,6 +725,8 @@ struct Settings: Codable, Equatable {
     var localDeviceEnabled: Bool?
     var version = 11, sources: [AgentSource] = [], accounts: [AgentAccount] = [], hosts: [Host] = [], proxy = ProxySettings()
     var refreshSeconds = 300, serverRefreshSeconds = 10, menuMetric = "icon"
+    /// The first account's quota ring around the menu bar icon (core `MenuQuotaRing`).
+    var menuQuotaRing: MenuQuotaRing?
     var historyRefreshSeconds: Int?, serverForegroundRefreshSeconds: Int?, localMonitor: LocalMonitor?
     var historyInterval: Int { get { historyRefreshSeconds ?? max(10, refreshSeconds) } set { historyRefreshSeconds = newValue } }
     var foregroundInterval: Int { get { serverForegroundRefreshSeconds ?? 2 } set { serverForegroundRefreshSeconds = newValue } }
@@ -740,6 +744,22 @@ struct Settings: Codable, Equatable {
     var modelMappings: [String: String] = [:]
     var proxyTestUrls: [String]?
 }
+/// Core `MenuQuotaRing`: the first account's ring around the menu bar icon and up to two labels beside it.
+struct MenuQuotaRing: Codable, Equatable {
+    var enabled = true
+    var values: [String] = ["topReset"]
+    static let options = ["topRemaining", "topReset", "bottomRemaining", "bottomReset"]
+    static func optionTitle(_ value: String) -> String {
+        switch value {
+        case "topRemaining": return L("上半圈剩余额度")
+        case "topReset": return L("上半圈重置时间")
+        case "bottomRemaining": return L("下半圈剩余额度")
+        case "bottomReset": return L("下半圈重置时间")
+        default: return L("不显示")
+        }
+    }
+}
+
 struct ClaudeKeychainConsent: Codable, Equatable {
     var askedAt: Double = 0, granted = false, result: String?
     var state: String { result ?? (granted ? "granted" : "denied") }

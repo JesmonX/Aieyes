@@ -438,6 +438,8 @@ pub struct Settings {
     pub local_monitor: LocalMonitor,
     pub local_device_enabled: bool,
     pub menu_metric: String,
+    /// The first account's quota ring around the menu bar / tray icon.
+    pub menu_quota_ring: MenuQuotaRing,
     pub model_mappings: std::collections::BTreeMap<String, String>,
     pub proxy_test_urls: Vec<String>,
 }
@@ -473,9 +475,43 @@ impl Default for Settings {
             local_monitor: LocalMonitor::default(),
             local_device_enabled: true,
             menu_metric: "icon".into(),
+            menu_quota_ring: MenuQuotaRing::default(),
             model_mappings: Default::default(),
             proxy_test_urls: crate::network::default_test_urls(),
         }
+    }
+}
+
+/// Draws the first account's quota ring around the menu bar or tray icon.
+/// `values` lists up to two labels shown beside it, from
+/// [`crate::quota_ring::MENU_VALUES`], in display order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MenuQuotaRing {
+    pub enabled: bool,
+    pub values: Vec<String>,
+}
+impl Default for MenuQuotaRing {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            values: vec!["topReset".into()],
+        }
+    }
+}
+impl MenuQuotaRing {
+    /// Drops unknown and repeated values and keeps at most two.
+    pub fn normalize(&mut self) {
+        let mut seen = Vec::new();
+        self.values.retain(|value| {
+            let keep = crate::quota_ring::MENU_VALUES.contains(&value.as_str())
+                && !seen.contains(value)
+                && seen.len() < 2;
+            if keep {
+                seen.push(value.clone());
+            }
+            keep
+        });
     }
 }
 
@@ -504,6 +540,7 @@ impl Default for Appearance {
 
 impl Settings {
     pub fn migrate(&mut self) {
+        self.menu_quota_ring.normalize();
         self.appearance.language = crate::localization::normalize(&self.appearance.language).into();
         if self.version < 2 {
             for source in &self.sources {

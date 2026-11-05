@@ -54,6 +54,7 @@ mod qoder_state;
 pub mod quota;
 pub mod quota_notifications;
 mod quota_queries;
+pub mod quota_ring;
 pub mod quota_schedule;
 mod remote_history;
 pub mod rolling_estimates;

@@ -208,6 +208,7 @@ struct RootView: View, Equatable {
     @AppStorage private var trendExpanded: Bool
     @AppStorage private var sessionsExpanded: Bool
     @AppStorage(NativePanelKey.accounts.rawValue) private var panelAccounts = "{}"
+    @AppStorage private var quotaStyle: String
     @Namespace private var agentChips
     @Namespace private var serverChips
     private var usageDashboard: Dashboard { compact ? model.panelDashboard : activePage == "analysis" ? model.dashboard : model.overviewDashboard }
@@ -221,6 +222,7 @@ struct RootView: View, Equatable {
         _trendExpanded = AppStorage(wrappedValue: false, NativePanelKey.scoped(.panelTrend, .detailTrend, compact: compact))
         _sessionsExpanded = AppStorage(wrappedValue: false, NativePanelKey.scoped(.panelSessions, .detailSessions, compact: compact))
         _costMode = AppStorage(wrappedValue: false, NativePanelKey.scoped(.panelCost, .detailCost, compact: compact))
+        _quotaStyle = AppStorage(wrappedValue: QuotaCardStyle.card.rawValue, QuotaCardStyle.storageKey(compact: compact))
     }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
@@ -448,6 +450,8 @@ struct RootView: View, Equatable {
         }
     }
     private var quotaColumns: Int { compact ? 1 : workspaceCardColumns }
+    /// Dial or two-column rings; nil keeps the account cards.
+    private var ringStyle: QuotaCardStyle? { QuotaCardStyle(rawValue: quotaStyle).flatMap { $0 == .card ? nil : $0 } }
     private func quotaAccounts(_ provider: String) -> [AgentAccount] {
         displayedQuotaAccounts.filter { CoreContract.sameAgent($0.provider, provider) }.sorted {
             (usageDashboard.quotaOrder?.firstIndex(of: $0.key) ?? Int.max) < (usageDashboard.quotaOrder?.firstIndex(of: $1.key) ?? Int.max)
@@ -473,14 +477,20 @@ struct RootView: View, Equatable {
             HStack {
                 Text(L("账户额度")).font(compact ? AppFont.section : AppFont.title)
                 RefreshIndicator(model: model, key: "quotas")
+                if ringStyle != nil { QuotaRingLegend().padding(.leading, 4) }
                 Spacer()
+                QuotaStylePicker(selection: $quotaStyle)
                 Button { model.showQuotaOrder?() } label: { Image(systemName: "arrow.up.arrow.down") }.help(L("调整账户顺序")).accessibilityLabel(L("调整账户顺序"))
                 QuotaRefreshButton(model: model)
             }
-            QuotaGridLayout(columns: quotaColumns) {
-                ForEach(quotaProviders, id: \.self) { provider in
-                    quotaGroup(provider).frame(maxWidth: .infinity, alignment: .topLeading)
-                        .layoutValue(key: QuotaFullWidth.self, value: quotaAccounts(provider).count > 1)
+            if let ringStyle {
+                QuotaRingSection(model: model, style: ringStyle, compact: compact, accounts: quotaProviders.flatMap(quotaAccounts), quotas: displayedQuotas)
+            } else {
+                QuotaGridLayout(columns: quotaColumns) {
+                    ForEach(quotaProviders, id: \.self) { provider in
+                        quotaGroup(provider).frame(maxWidth: .infinity, alignment: .topLeading)
+                            .layoutValue(key: QuotaFullWidth.self, value: quotaAccounts(provider).count > 1)
+                    }
                 }
             }
             if displayedQuotaAccounts.isEmpty && onlyFreeQuotaHidden {
@@ -1192,20 +1202,21 @@ private struct QuotaFailureList: View {
     }
 }
 
-private struct AccountObservedQuota: View {
+struct AccountObservedQuota: View {
     @SurfaceModel var model: AppModel
     @ObservedObject var status: AccountStatusProjection
     let quota: Quota
     var compact = false
     var defaultExpanded = false
-    init(model: AppModel, quota: Quota, compact: Bool = false, defaultExpanded: Bool = false) {
-        _model = SurfaceModel(wrappedValue: model); self.quota = quota; self.compact = compact; self.defaultExpanded = defaultExpanded
+    var collapsible = true
+    init(model: AppModel, quota: Quota, compact: Bool = false, defaultExpanded: Bool = false, collapsible: Bool = true) {
+        _model = SurfaceModel(wrappedValue: model); self.quota = quota; self.compact = compact; self.defaultExpanded = defaultExpanded; self.collapsible = collapsible
         status = model.accountStatusStore.projection(quota.id)
     }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
-        QuotaCard(quota: quota, compact: compact, collapsible: true, defaultExpanded: defaultExpanded,
+        QuotaCard(quota: quota, compact: compact, collapsible: collapsible, defaultExpanded: defaultExpanded,
             estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id },
             deviceCounts: model.accountDeviceCounts(quota.id),
             onSwitch: model.canSwitchAccount(quota.id) ? { model.showAccountSwitch?(quota.id) } : nil,
@@ -1974,7 +1985,7 @@ private struct SessionStrip: View {
 }
 
 
-private struct AccountCardActions: ViewModifier {
+struct AccountCardActions: ViewModifier {
     @SurfaceModel var model: AppModel
     let account: AgentAccount
     @State private var deleting = false

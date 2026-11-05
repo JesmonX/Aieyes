@@ -1543,6 +1543,24 @@ impl Store {
             "sources":dashboard.sources,"priceUpdatedAt":dashboard.price_updated_at}),
         )
     }
+    /// The first shown account's quota ring for the tray icon, in quota order.
+    pub fn menu_quota_ring(&self) -> Result<Option<crate::quota_ring::MenuRing>> {
+        let settings = self.settings()?;
+        if !settings.menu_quota_ring.enabled {
+            return Ok(None);
+        }
+        let mut dashboard = Dashboard::default();
+        let filter = Filter {
+            estimate_history: Some("display".into()),
+            ..Default::default()
+        };
+        self.fill_dashboard_status(&mut dashboard, &filter, &settings, false)?;
+        Ok(crate::quota_ring::menu_ring(
+            &settings,
+            &dashboard.quotas,
+            now(),
+        ))
+    }
     fn fill_dashboard_status(
         &self,
         d: &mut Dashboard,

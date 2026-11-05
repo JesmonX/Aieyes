@@ -585,3 +585,27 @@ test('memory summary prefers native used memory and supports legacy Linux sample
   assert.match(render({total:1024, available:768}), /25% 256\/1024/);
   assert.match(render({total:1024, available:768, used:0}), /0% 0\/1024/);
 });
+test('quota rings pick windows, rings and compact times like quota_ring.rs', () => {
+  const context = {};vm.runInNewContext(readFileSync(new URL('../apps/desktop/web/quota-rings.js', import.meta.url), 'utf8'), context);
+  const rings = context.AieyesQuotaRings,w = (name, used, minutes, reset, extra = {}) => ({ name, usedPercent: used, windowMinutes: minutes, resetsAt: reset, ...extra });
+  const duo = rings.ring({ provider: 'kimi', windows: [w('月度', 12, 43200, 9000), w('7d', 42, 10080, 4000), w('5h', 35, 300, 2000)] });
+  assert.equal(duo.kind, 'duo');assert.deepEqual([duo.top.remaining, duo.bottom.remaining, duo.top.resetsAt], [65, 58, 2000]);
+  const pair = rings.ring({ provider: 'x', windows: [w('月', 10, 43200, null), w('日', 20, 1440, null)] });
+  assert.deepEqual([pair.kind, pair.top.windowMinutes, pair.bottom.windowMinutes], ['duo', 1440, 43200]);
+  const single = rings.ring({ provider: 'cursor', windows: [w('Cursor', 36, null, 10), w('其他', 12, null, null)] });
+  assert.deepEqual([single.kind, single.top.remaining], ['single', 64]);
+  const agy = { provider: 'antigravity', accountId: 'a', name: 'A', windows: [w('Claude · 5h', 28, 300, null, { groupName: 'Claude' }), w('Claude · 7d', 28, 10080, null, { groupName: 'Claude' }), w('Gemini · 5h', 65, 300, null, { groupName: 'Gemini' })] };
+  assert.equal(rings.ring(agy).top.remaining, 72);
+  assert.deepEqual(JSON.parse(JSON.stringify(rings.models(agy).map(m => [m.id, m.name, m.ring.kind]))), [['antigravity:a#0', 'Claude', 'duo'], ['antigravity:a#1', 'Gemini', 'single']]);
+  assert.deepEqual(JSON.parse(JSON.stringify(rings.ring({ provider: 'deepseek', windows: [], balances: [{ currency: 'CNY', total: '38.20' }], isAvailable: false }))), { kind: 'coin', amount: '¥38.20', low: true });
+  assert.equal(rings.ring({ provider: 'copilot', windows: [], meters: [{ id: 'p', used: 75, total: 300, unit: 'requests' }] }).top.remaining, 75);
+  assert.equal(rings.ring({ provider: 'x', windows: [] }).kind, 'empty');
+  assert.equal(rings.models({ provider: 'x', accountId: 'e', windows: [], error: 'boom' })[0].ring.kind, 'error');
+  for (const [minutes, text] of [[1, '1m'], [47, '47m'], [60, '1h'], [133, '2h13m'], [599, '9h59m'], [840, '14h'], [1440, '1d'], [1740, '1d5h'], [4319, '3d'], [4560, '3d'], [8640, '6d']]) assert.equal(rings.compactMinutes(minutes), text, String(minutes));
+  const now = 1000000;
+  assert.equal(rings.resetText({ resetsAt: now + 133 * 60, windowMinutes: 300, unused: false }, now), '2h13m');
+  assert.equal(rings.resetText({ resetsAt: null, windowMinutes: 10080, unused: true }, now), '7d');
+  assert.equal(rings.resetText({ resetsAt: now - 5, windowMinutes: null, unused: false }, now), '…');
+  assert.equal(rings.resetText({ resetsAt: null, windowMinutes: null, unused: false }, now), '—');
+  assert.deepEqual([rings.level(9.9), rings.level(10), rings.level(30), rings.level(30.1)], ['danger', 'warn', 'warn', 'ok']);
+});

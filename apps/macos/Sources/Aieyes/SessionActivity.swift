@@ -120,6 +120,7 @@ final class MenuActivityImage: NSView {
 }
 struct MenuStatusSnapshot: Equatable {
     var phase: SessionPhase?, text = "", animationEnabled = true
+    var ring: MenuRingSnapshot?
 }
 struct SessionStripSnapshot: Equatable {
     var sessions: [LiveSession] = []
@@ -147,7 +148,8 @@ struct SessionStripSnapshot: Equatable {
     private var subscriptions = Set<AnyCancellable>()
     private var pending = false
     private func refresh(_ model: AppModel) {
-        let value = MenuStatusSnapshot(phase: model.sessionPhase, text: model.menuText, animationEnabled: !model.installingUpdate)
+        let value = MenuStatusSnapshot(phase: model.sessionPhase, text: model.menuText, animationEnabled: !model.installingUpdate,
+            ring: MenuRingSnapshot.make(settings: model.settings, quotas: model.menuDashboard.quotas))
         if snapshot != value { snapshot = value }
     }
     private func schedule(_ model: AppModel) {
@@ -159,6 +161,8 @@ struct SessionStripSnapshot: Equatable {
     init(model: AppModel) {
         model.objectWillChange.sink { [weak self, weak model] _ in if let model { self?.schedule(model) } }.store(in: &subscriptions)
         model.live.objectWillChange.sink { [weak self, weak model] _ in if let model { self?.schedule(model) } }.store(in: &subscriptions)
+        // Relative reset times beside the ring keep counting down between model updates.
+        Timer.publish(every: 30, on: .main, in: .common).autoconnect().sink { [weak self, weak model] _ in if let model { self?.schedule(model) } }.store(in: &subscriptions)
         refresh(model)
     }
 }
@@ -247,8 +251,11 @@ struct MenuActivityLabel: View {
         let _ = interfaceLanguage;
         let value = status.snapshot
         HStack(spacing: 5) {
-            if value.phase == nil || value.phase == .idle { BrandMark(template: true).frame(width: 22, height: 22) }
-            else { MenuActivityIndicator(phase: value.phase, enabled: value.animationEnabled).frame(width: 22, height: 22) }
+            MenuRingIcon(ring: value.ring) {
+                if value.phase == nil || value.phase == .idle { BrandMark(template: true) }
+                else { MenuActivityIndicator(phase: value.phase, enabled: value.animationEnabled) }
+            }
+            if let label = value.ring?.label, !label.isEmpty { Text(label).monospacedDigit() }
             if !value.text.isEmpty { Text(value.text).monospacedDigit() }
         }.font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium)).padding(.horizontal, 5)
     }

@@ -1,0 +1,100 @@
+@layer components {
+/* Quota rings (quota-rings.js): dial and two-column tiles beside the account cards. Healthy arcs use the
+   accent like the cards' bars; 30% or less warns and under 10% is danger. Main window sizes are the
+   default, the panel overrides them. */
+.quota-style-switch { gap:1px; padding:1px; }
+.quota-style-switch > button { width:28px; min-height:0; height:22px; padding:0; color:var(--muted); }
+.quota-style-switch > button[aria-pressed=true] { color:var(--control-mark); }
+.quota-style-switch svg { display:block; width:14px; height:14px; }
+
+.quota-rings { display:grid; gap:8px 4px; grid-auto-flow:dense; align-items:start; min-width:0; }
+.quota-rings[data-style=dial] { grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); }
+.quota-rings[data-style=tile] { grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:8px; }
+.panel-body .quota-rings[data-style=tile] { grid-template-columns:repeat(2,minmax(0,1fr)); }
+/* The open account's full card spans the row after its tile; dense flow back-fills the tile's row. */
+.quota-rings > [data-ring-detail] { grid-column:1 / -1; margin:0; background:color-mix(in srgb,var(--category) 8%,var(--card-fill)); border:1px solid color-mix(in srgb,var(--category) 26%,var(--card-border)); }
+.quota-rings > [data-ring-detail] .quota-disclosure > summary { cursor:pointer; }
+
+.quota-tile {
+  --provider-mark-size:14px;
+  display:flex; flex-direction:column; align-items:center; justify-content:flex-start; gap:4px;
+  width:100%; min-width:0; min-height:0; margin:0; padding:4px 2px;
+  border:0; border-radius:var(--radius-card); background:transparent; box-shadow:none;
+  color:var(--ink); font-size:var(--font-caption); line-height:16px; font-weight:var(--weight-regular);
+  text-align:center; white-space:normal; font-variant-numeric:tabular-nums;
+}
+button.quota-tile:where(:enabled):hover { background-color:var(--control-hover); }
+button.quota-tile:where(:enabled):active { background-color:var(--control-pressed); }
+.quota-tile[aria-expanded=true] { background-color:var(--soft); }
+.quota-tile:focus-visible { outline-offset:-2px; }
+.quota-tile[data-placeholder] { cursor:default; }
+.quota-tile[data-style=tile] {
+  display:grid; grid-template-columns:minmax(0,1fr); align-content:start; justify-content:stretch; align-items:stretch; justify-items:stretch; gap:4px; padding:7px 10px;
+  border:1px solid color-mix(in srgb,var(--category) 26%,var(--card-border));
+  background:color-mix(in srgb,var(--category) 8%,var(--card-fill)); text-align:start;
+}
+.quota-tile[data-style=tile][data-placeholder] { border-style:dashed; }
+button.quota-tile[data-style=tile]:where(:enabled):hover { background-color:color-mix(in srgb,var(--category) 8%,var(--control-hover)); }
+.quota-tile[data-style=tile][aria-expanded=true] { background-color:color-mix(in srgb,var(--accent) 10%,var(--card-fill)); border-color:color-mix(in srgb,var(--accent) 40%,var(--card-border)); }
+
+/* Ring art */
+.ring { position:relative; display:inline-block; flex:none; width:var(--ring-size,72px); height:var(--ring-size,72px); line-height:0; }
+.ring-art { display:block; width:var(--ring-size,72px); height:var(--ring-size,72px); overflow:visible; }
+.ring-center { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:5px; line-height:1; min-width:0; }
+.ring[data-stale] { opacity:.55; }
+.ring-track { fill:none; stroke:color-mix(in srgb,var(--ink) 12%,transparent); stroke-linecap:round; }
+.ring-fill { fill:none; stroke:var(--accent); stroke-linecap:round; }
+.ring-fill[data-level=warn] { stroke:var(--resource-warn); }
+.ring-fill[data-level=danger] { stroke:var(--resource-high); }
+.ring-coin { fill:color-mix(in srgb,var(--accent) 16%,transparent); }
+.ring-rim { fill:none; stroke:color-mix(in srgb,var(--accent) 45%,transparent); }
+.ring[data-low] .ring-coin { fill:color-mix(in srgb,var(--resource-high) 20%,transparent); }
+.ring[data-low] .ring-rim { stroke:color-mix(in srgb,var(--resource-high) 60%,transparent); }
+.ring-dots { fill:none; stroke:var(--faint); stroke-linecap:round; }
+.ring-glyph { flex:none; width:12px; height:12px; margin-right:1px; vertical-align:-2px; }
+.quota-tile [data-level=warn]:not(.ring-fill) { color:var(--resource-warn); }
+.quota-tile [data-level=danger]:not(.ring-fill) { color:var(--resource-high); }
+.ring-bang { font-size:var(--font-section); line-height:1; font-weight:var(--weight-bold); color:var(--resource-high); }
+
+/* B · dial: reset times inside the ring, remaining shares on hover or focus */
+.quota-tile[data-style=dial] .ring-value { display:flex; align-items:center; font-size:var(--font-secondary); line-height:17px; font-weight:var(--weight-strong); white-space:nowrap; }
+.panel-body .quota-tile[data-style=dial] .ring-value { font-size:var(--font-entry); line-height:15px; }
+.quota-tile[data-style=dial] .ring-sub { color:var(--muted); font-weight:var(--weight-medium); }
+.ring-divider { display:block; width:22px; height:1px; margin:3px 0; background:var(--border); }
+.ring-swap-time { display:inline-flex; align-items:center; }
+.ring-swap-pct { display:none; }
+button.quota-tile:is(:hover,:focus-visible) .ring-swap-pct { display:inline; }
+button.quota-tile:is(:hover,:focus-visible) .ring-swap-time { display:none; }
+.ring-amount { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--font-entry); line-height:16px; font-weight:var(--weight-strong); }
+.tile-name { display:flex; align-items:center; justify-content:center; gap:4px; max-width:100%; min-width:0; font-size:var(--font-caption); line-height:16px; }
+.tile-name > span:last-child { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.quota-tile[data-style=dial] .tile-extras { display:flex; justify-content:center; gap:6px; max-width:100%; overflow:hidden; white-space:nowrap; color:var(--faint); font-size:var(--font-caption); line-height:16px; }
+.quota-tile[data-style=dial] .tile-extras > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+
+/* E · two-column tile: remaining inside, reset times, then the extras */
+.tile-head { display:flex; align-items:center; gap:5px; min-width:0; height:16px; }
+.tile-head-name { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:var(--font-entry); font-weight:var(--weight-medium); }
+.tile-plan { flex:none; margin-left:auto; padding-left:4px; color:var(--faint); font-size:var(--font-caption); }
+.tile-body { display:grid; grid-template-columns:auto auto minmax(0,1fr); align-items:center; column-gap:10px; min-width:0; }
+.ring-num { display:block; font-size:var(--font-entry); line-height:17px; font-weight:var(--weight-strong); }
+.panel-body .ring-num { font-size:var(--font-caption); line-height:15px; }
+.ring-center .provider-mark { --provider-mark-size:calc(var(--ring-size,48px) / 2); }
+.tile-times { display:grid; gap:3px; min-width:0; font-size:var(--font-entry); line-height:18px; font-weight:var(--weight-medium); }
+.tile-time { display:flex; align-items:center; white-space:nowrap; min-width:0; }
+.tile-amount { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.tile-sub { color:var(--faint); font-size:var(--font-caption); font-weight:var(--weight-regular); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.quota-tile[data-style=tile] .tile-extras { display:grid; justify-items:end; gap:3px; min-width:0; overflow:hidden; white-space:nowrap; color:var(--faint); font-size:var(--font-caption); line-height:18px; }
+.quota-tile[data-style=tile] .tile-extras > span { display:flex; align-items:center; max-width:100%; min-width:0; overflow:hidden; }
+}
+
+@layer overrides {
+@media (forced-colors:active) {
+  .ring-art { forced-color-adjust:none; }
+  .ring-track,.ring-dots { stroke:GrayText; }
+  .ring-fill,.ring-rim { stroke:CanvasText; }
+  .ring-coin { fill:Canvas; }
+  .quota-tile[data-style=tile],.quota-rings > [data-ring-detail] { background:Canvas; border-color:CanvasText; }
+  .quota-tile[aria-expanded=true] { outline:2px solid Highlight; outline-offset:-2px; }
+  .ring-divider { background:CanvasText; }
+}
+}

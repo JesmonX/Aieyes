@@ -179,7 +179,7 @@ extension AppModel {
                 settingsValidationField = nil
                 var next = settings
                 next.appearance = settingsDraft.appearance; next.proxy = settingsDraft.proxy
-                next.proxyTestUrls = settingsDraft.proxyTestUrls; next.menuMetric = settingsDraft.menuMetric
+                next.proxyTestUrls = settingsDraft.proxyTestUrls; next.menuMetric = settingsDraft.menuMetric; next.menuQuotaRing = settingsDraft.menuQuotaRing
                 next.quotaResetNotifications = settingsDraft.quotaResetNotifications
                 next.historyShowDeletedAccounts = settingsDraft.historyShowDeletedAccounts
                 next.preciseCounting = settingsDraft.preciseCounting

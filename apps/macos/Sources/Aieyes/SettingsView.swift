@@ -23,6 +23,24 @@ struct SettingsView: View {
     @State private var priceEditor: ModelPrice?
     @AppStorage("aieyes.pet.enabled") private var petEnabled = true
     @AppStorage("aieyes.pet.hideInFullscreen") private var hidePetInFullscreen = true
+    @AppStorage(NativePanelKey.panelQuotaStyle.rawValue) private var panelQuotaStyle = QuotaCardStyle.card.rawValue
+    @AppStorage(NativePanelKey.detailQuotaStyle.rawValue) private var detailQuotaStyle = QuotaCardStyle.card.rawValue
+    private func menuRingBinding(_ key: WritableKeyPath<MenuQuotaRing, Bool>) -> Binding<Bool> {
+        Binding(get: { (model.settingsDraft.menuQuotaRing ?? MenuQuotaRing())[keyPath: key] },
+                set: { var ring = model.settingsDraft.menuQuotaRing ?? MenuQuotaRing(); ring[keyPath: key] = $0; model.settingsDraft.menuQuotaRing = ring })
+    }
+    /// Two slots for the labels beside the menu ring; clearing the first moves the second up.
+    private func menuRingValue(_ slot: Int) -> Binding<String> {
+        Binding(get: { let values = (model.settingsDraft.menuQuotaRing ?? MenuQuotaRing()).values; return slot < values.count ? values[slot] : "" },
+                set: { value in
+                    var ring = model.settingsDraft.menuQuotaRing ?? MenuQuotaRing()
+                    var values = ring.values + Array(repeating: "", count: max(0, 2 - ring.values.count))
+                    values[slot] = value
+                    if !value.isEmpty, let other = values.indices.first(where: { $0 != slot && values[$0] == value }) { values[other] = "" }
+                    ring.values = values.filter { !$0.isEmpty }
+                    model.settingsDraft.menuQuotaRing = ring
+                })
+    }
     @State private var removal: RemovalRequest?
     @State private var confirmRescan = false
     @State private var importSSH = false
@@ -302,6 +320,10 @@ struct SettingsView: View {
                     Text(L("跟随系统")).tag("system"); Text(L("靛蓝")).tag("indigo"); Text(L("蓝")).tag("blue"); Text(L("青绿")).tag("teal"); Text(L("紫")).tag("purple")
                 }
             }
+            Section(L("账户额度")) {
+                Picker(L("面板额度样式"), selection: $panelQuotaStyle) { ForEach(QuotaCardStyle.allCases) { Text($0.title).tag($0.rawValue) } }
+                Picker(L("主窗口额度样式"), selection: $detailQuotaStyle) { ForEach(QuotaCardStyle.allCases) { Text($0.title).tag($0.rawValue) } }
+            }
             Section(L("图表")) {
                 Picker(L("图表配色"), selection: Binding(get: { model.settingsDraft.appearance?.chartPalette ?? "classic" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.chartPalette = value; model.settingsDraft.appearance = appearance })) {
                     ForEach(Palette.chartPresets, id: \.id) { Text(L($0.name)).tag($0.id) }
@@ -323,6 +345,16 @@ struct SettingsView: View {
             Section(L("菜单栏")) {
                 HelpNote(title: L("菜单栏"), text: L("菜单栏显示今日全部数据，独立于页面筛选。"))
                 Picker(L("显示内容"), selection: $model.settingsDraft.menuMetric) { Text(L("图标")).tag("icon"); Text(L("今日全部 Token")).tag("tokens"); Text(L("首个账户剩余额度")).tag("quota"); Text(L("首台服务器 CPU")).tag("cpu") }
+                Toggle(L("菜单栏图标显示额度圆环"), isOn: menuRingBinding(\.enabled))
+                if model.settingsDraft.menuQuotaRing?.enabled ?? true {
+                    ForEach(0..<2, id: \.self) { slot in
+                        Picker(slot == 0 ? L("圆环旁第一个值") : L("圆环旁第二个值"), selection: menuRingValue(slot)) {
+                            Text(L("不显示")).tag("")
+                            ForEach(MenuQuotaRing.options, id: \.self) { Text(MenuQuotaRing.optionTitle($0)).tag($0) }
+                        }
+                    }
+                    Text(L("圆环取首个账户：上半圈 5h，下半圈 7d。")).font(AppFont.secondary).foregroundStyle(.secondary)
+                }
             }
             }
             if model.generalPage == "refresh" {

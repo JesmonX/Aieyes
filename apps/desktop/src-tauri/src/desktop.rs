@@ -1,4 +1,5 @@
 use aieyes_core::{
+    quota_ring::{MenuRing, Ring},
     sessions::{Phase, SessionMonitor, Snapshot},
     store::Store,
 };
@@ -102,6 +103,9 @@ struct MainWindowPreferences {
 }
 struct ShellState {
     accent: String,
+    /// The first account's quota ring around the tray icon and its tooltip label.
+    quota_ring: Option<RingShape>,
+    quota_label: String,
     preferences: Preferences,
     snapshot: Snapshot,
     pet_asset: Value,
@@ -618,6 +622,8 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         path,
         state: Mutex::new(ShellState {
             accent: "system".into(),
+            quota_ring: None,
+            quota_label: String::new(),
             hidden: preferences.hidden,
             preferences,
             snapshot: Snapshot::default(),
@@ -755,6 +761,8 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         let mut tick = 0u32;
         let mut pet_revision = None;
         let mut pet_asset = Value::Null;
+        let mut ring_revision = None;
+        let mut quota_ring = None;
         loop {
             let preferences = store
                 .settings()
@@ -794,6 +802,22 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                     .ok();
             }
             let pet_asset = pet_asset.clone();
+            // The tray ring follows quota and settings writes; its reset label is relative time.
+            let revision = store
+                .db
+                .query_row(
+                    "SELECT CAST((SELECT value FROM kv WHERE key='runtime.revision:quotas') AS INTEGER),CAST((SELECT value FROM kv WHERE key='runtime.revision:settings') AS INTEGER)",
+                    [],
+                    |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
+                )
+                .ok();
+            if (revision != ring_revision || tick.is_multiple_of(30))
+                && let Ok(ring) = store.menu_quota_ring()
+            {
+                quota_ring = ring;
+                ring_revision = revision;
+            }
+            let quota_ring = quota_ring.clone();
             let supported = if tick.is_multiple_of(15) {
                 Some(tray_supported())
             } else {
@@ -814,7 +838,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                         .sampling
                         .store(sampling, Ordering::Relaxed);
                     crate::session_sounds::update(&app, &snapshot, &preferences);
-                    update(&app, snapshot, pet_asset, supported);
+                    update(&app, snapshot, pet_asset, supported, quota_ring);
                     refresh_menu(&app);
                 })
                 .is_err()
@@ -1474,6 +1498,17 @@ fn tray_set_visible(app: &AppHandle, visible: bool) {
 
 fn tray_set_summary(app: &AppHandle, summary: String) {
     let summary = crate::localization::text(&summary);
+    let label = app
+        .state::<Desktop>()
+        .state
+        .lock()
+        .map(|state| state.quota_label.clone())
+        .unwrap_or_default();
+    let summary = if label.is_empty() {
+        summary
+    } else {
+        format!("{summary} · {label}")
+    };
     #[cfg(target_os = "linux")]
     {
         let desktop = app.state::<Desktop>();
@@ -1492,14 +1527,26 @@ fn tray_set_summary(app: &AppHandle, summary: String) {
     }
 }
 
+fn main_dark(app: &AppHandle) -> bool {
+    app.get_webview_window("main")
+        .and_then(|w| w.theme().ok())
+        .is_some_and(|t| t == tauri::Theme::Dark)
+}
+
 fn tray_set_icon(app: &AppHandle, phase: Option<Phase>, dark: bool) {
+    let ring = app.state::<Desktop>().state.lock().ok().and_then(|state| {
+        state.quota_ring.map(|shape| TrayRing {
+            shape,
+            accent: state.accent.clone(),
+        })
+    });
     #[cfg(target_os = "linux")]
     {
         let desktop = app.state::<Desktop>();
         if let Ok(tray) = desktop._tray.lock()
             && let Some(tray) = &*tray
         {
-            tray.set_icon(phase, dark);
+            tray.set_icon(phase, dark, ring);
         }
     }
     #[cfg(not(target_os = "linux"))]
@@ -1507,11 +1554,41 @@ fn tray_set_icon(app: &AppHandle, phase: Option<Phase>, dark: bool) {
         #[cfg(target_os = "windows")]
         let image = {
             let _ = dark;
-            windows_tray_icon(phase)
+            windows_tray_icon(phase, ring.as_ref())
         };
         #[cfg(not(target_os = "windows"))]
-        let image = icon(phase, dark);
+        let image = icon(phase, dark, ring.as_ref());
         let _ = tray.set_icon(Some(image));
+    }
+}
+
+/// Stores the tray ring and redraws only when its drawn shape or its label changes.
+fn set_quota_ring(app: &AppHandle, ring: Option<&MenuRing>) {
+    let shape = ring.and_then(|ring| RingShape::new(&ring.ring));
+    let label = ring
+        .filter(|_| shape.is_some())
+        .map(|ring| ring.label.clone())
+        .unwrap_or_default();
+    let Some((shape_changed, label_changed, phase, summary)) =
+        app.state::<Desktop>().state.lock().ok().map(|mut state| {
+            let changes = (state.quota_ring != shape, state.quota_label != label);
+            state.quota_ring = shape;
+            state.quota_label = label;
+            (
+                changes.0,
+                changes.1,
+                state.snapshot.phase(),
+                state.snapshot.summary(),
+            )
+        })
+    else {
+        return;
+    };
+    if shape_changed {
+        tray_set_icon(app, phase, main_dark(app));
+    }
+    if label_changed {
+        tray_set_summary(app, summary);
     }
 }
 
@@ -1627,9 +1704,9 @@ fn create_tray(app: &AppHandle, desktop: &Desktop) -> Result<(), String> {
         let tray = TrayIconBuilder::with_id(TRAY_ID)
             .icon({
                 #[cfg(target_os = "windows")]
-                let image = windows_tray_icon(None);
+                let image = windows_tray_icon(None, None);
                 #[cfg(not(target_os = "windows"))]
-                let image = icon(None, false);
+                let image = icon(None, false, None);
                 image
             })
             .tooltip("Aieyes")
@@ -1655,7 +1732,13 @@ fn semantic(snapshot: &Snapshot) -> Value {
     value
 }
 
-fn update(app: &AppHandle, snapshot: Snapshot, pet_asset: Value, supported: Option<bool>) {
+fn update(
+    app: &AppHandle,
+    snapshot: Snapshot,
+    pet_asset: Value,
+    supported: Option<bool>,
+    quota_ring: Option<MenuRing>,
+) {
     let desktop = app.state::<Desktop>();
     let mut new_tray = false;
     let previous_tray = desktop.tray_available.load(Ordering::Relaxed);
@@ -1676,6 +1759,7 @@ fn update(app: &AppHandle, snapshot: Snapshot, pet_asset: Value, supported: Opti
             );
         }
     }
+    set_quota_ring(app, quota_ring.as_ref());
     let unchanged = desktop.state.lock().is_ok_and(|state| {
         state.pet_asset == pet_asset && semantic(&state.snapshot) == semantic(&snapshot)
     });
@@ -1697,13 +1781,7 @@ fn update(app: &AppHandle, snapshot: Snapshot, pet_asset: Value, supported: Opti
         tray_set_summary(app, summary.clone());
     }
     if phase_changed || new_tray {
-        tray_set_icon(
-            app,
-            snapshot.phase(),
-            app.get_webview_window("main")
-                .and_then(|w| w.theme().ok())
-                .is_some_and(|t| t == tauri::Theme::Dark),
-        );
+        tray_set_icon(app, snapshot.phase(), main_dark(app));
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     let previous_size = entry_size(app);
@@ -1816,11 +1894,13 @@ pub fn desktop_appearance(
     if !["system", "indigo", "blue", "teal", "purple"].contains(&accent.as_str()) {
         return Err("无效的强调色".into());
     }
-    app.state::<Desktop>()
-        .state
-        .lock()
-        .map_err(|_| "显示状态不可用")?
-        .accent = accent;
+    let accent_changed = {
+        let desktop = app.state::<Desktop>();
+        let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+        let changed = state.accent != accent;
+        state.accent = accent;
+        changed
+    };
     #[cfg(target_os = "linux")]
     let theme = {
         use gtk::prelude::*;
@@ -1861,6 +1941,17 @@ pub fn desktop_appearance(
         if window.label() == "floating" {
             let _ = window.set_title(crate::localization::label("Aieyes 面板"));
         }
+    }
+    // The tray ring's healthy arcs use the accent.
+    let (phase, ringed) = app
+        .state::<Desktop>()
+        .state
+        .lock()
+        .map(|state| (state.snapshot.phase(), state.quota_ring.is_some()))
+        .unwrap_or((None, false));
+    if accent_changed && ringed {
+        let dark = theme.map_or_else(|| main_dark(&app), |theme| theme == tauri::Theme::Dark);
+        tray_set_icon(&app, phase, dark);
     }
     #[cfg(target_os = "windows")]
     refresh_materials(&app);
@@ -2940,14 +3031,65 @@ pub fn save(app: &AppHandle) {
         state.dirty = false;
     }
 }
+/// One half of the tray ring: the remaining share rounded to whole percent, and its level.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct RingShare {
+    remaining: u8,
+    level: &'static str,
+}
+impl RingShare {
+    fn new(arc: &aieyes_core::quota_ring::Arc) -> Self {
+        Self {
+            remaining: arc.remaining.clamp(0.0, 100.0).round() as u8,
+            level: aieyes_core::quota_ring::level(arc.remaining),
+        }
+    }
+}
+/// What the tray ring draws. Readings that round to the same picture compare equal, so the
+/// icon is redrawn only when the drawing changes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum RingShape {
+    Duo { top: RingShare, bottom: RingShare },
+    Single(RingShare),
+    Coin { low: bool },
+}
+impl RingShape {
+    fn new(ring: &Ring) -> Option<Self> {
+        match ring {
+            Ring::Duo { top, bottom } => Some(Self::Duo {
+                top: RingShare::new(top),
+                bottom: RingShare::new(bottom),
+            }),
+            Ring::Single { top } => Some(Self::Single(RingShare::new(top))),
+            Ring::Coin { low, .. } => Some(Self::Coin { low: *low }),
+            Ring::Empty => None,
+        }
+    }
+}
+/// A ring and the accent its healthy arcs use.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TrayRing {
+    shape: RingShape,
+    accent: String,
+}
 // Windows draws its tray icon at the notification area's size (windows_tray_icon).
 #[cfg(any(not(target_os = "windows"), test))]
-pub(crate) fn icon(phase: Option<Phase>, dark: bool) -> tauri::image::Image<'static> {
-    badged_icon(phase, dark, 32)
+pub(crate) fn icon(
+    phase: Option<Phase>,
+    dark: bool,
+    ring: Option<&TrayRing>,
+) -> tauri::image::Image<'static> {
+    badged_icon(phase, dark, 32, ring)
 }
 /// The 32 px brand at `size` physical pixels with the live state as a separate top-right badge (never
-/// a recoloring of the brand). The badge keeps a 3.5 px minimum radius so it reads at 16 px.
-fn badged_icon(phase: Option<Phase>, dark: bool, size: usize) -> tauri::image::Image<'static> {
+/// a recoloring of the brand). The badge keeps a 3.5 px minimum radius so it reads at 16 px. With a
+/// quota ring the brand shrinks inside it.
+fn badged_icon(
+    phase: Option<Phase>,
+    dark: bool,
+    size: usize,
+    quota_ring: Option<&TrayRing>,
+) -> tauri::image::Image<'static> {
     let key = match phase {
         Some(Phase::Working) => "working",
         Some(Phase::Thinking) => "thinking",
@@ -2966,7 +3108,10 @@ fn badged_icon(phase: Option<Phase>, dark: bool, size: usize) -> tauri::image::I
     } else {
         [20, 30, 50, 255]
     };
-    let mut rgba = scale_brand(include_bytes!("../icons/brand.rgba"), 32, size);
+    let mut rgba = match quota_ring {
+        Some(quota_ring) => ringed_brand(quota_ring, dark, size),
+        None => scale_brand(include_bytes!("../icons/brand.rgba"), 32, size),
+    };
     if phase.is_some() {
         let radius = (size as f64 * 5.0 / 32.0).max(3.5);
         let (cx, cy) = (size as f64 - radius - 1.5, radius + 0.5);
@@ -2985,6 +3130,184 @@ fn badged_icon(phase: Option<Phase>, dark: bool, size: usize) -> tauri::image::I
         }
     }
     tauri::image::Image::new_owned(rgba, size as u32, size as u32)
+}
+/// Healthy arcs use the accent; 30% or less warns and under 10% is danger (the cards' colours).
+fn ring_rgb(accent: &str, level: &str, dark: bool) -> [u8; 3] {
+    let hex: u32 = match (level, dark) {
+        ("danger", false) => 0xb83245,
+        ("danger", true) => 0xff929c,
+        ("warn", false) => 0x895712,
+        ("warn", true) => 0xe0b062,
+        (_, dark) => match (accent, dark) {
+            ("blue", false) => 0x2166be,
+            ("blue", true) => 0x8bbcff,
+            ("teal", false) => 0x16745f,
+            ("teal", true) => 0x65ceae,
+            ("purple", false) => 0x8054b7,
+            ("purple", true) => 0xccabff,
+            (_, false) => 0x5566d9,
+            (_, true) => 0xa3b3ff,
+        },
+    };
+    [(hex >> 16) as u8, (hex >> 8) as u8, hex as u8]
+}
+/// Ring stroke and the gap around it (between the halves and before the brand) at `size` px.
+fn ring_metrics(size: usize) -> (f64, f64) {
+    let size = size as f64;
+    ((size * 0.12).max(2.0), (size * 0.06).max(1.0))
+}
+/// An arc from `start`, `sweep` degrees long (negative runs counter-clockwise), with round caps.
+/// Angles are clockwise from 3 o'clock in image coordinates, so 180° is 9 o'clock and 270° is 12.
+#[derive(Clone, Copy)]
+struct RingArc {
+    start: f64,
+    sweep: f64,
+}
+impl RingArc {
+    fn covers(self, (x, y): (f64, f64), radius: f64, half: f64) -> bool {
+        let distance = x.hypot(y);
+        if self.sweep.abs() >= 360.0 {
+            return (distance - radius).abs() <= half;
+        }
+        let (from, length) = if self.sweep < 0.0 {
+            (self.start + self.sweep, -self.sweep)
+        } else {
+            (self.start, self.sweep)
+        };
+        let angle = y.atan2(x).to_degrees();
+        if (angle - from).rem_euclid(360.0) <= length {
+            return (distance - radius).abs() <= half;
+        }
+        [from, from + length].into_iter().any(|end| {
+            let (ex, ey) = (
+                radius * end.to_radians().cos(),
+                radius * end.to_radians().sin(),
+            );
+            (x - ex).hypot(y - ey) <= half
+        })
+    }
+}
+/// The quota ring at `size` px (outer diameter = icon size), brand scaled into the middle.
+/// Duo: the top half is the short window, the bottom the long one; coloured arcs are the remaining
+/// share, both growing from 9 o'clock to the right, over a grey track. 4×4 supersampled.
+fn ringed_brand(ring: &TrayRing, dark: bool, size: usize) -> Vec<u8> {
+    let (stroke, gap) = ring_metrics(size);
+    let (center, half) = (size as f64 / 2.0, stroke / 2.0);
+    let radius = center - half;
+    let track = if dark {
+        [255.0, 255.0, 255.0, 0.28]
+    } else {
+        [0.0, 0.0, 0.0, 0.20]
+    };
+    let paint = |level: &str, alpha: f64| {
+        let [r, g, b] = ring_rgb(&ring.accent, level, dark);
+        [f64::from(r), f64::from(g), f64::from(b), alpha]
+    };
+    // Layers from bottom to top; a sample takes the topmost layer that covers it.
+    type Layer = (Box<dyn Fn((f64, f64)) -> bool>, [f64; 4]);
+    let mut layers: Vec<Layer> = Vec::new();
+    let arc = move |start: f64, sweep: f64| {
+        let arc = RingArc { start, sweep };
+        Box::new(move |point: (f64, f64)| arc.covers(point, radius, half)) as Box<dyn Fn(_) -> _>
+    };
+    match ring.shape {
+        RingShape::Duo { top, bottom } => {
+            let g = (half / radius).to_degrees() + (gap / 2.0 / radius).to_degrees();
+            let span = 180.0 - 2.0 * g;
+            layers.push((arc(180.0 + g, span), track));
+            layers.push((arc(180.0 - g, -span), track));
+            if top.remaining > 0 {
+                let sweep = (span * f64::from(top.remaining) / 100.0).max(0.2);
+                layers.push((arc(180.0 + g, sweep), paint(top.level, 1.0)));
+            }
+            if bottom.remaining > 0 {
+                let sweep = (span * f64::from(bottom.remaining) / 100.0).max(0.2);
+                layers.push((arc(180.0 - g, -sweep), paint(bottom.level, 1.0)));
+            }
+        }
+        RingShape::Single(share) => {
+            layers.push((arc(270.0, 360.0), track));
+            if share.remaining > 0 {
+                let sweep = (360.0 * f64::from(share.remaining) / 100.0).max(0.2);
+                layers.push((arc(270.0, sweep), paint(share.level, 1.0)));
+            }
+        }
+        RingShape::Coin { low } => {
+            let (level, disc, rim) = if low {
+                ("danger", 0.20, 0.60)
+            } else {
+                ("ok", 0.16, 0.45)
+            };
+            let rim_radius = center - stroke * 0.8;
+            let rim_half = (stroke * 0.26).max(1.0) / 2.0;
+            layers.push((
+                Box::new(move |(x, y): (f64, f64)| x.hypot(y) <= center),
+                paint(level, disc),
+            ));
+            layers.push((
+                Box::new(move |(x, y): (f64, f64)| (x.hypot(y) - rim_radius).abs() <= rim_half),
+                paint(level, rim),
+            ));
+        }
+    }
+    const SAMPLES: usize = 4;
+    let mut rgba = vec![0; size * size * 4];
+    for y in 0..size {
+        for x in 0..size {
+            let (mut sum, mut alpha) = ([0.0; 3], 0.0);
+            for sy in 0..SAMPLES {
+                for sx in 0..SAMPLES {
+                    let point = (
+                        x as f64 + (sx as f64 + 0.5) / SAMPLES as f64 - center,
+                        y as f64 + (sy as f64 + 0.5) / SAMPLES as f64 - center,
+                    );
+                    if let Some((_, color)) = layers.iter().rev().find(|(covers, _)| covers(point))
+                    {
+                        for (channel, value) in sum.iter_mut().zip(color) {
+                            *channel += value * color[3];
+                        }
+                        alpha += color[3];
+                    }
+                }
+            }
+            let pixel = &mut rgba[(y * size + x) * 4..(y * size + x) * 4 + 4];
+            if alpha > 0.0 {
+                for (channel, value) in pixel.iter_mut().zip(sum) {
+                    *channel = (value / alpha).round() as u8;
+                }
+            }
+            pixel[3] = (alpha / (SAMPLES * SAMPLES) as f64 * 255.0).round() as u8;
+        }
+    }
+    // The brand sits inside the ring, past the gap, centred.
+    let inset = (stroke + gap).ceil() as usize;
+    let inner = size.saturating_sub(inset * 2);
+    if inner > 0 {
+        let brand = scale_brand(include_bytes!("../icons/brand.rgba"), 32, inner);
+        for y in 0..inner {
+            for x in 0..inner {
+                let source = &brand[(y * inner + x) * 4..(y * inner + x) * 4 + 4];
+                let index = ((y + inset) * size + x + inset) * 4;
+                blend_over(&mut rgba[index..index + 4], source);
+            }
+        }
+    }
+    rgba
+}
+/// Straight-alpha source-over.
+fn blend_over(target: &mut [u8], source: &[u8]) {
+    let top = f64::from(source[3]) / 255.0;
+    if top <= 0.0 {
+        return;
+    }
+    let below = f64::from(target[3]) / 255.0 * (1.0 - top);
+    let alpha = top + below;
+    for channel in 0..3 {
+        target[channel] = ((f64::from(source[channel]) * top + f64::from(target[channel]) * below)
+            / alpha)
+            .round() as u8;
+    }
+    target[3] = (alpha * 255.0).round() as u8;
 }
 /// Area-averaged resize of straight-alpha RGBA, weighting colour by alpha so edges stay clean.
 fn scale_brand(source: &[u8], from: usize, to: usize) -> Vec<u8> {
@@ -3029,13 +3352,16 @@ fn scale_brand(source: &[u8], from: usize, to: usize) -> Vec<u8> {
 /// Windows: drawn at the notification area's physical size, coloured for the taskbar's own light or
 /// dark setting (Windows 10 defaults to a dark taskbar with light apps), not the app theme.
 #[cfg(target_os = "windows")]
-fn windows_tray_icon(phase: Option<Phase>) -> tauri::image::Image<'static> {
+fn windows_tray_icon(
+    phase: Option<Phase>,
+    ring: Option<&TrayRing>,
+) -> tauri::image::Image<'static> {
     use windows::Win32::UI::{
         HiDpi::{GetDpiForSystem, GetSystemMetricsForDpi},
         WindowsAndMessaging::SM_CXSMICON,
     };
     let size = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForSystem()) }.clamp(16, 64);
-    badged_icon(phase, crate::material::taskbar_dark(), size as usize)
+    badged_icon(phase, crate::material::taskbar_dark(), size as usize, ring)
 }
 /// Taskbar theme changes arrive as WM_SETTINGCHANGE, which only the native pet window observes.
 #[cfg(target_os = "windows")]
@@ -3186,14 +3512,14 @@ mod tests {
     }
     #[test]
     fn tray_reuses_brand_pixels_and_only_overlays_the_status_badge() {
-        let brand = icon(None, false);
-        let active = icon(Some(Phase::Working), false);
+        let brand = icon(None, false, None);
+        let active = icon(Some(Phase::Working), false, None);
         assert_eq!(brand.rgba(), include_bytes!("../icons/brand.rgba"));
         assert_eq!(brand.rgba().len(), 4096);
         assert_eq!(&brand.rgba()[12 * 32 * 4..], &active.rgba()[12 * 32 * 4..]);
         assert_ne!(brand.rgba(), active.rgba());
         // At 100 % (16 px) the badge stays at least 7 px across instead of shrinking to 2 px.
-        let small = badged_icon(Some(Phase::Working), false, 16);
+        let small = badged_icon(Some(Phase::Working), false, 16, None);
         assert_eq!(small.rgba().len(), 16 * 16 * 4);
         let ink = crate::phase_colors::rgb("working", false);
         let row = &small.rgba()[4 * 16 * 4..5 * 16 * 4];
@@ -3202,11 +3528,116 @@ mod tests {
             .filter(|p| p[..3] == ink[..] || p[..3] == [20, 30, 50])
             .count();
         assert!(badge >= 7, "badge spans {badge} px at 16 px");
-        let plain = badged_icon(None, false, 16);
+        let plain = badged_icon(None, false, 16, None);
         assert!(
             plain.rgba().chunks(4).any(|p| p[3] > 200),
             "scaled brand stays opaque inside"
         );
+    }
+    fn share(remaining: u8) -> RingShare {
+        RingShare {
+            remaining,
+            level: aieyes_core::quota_ring::level(f64::from(remaining)),
+        }
+    }
+    fn tray_ring(shape: RingShape) -> TrayRing {
+        TrayRing {
+            shape,
+            accent: "indigo".into(),
+        }
+    }
+    /// The pixel on the ring's centre line at `angle` (clockwise from 3 o'clock).
+    fn ring_pixel(image: &tauri::image::Image<'_>, angle: f64) -> [u8; 4] {
+        let size = image.width() as usize;
+        let (stroke, _) = ring_metrics(size);
+        let radius = size as f64 / 2.0 - stroke / 2.0;
+        let x = (size as f64 / 2.0 + radius * angle.to_radians().cos()).floor() as usize;
+        let y = (size as f64 / 2.0 + radius * angle.to_radians().sin()).floor() as usize;
+        image.rgba()[(y * size + x) * 4..(y * size + x) * 4 + 4]
+            .try_into()
+            .unwrap()
+    }
+    #[test]
+    fn tray_ring_fills_the_remaining_share_from_the_left_over_a_track() {
+        let accent = ring_rgb("indigo", "ok", false);
+        let full_top = icon(
+            None,
+            false,
+            Some(&tray_ring(RingShape::Duo {
+                top: share(100),
+                bottom: share(0),
+            })),
+        );
+        // Top-left is coloured, bottom-left is the light theme's track (black at 20 %).
+        let top = ring_pixel(&full_top, 225.0);
+        assert_eq!((top[..3].to_vec(), top[3]), (accent.to_vec(), 255));
+        let bottom = ring_pixel(&full_top, 135.0);
+        assert_eq!(bottom[..3], [0, 0, 0]);
+        assert!((45..=56).contains(&bottom[3]), "track alpha {}", bottom[3]);
+        // The halves stay apart at 9 o'clock and the brand shrinks inside the ring.
+        assert!(ring_pixel(&full_top, 180.0)[3] < 200);
+        assert!(
+            full_top
+                .rgba()
+                .chunks(4)
+                .any(|p| p[3] > 200 && p[..3] != accent)
+        );
+        // A third of the long window: lower-left is coloured, lower-right is still track; dark uses a white track.
+        let warn = ring_rgb("indigo", "warn", true);
+        let lower = icon(
+            None,
+            true,
+            Some(&tray_ring(RingShape::Duo {
+                top: share(0),
+                bottom: share(25),
+            })),
+        );
+        assert_eq!(ring_pixel(&lower, 160.0)[..3], warn);
+        let right = ring_pixel(&lower, 30.0);
+        assert_eq!(right[..3], [255, 255, 255]);
+        assert!(
+            (65..=78).contains(&right[3]),
+            "dark track alpha {}",
+            right[3]
+        );
+        assert!(ring_pixel(&lower, 225.0)[..3] == [255, 255, 255]);
+    }
+    #[test]
+    fn tray_ring_draws_single_pools_and_coins_and_keeps_the_badge_on_top() {
+        let single = badged_icon(
+            Some(Phase::Working),
+            false,
+            32,
+            Some(&tray_ring(RingShape::Single(share(5)))),
+        );
+        // Under 10 % the arc from 12 o'clock is danger; the rest of the circle is track.
+        assert_eq!(
+            ring_pixel(&single, 272.0)[..3],
+            ring_rgb("indigo", "danger", false)
+        );
+        assert_eq!(ring_pixel(&single, 180.0)[..3], [0, 0, 0]);
+        let ink = crate::phase_colors::rgb("working", false);
+        assert!(single.rgba().chunks(4).any(|p| p[..3] == ink[..]));
+        let coin = icon(None, false, Some(&tray_ring(RingShape::Coin { low: true })));
+        let edge = ring_pixel(&coin, 135.0);
+        assert_eq!(edge[..3], ring_rgb("indigo", "danger", false));
+        assert!(
+            edge[3] > 30 && edge[3] < 200,
+            "tinted disc alpha {}",
+            edge[3]
+        );
+        // Readings that round to the same picture do not redraw.
+        let arc = |remaining| aieyes_core::quota_ring::Arc {
+            remaining,
+            resets_at: None,
+            window_minutes: None,
+            unused: false,
+        };
+        assert_eq!(
+            RingShape::new(&Ring::Single { top: arc(64.6) }),
+            RingShape::new(&Ring::Single { top: arc(64.9) })
+        );
+        assert_eq!(RingShape::new(&Ring::Empty), None);
     }
     #[test]
     fn platform_bundle_configurations_are_valid() {
