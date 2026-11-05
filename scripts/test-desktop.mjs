@@ -597,7 +597,8 @@ test('quota rings pick windows, rings and compact times like quota_ring.rs', () 
   const agy = { provider: 'antigravity', accountId: 'a', name: 'A', windows: [w('Claude · 5h', 28, 300, null, { groupName: 'Claude' }), w('Claude · 7d', 28, 10080, null, { groupName: 'Claude' }), w('Gemini · 5h', 65, 300, null, { groupName: 'Gemini' })] };
   assert.equal(rings.ring(agy).top.remaining, 72);
   assert.deepEqual(JSON.parse(JSON.stringify(rings.models(agy).map(m => [m.id, m.name, m.ring.kind]))), [['antigravity:a#0', 'Claude', 'duo'], ['antigravity:a#1', 'Gemini', 'single']]);
-  assert.deepEqual(JSON.parse(JSON.stringify(rings.ring({ provider: 'deepseek', windows: [], balances: [{ currency: 'CNY', total: '38.20' }], isAvailable: false }))), { kind: 'coin', amount: '¥38.20', low: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(rings.ring({ provider: 'deepseek', windows: [], balances: [{ currency: 'CNY', total: '38.20' }], isAvailable: false }))), { kind: 'coin', amount: '¥38.20', low: true, split: null });
+  assert.deepEqual(JSON.parse(JSON.stringify(rings.ring({ provider: 'deepseek', windows: [], balances: [{ currency: 'CNY', total: '10', granted: '2.5', toppedUp: '7.5' }] }).split)), { granted: '¥2.50', paid: '¥7.50', share: 0.25 });
   assert.equal(rings.ring({ provider: 'copilot', windows: [], meters: [{ id: 'p', used: 75, total: 300, unit: 'requests' }] }).top.remaining, 75);
   assert.equal(rings.ring({ provider: 'x', windows: [] }).kind, 'empty');
   assert.equal(rings.models({ provider: 'x', accountId: 'e', windows: [], error: 'boom' })[0].ring.kind, 'error');
