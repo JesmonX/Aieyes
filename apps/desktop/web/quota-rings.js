@@ -87,7 +87,12 @@
     }
     const low = q.isAvailable === false;
     const balance = q.balances?.[0];
-    if (balance) return { kind: 'coin', amount: currency(balance.currency) + String(balance.total ?? '').trim(), low };
+    if (balance) {
+      const granted = Number(balance.granted), paid = Number(balance.toppedUp), sum = granted + paid;
+      const split = q.provider === 'deepseek' && String(balance.granted ?? '').trim() && String(balance.toppedUp ?? '').trim() && Number.isFinite(sum) && granted > 0 && paid >= 0
+        ? { granted: currency(balance.currency) + creditNumber(granted), paid: currency(balance.currency) + creditNumber(paid), share: granted / sum } : null;
+      return { kind: 'coin', amount: currency(balance.currency) + String(balance.total ?? '').trim(), low, split };
+    }
     if (q.extraUsage) return { kind: 'coin', amount: currency(q.extraUsage.currency) + (q.extraUsage.balance ?? q.extraUsage.total), low };
     const remaining = meters.find((m) => m.remaining != null);
     if (remaining) return { kind: 'coin', amount: meterAmount(remaining.unit, Number(remaining.remaining)), low };
@@ -186,7 +191,7 @@
     }).join('; ');
     const { comma, semi } = separators(),value = m.ring,name = m.group ? m.q.name + ' · ' + m.group : m.q.name;
     const half = (a) => [[slot(a, m.group), t("剩余 {0}", percent(a.remaining))].filter(Boolean).join(' '), resetFull(a, now)].filter(Boolean).join(comma);
-    const parts = value.kind === 'duo' ? [half(value.top), half(value.bottom)] : value.kind === 'single' ? [half(value.top)] : value.kind === 'coin' ? [t("可用余额") + ' ' + value.amount] : [];
+    const parts = value.kind === 'duo' ? [half(value.top), half(value.bottom)] : value.kind === 'single' ? [half(value.top)] : value.kind === 'coin' ? [t("可用余额") + ' ' + value.amount, ...(value.split ? [t("赠送 {0}",value.split.granted),t("充值 {0}",value.split.paid)] : [])] : [];
     for (const extra of extras(m, 'dial')) parts.push(extra.text);
     return parts.length ? name + comma + parts.join(semi) : name;
   }
@@ -213,7 +218,11 @@
     const c = size / 2,r = (size - width) / 2,sw = `stroke-width="${width}"`,gap = size >= 64 ? 3 : size >= 36 ? 2.5 : 2;
     let body;
     if (value.kind === 'coin') body = `<circle class="ring-coin" cx="${c}" cy="${c}" r="${c}"/><circle class="ring-rim" cx="${c}" cy="${c}" r="${(c - width * .8).toFixed(2)}" stroke-width="${Math.max(1, width * .26).toFixed(2)}"/>`;
-    else if (value.kind === 'duo') {
+    if (value.kind === 'coin' && value.split) {
+      const share = value.split.share;
+      body = `<circle class="ring-paid" fill="none" ${sw} cx="${c}" cy="${c}" r="${r}"/>`;
+      body += share >= 1 ? `<circle class="ring-granted" fill="none" ${sw} cx="${c}" cy="${c}" r="${r}"/>` : `<path class="ring-granted" fill="none" ${sw} d="${arcPath(c,r,270,270+360*share)}"/>`;
+    } else if (value.kind === 'duo') {
       const g = deg(width / 2 / r) + deg(gap / 2 / r),span = 180 - 2 * g,top = value.top.remaining / 100,bottom = value.bottom.remaining / 100;
       body = `<path class="ring-track" ${sw} d="${arcPath(c, r, 180 + g, 360 - g)}"/><path class="ring-track" ${sw} d="${arcPath(c, r, 180 - g, g)}"/>`;
       if (top > 0) body += `<path class="ring-fill" data-level="${level(value.top.remaining)}" ${sw} d="${arcPath(c, r, 180 + g, 180 + g + span * top)}"/>`;
@@ -223,7 +232,7 @@
       body = `<circle class="ring-track" ${sw} cx="${c}" cy="${c}" r="${r}"/>`;
       if (share >= .999) body += `<circle class="ring-fill" data-level="${tone}" ${sw} cx="${c}" cy="${c}" r="${r}"/>`;
       else if (share > 0) body += `<path class="ring-fill" data-level="${tone}" ${sw} d="${arcPath(c, r, 270, 270 + 360 * share)}"/>`;
-    } else body = `<circle class="ring-dots" cx="${c}" cy="${c}" r="${r}" stroke-width="${(width * .72).toFixed(2)}" stroke-dasharray="0.01 ${(width * 1.45).toFixed(2)}"/>`;
+    } else if (value.kind !== 'coin') body = `<circle class="ring-dots" cx="${c}" cy="${c}" r="${r}" stroke-width="${(width * .72).toFixed(2)}" stroke-dasharray="0.01 ${(width * 1.45).toFixed(2)}"/>`;
     return `<svg class="ring-art" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true" focusable="false">${body}</svg>`;
   }
   const geometry = (tileStyle) => {const panel = surface() === 'panel';return tileStyle === 'dial' ? { size: panel ? 72 : 84, width: panel ? 6 : 6.5 } : { size: panel ? 48 : 56, width: panel ? 4.5 : 5 };};
@@ -237,22 +246,30 @@
     return `<span class="ring" data-kind="${value.kind}"${value.low ? ' data-low' : ''}${m.q.staleSince ? ' data-stale' : ''} style="--ring-size:${size}px">${ringSVG(value, size, width)}<span class="ring-center">${center}</span></span>`;
   }
   function dialCenter(m, now) {
-    if (isQoderCredits(m.q)) return `<span class="ring-value qoder-credit-sum">${esc(qoderCreditSum(m.q))}</span>`;
+    if (isQoderCredits(m.q) && m.ring.kind === 'duo') {
+      const line = a => `<span class="ring-value qoder-credit-value"><span class="ring-swap-time">${esc(creditNumber(a.meter?.remaining))}</span><span class="ring-swap-pct">${percent(a.remaining)}</span></span>`;
+      return line(m.ring.top) + '<i class="ring-divider" aria-hidden="true"></i>' + line(m.ring.bottom);
+    }
     const value = m.ring;
     if (value.kind === 'duo') {
       const line = (a) => {const tone = level(a.remaining);return `<span class="ring-value" data-level="${tone}"><span class="ring-swap-time">${tone === 'danger' ? GLYPH.warn : ''}${timeHTML(a, now, tone === 'danger')}</span><span class="ring-swap-pct">${percent(a.remaining)}</span></span>`;};
       return line(value.top) + '<i class="ring-divider" aria-hidden="true"></i>' + line(value.bottom);
     }
     if (value.kind === 'single') return `<span class="ring-value" data-level="${level(value.top.remaining)}">${percent(value.top.remaining)}</span>${resetText(value.top, now) === '—' ? '' : `<span class="ring-value ring-sub">${timeHTML(value.top, now)}</span>`}`;
+    if (value.kind === 'coin' && value.split) return balanceCenter(value, true);
     if (value.kind === 'coin') return `<span class="ring-amount"${value.low ? ' data-level="danger"' : ''}>${esc(value.amount)}</span>`;
     if (value.kind === 'error') return '<span class="ring-bang" aria-hidden="true">!</span>';
     return '';
+  }
+  function balanceCenter(value, hover) {
+    const line = (amount, share, name, tone) => `<span class="${hover ? 'ring-value' : 'ring-num'} balance-${tone}" title="${esc(name)}"><span class="${hover ? 'ring-swap-time' : ''}">${esc(amount)}</span>${hover ? `<span class="ring-swap-pct">${percent(share * 100)}</span>` : ''}</span>`;
+    return line(value.split.granted,value.split.share,t("赠送 {0}",value.split.granted),'granted') + '<i class="ring-divider" aria-hidden="true"></i>' + line(value.split.paid,1-value.split.share,t("充值 {0}",value.split.paid),'paid');
   }
   function tileCenter(m) {
     const value = m.ring,number = (a) => `<span class="ring-num" data-level="${level(a.remaining)}">${Math.round(a.remaining)}</span>`;
     if (value.kind === 'duo') return number(value.top) + number(value.bottom);
     if (value.kind === 'single') return number(value.top);
-    if (value.kind === 'coin') return mark(m.q.provider);
+    if (value.kind === 'coin') return value.split ? balanceCenter(value, false) : mark(m.q.provider);
     if (value.kind === 'error') return '<span class="ring-bang" aria-hidden="true">!</span>';
     return '';
   }

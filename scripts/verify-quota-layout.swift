@@ -29,6 +29,27 @@ private struct GridFrames: PreferenceKey {
     static let defaultValue: [Int: CGRect] = [:]
     static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) { value.merge(nextValue(), uniquingKeysWith: { _, next in next }) }
 }
+private struct DetailColumnFrames: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue(), uniquingKeysWith: { _, next in next }) }
+}
+@MainActor private final class DetailColumnState: ObservableObject {
+    @Published var rows = 8
+    @Published var frames: [String: CGRect] = [:]
+}
+private struct DetailColumnFixture: View {
+    @ObservedObject var state: DetailColumnState
+    var body: some View {
+        RingDetailColumns {
+            Color.blue.opacity(0.15).frame(minHeight: 20, maxHeight: .infinity)
+                .background(GeometryReader { geometry in Color.clear.preference(key: DetailColumnFrames.self, value: ["primary": geometry.frame(in: .named("columns"))]) })
+            VStack(spacing: 6) { ForEach(0..<state.rows, id: \.self) { Text("Row \($0)") } }
+                .frame(maxWidth: .infinity, alignment: .top)
+                .background(GeometryReader { geometry in Color.clear.preference(key: DetailColumnFrames.self, value: ["facts": geometry.frame(in: .named("columns"))]) })
+        }.coordinateSpace(name: "columns").frame(width: 800)
+            .onPreferenceChange(DetailColumnFrames.self) { state.frames = $0 }
+    }
+}
 @MainActor private final class GridState: ObservableObject {
     @Published var columns = 2
     @Published var width: CGFloat = 800
@@ -92,6 +113,15 @@ private struct GridFixture: View {
         var payload = try JSONSerialization.jsonObject(with: Data(raw.utf8)) as! [[String:Any]]
         for index in payload.indices { payload[index]["sourceId"] = "fixture";payload[index]["updatedAt"] = 1;payload[index]["origin"] = "live" }
         state.quotas = try JSONDecoder().decode([Quota].self, from: JSONSerialization.data(withJSONObject:payload))
+        var deepseek = state.quotas.last!
+        precondition(RingBalanceComposition.make(deepseek) == nil)
+        deepseek.balances = [Balance(currency: "CNY", total: "100", granted: "25", toppedUp: "75")]
+        precondition(RingBalanceComposition.make(deepseek)?.share == 0.25)
+        precondition(RingBalanceComposition.make(deepseek)?.granted == "¥25")
+        deepseek.balances?[0].toppedUp = "0"
+        precondition(RingBalanceComposition.make(deepseek)?.share == 1)
+        deepseek.balances?[0].granted = "nan"
+        precondition(RingBalanceComposition.make(deepseek) == nil)
         let saved = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
         defer { UserDefaults.standard.setVolatileDomain(saved, forName: UserDefaults.argumentDomain) }
         var overrides = NativePanelKey.snapshotOverrides()
@@ -153,7 +183,25 @@ private struct GridFixture: View {
             gridView.cacheDisplay(in: gridView.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])?.write(to: output)
         }
+        let details = DetailColumnState()
+        let detailView = NSHostingView(rootView: DetailColumnFixture(state: details))
+        let detailWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 500), styleMask: [.borderless], backing: .buffered, defer: false)
+        detailWindow.isReleasedWhenClosed = false; detailWindow.contentView = detailView
+        detailWindow.setFrameOrigin(NSPoint(x: -20000, y: -20000)); detailWindow.orderBack(nil)
+        defer { detailWindow.close() }
+        for (rows, taller) in [(8, true), (0, false)] {
+            details.rows = rows
+            try await Task.sleep(for: .milliseconds(300)); detailView.layoutSubtreeIfNeeded()
+            guard let primary = details.frames["primary"], let facts = details.frames["facts"] else { fatalError("Detail column frames missing") }
+            if taller {
+                precondition(primary.height > 60, "Quota cards must stretch with a taller facts column: \(details.frames)")
+                precondition(abs(primary.height - facts.height) < 1, "Quota cards must fill the facts height: \(details.frames)")
+            } else {
+                precondition(abs(primary.height - 20) < 1, "Quota cards must keep their natural height when facts are shorter: \(details.frames)")
+            }
+        }
         print("Native masonry: 1–4 columns, expanding cards, shortest-column packing and full-width groups pass")
+        print("Native detail columns: quota cards stretch to a taller facts column and keep their natural height when it is shorter")
         print("Native quota layout: collapsed heights match for multiple subscriptions, long text, errors, meters, stale and non-Codex cards and widths; group shrinks; initial panel layers fill their width")
     }
 }

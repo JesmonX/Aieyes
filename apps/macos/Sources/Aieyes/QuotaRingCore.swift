@@ -180,7 +180,9 @@ enum QuotaRingModel {
         switch item.kind {
         case .duo(let top, let bottom): parts += [window(top), window(bottom)]
         case .single(let top): parts.append(window(top))
-        case .coin(let amount, let low): parts.append(L("可用余额") + " " + amount + (low ? "，" + L("余额不足") : ""))
+        case .coin(let amount, let low):
+            parts.append(L("可用余额") + " " + amount + (low ? "，" + L("余额不足") : ""))
+            if let split = RingBalanceComposition.make(item.quota) { parts += [L("赠送 {0}", split.granted), L("充值 {0}", split.paid)] }
         case .empty: parts.append(item.quota.queryFailure != nil ? L("额度更新失败") : L("暂无额度数据"))
         }
         if !item.hidden.isEmpty { parts.append(L("另有 {0} 个窗口", item.hidden.count)) }
@@ -201,12 +203,27 @@ struct MenuRingSnapshot: Equatable {
     }
 }
 
+/// Balance composition is a share of current funds, not a quota remaining percentage.
+struct RingBalanceComposition {
+    var granted: String
+    var paid: String
+    var share: Double
+    static func make(_ quota: Quota) -> Self? {
+        guard quota.provider == "deepseek", let balance = quota.balances?.first,
+              let granted = Double(balance.granted), let paid = Double(balance.toppedUp),
+              granted.isFinite, paid.isFinite, (granted + paid).isFinite, granted > 0, paid >= 0 else { return nil }
+        let unit = ["CNY", "RMB"].contains(balance.currency.uppercased()) ? "¥" : balance.currency.uppercased() == "USD" ? "$" : balance.currency + " "
+        return Self(granted: unit + qoderCreditNumber(granted), paid: unit + qoderCreditNumber(paid), share: granted / (granted + paid))
+    }
+}
+
 /// The ring itself: top half the short window, bottom half the long one. Colored arcs are
 /// the remaining share; both start at the left and grow right, mirroring each other.
 struct QuotaRingView: View {
     var kind: QuotaRingKind
     var healthy: Color
     var lineWidth: CGFloat
+    var composition: RingBalanceComposition? = nil
     var gap: CGFloat = 2
     var track: Color = Color.primary.opacity(0.13)
     var body: some View {
@@ -234,6 +251,13 @@ struct QuotaRingView: View {
                 if top.remaining >= 99.95 { context.stroke(circle, with: .color(color(top)), style: style) }
                 else if top.remaining > 0 { context.stroke(arc(270, 270 + max(0.4, 360 * top.remaining / 100)), with: .color(color(top)), style: style) }
             case .coin(_, let low):
+                if let composition {
+                    let circle = Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+                    context.stroke(circle, with: .color(healthy), lineWidth: lineWidth)
+                    if composition.share >= 1 { context.stroke(circle, with: .color(Palette.ok), lineWidth: lineWidth) }
+                    else { context.stroke(arc(270, 270 + 360 * composition.share), with: .color(Palette.ok), lineWidth: lineWidth) }
+                    break
+                }
                 let tint = low ? Palette.danger : healthy
                 context.fill(Path(ellipseIn: CGRect(x: center.x - side / 2, y: center.y - side / 2, width: side, height: side)), with: .color(tint.opacity(low ? 0.2 : 0.16)))
                 let inner = side / 2 - lineWidth * 0.8

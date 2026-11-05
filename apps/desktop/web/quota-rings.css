@@ -9,7 +9,7 @@
 
 .quota-rings { display:grid; gap:8px 4px; grid-auto-flow:dense; align-items:start; min-width:0; }
 .quota-rings[data-style=dial] { grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); }
-.quota-rings[data-style=tile] { grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:8px; }
+.quota-rings[data-style=tile] { grid-template-columns:repeat(auto-fill,minmax(min(100%,240px),1fr)); gap:8px; }
 .panel-body .quota-rings[data-style=tile] { grid-template-columns:repeat(2,minmax(0,1fr)); }
 /* The open account's full card spans the row after its tile; dense flow back-fills the tile's row. */
 .quota-rings > [data-ring-detail] { grid-column:1 / -1; margin:0; background:color-mix(in srgb,var(--category) 8%,var(--card-fill)); border:1px solid color-mix(in srgb,var(--category) 26%,var(--card-border)); }
@@ -111,7 +111,7 @@ button.quota-tile:is(:hover,:focus-visible) .ring-swap-time { display:none; }
 .supplement-period { display:grid; gap:4px; padding:8px; border-radius:var(--radius-card); background:color-mix(in srgb,var(--accent) 6%,transparent); min-width:0; }
 .supplement-period > strong { font-size:var(--font-panel-title); font-weight:600; font-variant-numeric:tabular-nums; }
 .supplement-period time { color:var(--muted); font-size:var(--font-caption); overflow-wrap:anywhere; }
-.supplement-row { display:grid; grid-template-columns:16px auto minmax(0,1fr) 12px; align-items:center; gap:8px; min-height:34px; padding:6px 0; border:0; border-top:1px solid var(--border); border-radius:0; background:none; box-shadow:none; text-align:left; width:100%; color:var(--ink); font-size:var(--font-secondary); }
+.supplement-row { display:grid; grid-template-columns:16px auto minmax(0,1fr) 12px; align-items:center; gap:8px; min-height:28px; padding:3px 0; border:0; border-top:1px solid var(--border); border-radius:0; background:none; box-shadow:none; text-align:left; width:100%; color:var(--ink); font-size:var(--font-secondary); }
 .supplement-row > svg { width:16px; height:16px; color:var(--muted); }
 .supplement-row > svg:last-child { width:12px; height:12px; }
 .supplement-row > strong { min-width:0; text-align:right; font-weight:500; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
@@ -119,7 +119,7 @@ button.quota-tile:is(:hover,:focus-visible) .ring-swap-time { display:none; }
 .supplement-disclosure > summary { cursor:pointer; list-style:none; }
 .supplement-disclosure > summary::-webkit-details-marker { display:none; }
 .supplement-disclosure[open] > summary > svg:last-child { transform:rotate(90deg); }
-.bank-items { display:grid; gap:6px; padding:4px 0 4px 24px; }
+.bank-items { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:6px 16px; padding:4px 0 4px 24px; }
 .bank-items > div { display:grid; gap:2px; }
 .bank-items small { color:var(--muted); }
 .meter-orbit { display:flex; align-items:center; gap:8px; }
@@ -148,4 +148,53 @@ button.quota-tile:is(:hover,:focus-visible) .ring-swap-time { display:none; }
   .quota-tile[data-style=tile]:is([data-provider=qoder],[data-provider=qoder-cn]) .tile-body { gap:6px; }
   .quota-tile[data-style=tile]:is([data-provider=qoder],[data-provider=qoder-cn]) .ring { --ring-size:40px !important; }
 }
+}
+
+@layer components {
+.quota-tile .tile-extras,.quota-tile .tile-plan,.quota-tile .tile-sub { font-weight:var(--weight-medium); color:var(--muted); }
+.quota-rings > .quota-supplement { box-sizing:border-box; width:100%; container-type:inline-size; font-size:var(--font-secondary); font-weight:var(--weight-medium); }
+.quota-supplement small,.supplement-period time { font-size:var(--font-caption); font-weight:var(--weight-medium); }
+.ring-paid { stroke:var(--accent); }
+.ring-granted { stroke:var(--ok); }
+.balance-paid { color:var(--accent-text); }
+.balance-granted { color:var(--ok); }
+.quota-tile[data-style=tile] .ring[data-kind=coin]:has(.ring-granted) { --ring-size:72px !important; }
+.quota-tile[data-style=tile] .ring[data-kind=coin] .ring-num { font-size:var(--font-caption); }
+.qoder-credit-value { max-width:100%; }
+@media (forced-colors:active) {
+  .ring-paid { stroke:CanvasText; }
+  .ring-granted { stroke:Highlight; }
+}
+}
+
+@layer components {
+.quota-tile[data-style=tile][data-provider=deepseek] .tile-body { grid-template-columns:auto minmax(0,1fr); gap:6px; }
+.quota-tile[data-provider=deepseek] .tile-extras:empty { display:none; }
+.quota-tile[data-provider=deepseek] .tile-time { overflow:hidden; }
+}
+
+@layer components {
+.quota-tile[data-style=dial] .tile-extras { font-weight:var(--weight-strong); }
+.quota-tile[data-style=tile] .tile-extras { font-size:var(--font-secondary); font-weight:var(--weight-strong); }
+.quota-tile[data-style=tile] .tile-plan { font-size:var(--font-secondary); font-weight:var(--weight-medium); }
+.quota-tile .tile-extras .ring-glyph { width:13px; height:13px; }
+.supplement-content,.supplement-primary,.supplement-facts,.supplement-meters { display:grid; gap:8px; min-width:0; align-content:start; }
+.supplement-primary:not(:has(.supplement-periods,.meter-orbit,.meter-bar)),.supplement-facts:not(:has(> *)),.supplement-meters:empty { display:none; }
+.meter-summary { font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+@container (min-width:600px) {
+  .supplement-content:has(.supplement-primary .supplement-periods,.supplement-primary .meter-orbit,.supplement-primary .meter-bar):has(.supplement-facts > *) { grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; }
+  /* The bars may grow into a taller facts column, but keep their natural height when they are taller. */
+  .supplement-content:has(.supplement-facts > *) > .supplement-primary { align-content:stretch; }
+  .supplement-content:has(.supplement-facts > *) > .supplement-primary > :is(.supplement-periods,.supplement-meters) { align-content:stretch; }
+  .supplement-content:has(.supplement-facts > *) > .supplement-primary .supplement-period { align-content:space-between; }
+  .supplement-meters { grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+  .supplement-content:has(.supplement-facts > *) .supplement-meters:not(:has(.meter-bar)) { grid-template-columns:minmax(0,1fr); }
+  .supplement-meters:has(> :only-child) { grid-template-columns:minmax(0,1fr); }
+}
+}
+
+@layer components {
+.supplement-meters:has(.meter-bar) { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.supplement-periods:has(> :only-child),.supplement-meters:has(> .meter-bar:only-child) { grid-template-columns:minmax(0,1fr); }
+.meter-bar .period-heading > span { flex-shrink:1; overflow-wrap:anywhere; }
 }
