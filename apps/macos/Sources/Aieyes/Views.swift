@@ -1350,7 +1350,7 @@ struct QuotaCard: View, Equatable {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(agyGroups, id: \.self) { group in
                 VStack(alignment: .leading, spacing: 7) {
-                    Text(group).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium)).fixedSize(horizontal: false, vertical: true)
+                    Text(compactQuotaGroup(group)).help(group).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium)).fixedSize(horizontal: false, vertical: true)
                     HStack(alignment: .top, spacing: 14) {
                         ForEach(quota.windows.filter { $0.groupLabel == group }.sorted { ($0.windowMinutes ?? 0) < ($1.windowMinutes ?? 0) }) { window in
                             VStack(alignment: .leading, spacing: 5) {

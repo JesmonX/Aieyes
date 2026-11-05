@@ -110,6 +110,14 @@ enum QuotaRingModel {
         return unit == "usd" ? "$" + text : unit == "cny" ? "¥" + text : text
     }
     static func ring(_ windows: [QuotaWindow], quota: Quota) -> (QuotaRingKind, [QuotaWindow]) {
+        if isQoderCredits(quota) {
+            guard let meter = quota.meters?.first(where: { $0.id == "userQuota" }), let fraction = meter.fraction else { return (.empty, []) }
+            let addon = quota.meters?.first { $0.id == "addOnQuota" }
+            // Keep addon above plan, including the empty track when no addon capacity exists.
+            let top = QuotaRingArc(remaining: 100 - (addon?.fraction ?? 1) * 100, resetsAt: nil, windowMinutes: nil, unused: false, name: addon?.label ?? "Addon credits")
+            let bottom = QuotaRingArc(remaining: 100 - fraction * 100, resetsAt: nil, windowMinutes: nil, unused: false, name: meter.label)
+            return (.duo(top: top, bottom: bottom), [])
+        }
         let (top, bottom) = pick(windows)
         let hidden = windows.filter { $0.id != top?.id && $0.id != bottom?.id }
         if let top, let bottom { return (.duo(top: arc(top), bottom: arc(bottom)), hidden) }
@@ -158,6 +166,13 @@ enum QuotaRingModel {
     }
     /// Full text for VoiceOver and tooltips.
     static func accessibility(_ item: QuotaRingItem, now: Date = Date()) -> String {
+        if isQoderCredits(item.quota) {
+            let rows = ["addOnQuota", "userQuota"].map { id in
+                let meter = item.quota.meters?.first { $0.id == id }
+                return (id == "userQuota" ? "Plan credits " : "Addon credits ") + qoderCreditNumber(meter?.remaining) + "/" + qoderCreditNumber(meter?.total)
+            }
+            return ([item.quota.name] + rows).joined(separator: " · ")
+        }
         var parts = [item.group.map { item.quota.name + " · " + $0 } ?? item.quota.name]
         func window(_ arc: QuotaRingArc) -> String {
             arc.label + " " + L("剩余 ") + Format.percent(arc.remaining) + "，" + (arc.unused && arc.label.count == 2 ? L("窗口尚未开始") : Format.resetCountdown(arc.resetsAt, now: now))
@@ -246,4 +261,24 @@ struct MenuRingIcon<Icon: View>: View {
             icon.frame(width: 22, height: 22)
         }
     }
+}
+
+func compactQuotaGroup(_ name: String) -> String {
+    switch name.lowercased() {
+    case "gemini", "gemini models": return "Geminis"
+    case "claude-gpt", "claude and gpt models", "claudes & gpts": return "C&Gs"
+    case "gemini-4-argon", "gemini 4 argon": return "Argon"
+    default: return name
+    }
+}
+
+func isQoderCredits(_ quota: Quota) -> Bool { ["qoder", "qoder-cn"].contains(quota.provider) }
+func qoderCreditNumber(_ value: Double?) -> String {
+    guard let value, value.isFinite else { return "—" }
+    return String(format: value.rounded() == value ? "%.0f" : "%.2f", value)
+}
+func qoderCreditSum(_ quota: Quota) -> String {
+    let plan = quota.meters?.first { $0.id == "userQuota" }?.remaining
+    let addon = quota.meters?.first { $0.id == "addOnQuota" }?.remaining
+    return qoderCreditNumber(plan) + (addon == 0 ? "" : "+" + qoderCreditNumber(addon))
 }

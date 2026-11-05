@@ -65,6 +65,20 @@ private struct GridFixture: View {
         precondition(qoder.cardIdentity == nil)
         let creditMeter = QuotaMeter(id: "credits", label: "加购 Credits", used: 3, total: 100, remaining: 97, unit: "credits")
         precondition(qoder.meterSummary(creditMeter) == "97 / 100 Credits")
+        qoder.windows = []
+        qoder.meters = [QuotaMeter(id: "addOnQuota", label: "Addon", used: 2, total: 20, remaining: 18, unit: "credits"), QuotaMeter(id: "userQuota", label: "Plan", used: 25, total: 2000, remaining: 1975, unit: "credits")]
+        precondition(qoderCreditSum(qoder) == "1975+18")
+        guard case .duo(let addonArc, let planArc) = QuotaRingModel.ring([], quota: qoder).0 else { fatalError("Addon/Plan ring missing") }
+        precondition(addonArc.remaining == 90 && addonArc.resetsAt == nil)
+        precondition(planArc.remaining == 98.75 && planArc.resetsAt == nil)
+        let withoutAddon = qoder
+        qoder.meters?[0].total = 0
+        precondition(QuotaRingModel.ring([], quota: qoder).0.top?.remaining == 0)
+        qoder = withoutAddon
+        qoder.meters?[0].remaining = 0
+        precondition(qoderCreditSum(qoder) == "1975")
+        qoder.meters?.removeLast()
+        guard case .empty = QuotaRingModel.ring([], quota: qoder).0 else { fatalError("Addon must not substitute for missing Plan") }
         precondition(Format.subscription("personal_professional") == "Pro")
         let state = FixtureState()
         let raw = #"""

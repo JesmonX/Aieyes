@@ -81,6 +81,14 @@ class IdentityTests(unittest.TestCase):
             self.assertEqual(request.call_args.args[1], agy.ASSIST_URL)
             self.assertNotIn('must-not-return', json.dumps(result))
 
+    def test_variable_fractional_expiry_on_system_python(self):
+        for fraction in ('1', '12', '123', '1234', '31502', '123456', '123456789'):
+            current = credential()
+            current['token']['expiry'] = '2099-01-01T08:00:00.' + fraction + '+08:00'
+            self.assertEqual(agy.access_token(current), 'fake-private-access')
+            self.assertAlmostEqual(agy.expiry_timestamp(current['token']['expiry']),
+                                   agy.expiry_timestamp('2099-01-01T00:00:00Z') + float('0.' + fraction[:6]), places=5)
+
     def test_expired_access_is_renewed_by_cli_and_owner_is_rechecked(self):
         old = credential()
         old['token']['expiry'] = '2001-01-01T00:00:00Z'

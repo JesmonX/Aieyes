@@ -623,6 +623,10 @@ pub(super) fn apply_for(provider: &str, q: &mut QuotaSnapshot, v: &Value) -> Res
             used,
             total: Some(total),
             remaining: Some(remaining),
+            // Only explicit reset timestamps are authoritative; addon expiry is not a reset.
+            resets_at: super::stamp(&bucket["resetsAt"])
+                .or_else(|| super::stamp(&bucket["resetAt"]))
+                .or_else(|| super::stamp(&bucket["resetTime"])),
             ..Default::default()
         });
     }
@@ -668,6 +672,7 @@ pub(crate) fn project_legacy_meters(q: &mut QuotaSnapshot) {
             used,
             total: Some(total),
             remaining: Some(remaining),
+            resets_at: window.resets_at,
             ..Default::default()
         };
         if !meter.valid() {
@@ -681,6 +686,20 @@ pub(crate) fn project_legacy_meters(q: &mut QuotaSnapshot) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_reset_times_are_preserved_without_inventing_month_boundaries() {
+        for (value, expected) in [
+            (json!(1900000000000_i64), Some(1900000000)),
+            (json!("1900000000"), Some(1900000000)),
+            (Value::Null, None),
+        ] {
+            let mut q = QuotaSnapshot::default();
+            apply_for("qoder-cn", &mut q, &json!({"userId":"fixture","userQuota":{"unit":"credits","total":100,"used":20,"remaining":80,"resetsAt":value},"addOnQuota":{"unit":"credits","total":10,"used":0,"remaining":10,"expiresAt":1900000000}})).unwrap();
+            assert_eq!(q.meters[0].resets_at, expected);
+            assert_eq!(q.meters[1].resets_at, None);
+        }
+    }
 
     #[test]
     fn credit_buckets_and_public_identity_are_structured_for_both_products() {

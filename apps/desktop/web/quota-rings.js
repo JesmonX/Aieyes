@@ -61,7 +61,21 @@
     const text = Number.isInteger(value) ? value.toFixed(0) : value.toFixed(2);
     return unit === 'usd' ? '$' + text : unit === 'cny' ? '¥' + text : text;
   }
+  const isQoderCredits = q => ['qoder','qoder-cn'].includes(q.provider);
+  const creditNumber = n => Number.isFinite(n) ? (Number.isInteger(n) ? String(n) : n.toFixed(2)) : '—';
+  function qoderCreditSum(q) {
+    const plan = (q.meters ?? []).find(m => m.id === 'userQuota'), addon = (q.meters ?? []).find(m => m.id === 'addOnQuota');
+    return creditNumber(plan?.remaining) + (addon?.remaining === 0 ? '' : '+' + creditNumber(addon?.remaining));
+  }
   function ring(q, windows = windowSets(q)[0].windows) {
+    if (isQoderCredits(q)) {
+      const meter = (q.meters ?? []).find(m => m.id === 'userQuota');
+      if (!meter || meter.usedKnown === false || !(meter.total > 0) || !Number.isFinite(meter.used)) return {kind:'empty'};
+      const addon = (q.meters ?? []).find(m => m.id === 'addOnQuota');
+      // Credit buckets have fixed halves: addon above plan, even when no addon capacity exists.
+      const creditArc = meter => ({remaining:meter?.usedKnown !== false && meter?.total > 0 && Number.isFinite(meter.used) ? 100 - Math.min(1,Math.max(0,meter.used/meter.total))*100 : 0, resetsAt:null,windowMinutes:null,unused:false,meter});
+      return {kind:'duo', top:creditArc(addon), bottom:creditArc(meter)};
+    }
     const [top, bottom] = pick(windows);
     if (top && bottom) return { kind: 'duo', top: arc(top), bottom: arc(bottom) };
     if (top) return { kind: 'single', top: arc(top) };
@@ -166,6 +180,10 @@
   }
   const separators = () => globalThis.AieyesI18n?.language === 'en' ? { comma: ', ', semi: '; ' } : { comma: '，', semi: '；' };
   function label(m, now) {
+    if (isQoderCredits(m.q)) return m.q.name + ': ' + ['addOnQuota','userQuota'].map(id => {
+      const meter = (m.q.meters ?? []).find(m => m.id === id);
+      return (id === 'userQuota' ? 'Plan credits ' : 'Addon credits ') + creditNumber(meter?.remaining) + '/' + creditNumber(meter?.total);
+    }).join('; ');
     const { comma, semi } = separators(),value = m.ring,name = m.group ? m.q.name + ' · ' + m.group : m.q.name;
     const half = (a) => [[slot(a, m.group), t("剩余 {0}", percent(a.remaining))].filter(Boolean).join(' '), resetFull(a, now)].filter(Boolean).join(comma);
     const parts = value.kind === 'duo' ? [half(value.top), half(value.bottom)] : value.kind === 'single' ? [half(value.top)] : value.kind === 'coin' ? [t("可用余额") + ' ' + value.amount] : [];
@@ -219,6 +237,7 @@
     return `<span class="ring" data-kind="${value.kind}"${value.low ? ' data-low' : ''}${m.q.staleSince ? ' data-stale' : ''} style="--ring-size:${size}px">${ringSVG(value, size, width)}<span class="ring-center">${center}</span></span>`;
   }
   function dialCenter(m, now) {
+    if (isQoderCredits(m.q)) return `<span class="ring-value qoder-credit-sum">${esc(qoderCreditSum(m.q))}</span>`;
     const value = m.ring;
     if (value.kind === 'duo') {
       const line = (a) => {const tone = level(a.remaining);return `<span class="ring-value" data-level="${tone}"><span class="ring-swap-time">${tone === 'danger' ? GLYPH.warn : ''}${timeHTML(a, now, tone === 'danger')}</span><span class="ring-swap-pct">${percent(a.remaining)}</span></span>`;};
@@ -238,6 +257,10 @@
     return '';
   }
   function tileTimes(m, now) {
+    if (isQoderCredits(m.q)) return ['addOnQuota','userQuota'].map(id => {
+      const meter = (m.q.meters ?? []).find(m => m.id === id), name = id === 'userQuota' ? 'Plan credits' : 'Addon credits';
+      return `<span class="tile-time qoder-credit-ratio" title="${name}" aria-label="${name} ${esc(creditNumber(meter?.remaining))}/${esc(creditNumber(meter?.total))}">${esc(creditNumber(meter?.remaining))}/${esc(creditNumber(meter?.total))}</span>`;
+    }).join('');
     const value = m.ring,line = (a) => {const tone = level(a.remaining);return `<span class="tile-time" data-level="${tone}">${tone === 'danger' ? GLYPH.warn : ''}${timeHTML(a, now)}</span>`;};
     if (value.kind === 'duo') return line(value.top) + line(value.bottom);
     if (value.kind === 'single') return line(value.top);
@@ -246,12 +269,15 @@
     return '<span class="tile-time">—</span>';
   }
   const extrasHTML = (list) => list.map((e) => `<span${e.level ? ` data-level="${e.level}"` : ''}>${e.html}</span>`).join('');
+  function shortName(name) {
+    return ({'gemini':'Geminis','gemini models':'Geminis','claude-gpt':'C&Gs','claude and gpt models':'C&Gs','claudes & gpts':'C&Gs','gemini-4-argon':'Argon','gemini 4 argon':'Argon'})[String(name).toLowerCase()] || name;
+  }
   function tileHTML(m, tileStyle, now) {
     const text = label(m, now),list = extras(m, tileStyle).slice(0, 2);
     const attributes = `type="button" class="quota-tile" data-style="${tileStyle}" data-provider="${esc(m.q.provider)}" data-quota-account="${esc(m.key)}" data-quota-tile="${esc(m.id)}" aria-expanded="${open === m.id}" aria-label="${esc(text)}" title="${esc(text)}"`;
-    if (tileStyle === 'dial') return `<button ${attributes}>${ringHTML(m, 'dial', dialCenter(m, now))}<span class="tile-name">${mark(m.q.provider)}<span>${esc(m.name)}</span></span>${list.length ? `<span class="tile-extras">${extrasHTML(list)}</span>` : ''}</button>`;
-    const plan = m.q.plan ? globalThis.AieyesUI?.subscription(m.q.plan) ?? m.q.plan : '';
-    return `<button ${attributes}><span class="tile-head">${mark(m.q.provider)}<span class="tile-head-name">${esc(m.name)}</span>${plan ? `<span class="tile-plan">${esc(plan)}</span>` : ''}</span><span class="tile-body">${ringHTML(m, 'tile', tileCenter(m))}<span class="tile-times">${tileTimes(m, now)}</span><span class="tile-extras">${extrasHTML(list)}</span></span></button>`;
+    if (tileStyle === 'dial') return `<button ${attributes}>${ringHTML(m, 'dial', dialCenter(m, now))}<span class="tile-name">${mark(m.q.provider)}<span>${esc(shortName(m.name))}</span></span>${list.length ? `<span class="tile-extras">${extrasHTML(list)}</span>` : ''}</button>`;
+    const plan = !m.group && m.q.plan ? globalThis.AieyesUI?.subscription(m.q.plan) ?? m.q.plan : '';
+    return `<button ${attributes}><span class="tile-head">${mark(m.q.provider)}<span class="tile-head-name">${esc(shortName(m.name))}</span>${plan ? `<span class="tile-plan">${esc(plan)}</span>` : ''}</span><span class="tile-body">${ringHTML(m, 'tile', tileCenter(m))}<span class="tile-times">${tileTimes(m, now)}</span><span class="tile-extras">${extrasHTML(list)}</span></span></button>`;
   }
   function placeholderHTML(account, tileStyle) {
     const { size, width } = geometry(tileStyle),key = account.provider + ':' + account.id,status = hooks.placeholder?.() ?? t("尚未读取额度");
@@ -262,7 +288,7 @@
   }
   function accountHTML(account, quota, tileStyle, now, shown) {
     if (!quota) return placeholderHTML(account, tileStyle);
-    return models(quota).map((m) => {shown?.add(m.id);return tileHTML(m, tileStyle, now) + (open === m.id ? hooks.card?.(quota) ?? '' : '');}).join('');
+    return models(quota).map((m) => {shown?.add(m.id);return tileHTML(m, tileStyle, now) + (open === m.id ? hooks.card?.(quota, m) ?? '' : '');}).join('');
   }
   // `entries`: [{ account, quota }] in display order; quota is undefined until the first reading.
   function gridHTML(entries, tileStyle = style()) {
@@ -310,7 +336,7 @@
     const quota = hooks.quota?.(tile.dataset.quotaAccount);
     if (!quota || !hooks.card) {open = '';return;}
     open = id;tile.setAttribute('aria-expanded', 'true');
-    tile.insertAdjacentHTML('afterend', hooks.card(quota));
+    tile.insertAdjacentHTML('afterend', hooks.card(quota, models(quota).find(m => m.id === id)));
     hooks.bind?.();
     const card = tile.nextElementSibling;if (card) globalThis.AieyesMotion?.enter(card, 'disclosure');
   }
@@ -333,6 +359,6 @@
     active() {return Boolean(grid());},
     switchHTML, gridHTML, replace, refreshTimes,
     // Exposed for tests: the same rules as quota_ring.rs.
-    pick, ring, models, compactMinutes, resetText, level, groupsWindows,
+    qoderCreditSum, ringSVG, shortName, pick, ring, models, compactMinutes, resetText, level, groupsWindows,
   };
 })();

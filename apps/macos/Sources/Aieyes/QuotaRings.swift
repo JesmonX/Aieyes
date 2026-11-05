@@ -24,7 +24,7 @@ struct QuotaRingSection: View {
             ForEach(entries) { entry in
                 tile(entry).id(entry.id)
                 if open == entry.id, let quota = entry.item?.quota {
-                    QuotaRingDetail(model: model, quota: quota, compact: compact) { withMotion(.expand) { open = nil } }
+                    QuotaRingDetail(model: model, quota: quota, group: entry.item?.group, compact: compact) { withMotion(.expand) { open = nil } }
                         .layoutValue(key: QuotaFullWidth.self, value: true).id(entry.id + ".detail")
                         .transition(.opacity)
                 }
@@ -49,21 +49,136 @@ struct QuotaRingSection: View {
     }
 }
 
-/// The opened account card. It always shows every detail; the close button or the tile folds it.
+/// The selected ring's reset rail and compact valuations, not a second account card.
 private struct QuotaRingDetail: View {
-    let model: AppModel
+    @SurfaceModel var model: AppModel
     let quota: Quota
+    let group: String?
     let compact: Bool
     let close: () -> Void
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    private var windows: [QuotaWindow] { quota.windows.filter { group == nil || $0.groupLabel == group } }
+    private var groupID: String? { windows.first?.groupId ?? group }
+    private var records: [QuotaEstimate] { model.dashboard.presentationEstimates(account: quota.id).filter { group == nil || $0.groupId == groupID } }
     var body: some View {
         let _ = interfaceLanguage
-        AccountObservedQuota(model: model, quota: quota, compact: compact, collapsible: false)
-            .overlay(alignment: .topTrailing) {
-                Button(action: close) { Image(systemName: "xmark").font(.system(size: DesignTokens.fontCaption, weight: DesignTokens.weightStrong)).frame(width: 24, height: 24).contentShape(Rectangle()) }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).padding(compact ? 8 : 10)
-                    .help(L("收起")).accessibilityLabel(L("收起"))
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
+                ProviderMark(provider: quota.provider, size: 16)
+                Text(quota.identity.flatMap { $0.email.isEmpty ? $0.providerAccountId : $0.email } ?? quota.name)
+                    .font(AppFont.secondary.weight(.medium)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+                if let plan = quota.plan, Format.subscription(plan).count <= 10 { SubscriptionBadge(plan: plan).frame(maxWidth: 76) }
+                if model.canSwitchAccount(quota.id) {
+                    Button { model.showAccountSwitch?(quota.id) } label: { Image(systemName: "arrow.left.arrow.right") }.help(L("切换账户")).accessibilityLabel(L("切换账户"))
+                }
+                Button(action: close) { Image(systemName: "chevron.up") }.help(L("收起")).accessibilityLabel(L("收起"))
+            }.buttonStyle(.plain)
+            FlowLayout(spacing: 6) {
+                if let group { Text(group).font(AppFont.caption).foregroundStyle(.secondary) }
+                if let plan = quota.plan, Format.subscription(plan).count > 10 { SubscriptionBadge(plan: plan) }
             }
+            if !windows.isEmpty {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 8) {
+                    ForEach(windows) { window in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                Text(window.windowMinutes == 300 ? "5h" : window.windowMinutes == 10080 ? "7d" : window.name)
+                                Spacer(minLength: 0)
+                                Text(window.resetsAt.map { window.windowMinutes == 300 ? Format.time($0) : Format.date($0) } ?? L("未提供"))
+                                    .monospacedDigit().multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
+                                    .help(window.resetsAt.map { Format.date($0) } ?? L("未提供"))
+                            }.font(AppFont.caption).foregroundStyle(.secondary)
+                            Text(Format.percent(window.usedPercent.isFinite ? max(0, min(100, 100 - window.usedPercent)) : nil))
+                                .font(.system(size: 19, weight: .semibold)).monospacedDigit()
+                                .accessibilityLabel(L("剩余 {0}", Format.percent(window.usedPercent.isFinite ? 100 - window.usedPercent : nil)))
+                            ResourceBar(percent: window.usedPercent.isFinite ? 100 - window.usedPercent : nil, tint: Palette.quotaBar(window.usedPercent, healthy: Palette.knownCategory(quota.provider) ?? Palette.neutralTint))
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                            .background(Palette.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                    }
+                }
+                estimateValues(records, credits: false)
+            }
+            ForEach(quota.meters ?? []) { meter in
+                HStack(spacing: 8) {
+                    let share = meter.total.flatMap { $0 > 0 ? max(0, min(1, (meter.remaining ?? 0) / $0)) : nil } ?? 0
+                    ZStack {
+                        Circle().stroke(Color.primary.opacity(0.1), lineWidth: 3)
+                        Circle().trim(from: 0, to: share).stroke(Palette.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round)).rotationEffect(.degrees(-90))
+                        Image(systemName: "c.circle").foregroundStyle(Palette.accent)
+                    }.frame(width: 28, height: 24)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L(meter.label)).foregroundStyle(.secondary)
+                        Text(quota.meterSummary(meter)).monospacedDigit()
+                        if let reset = meter.resetsAt { Label(Format.date(reset), systemImage: "arrow.clockwise") }
+                    }.font(AppFont.caption).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            ForEach(quota.balances ?? [], id: \.currency) { balance in
+                Label(balance.currency + " " + balance.total + " · " + L("赠送 {0}", balance.granted) + " · " + L("充值 {0}", balance.toppedUp), systemImage: "creditcard").font(AppFont.caption)
+            }
+            if let wallet = quota.extraUsage {
+                Label(wallet.amount(wallet.balance) + " · " + wallet.monthlyLimitLabel, systemImage: "creditcard").font(AppFont.caption)
+            }
+            if quota.provider == "codex" {
+                Divider().opacity(0.5)
+                Button { model.showEstimate?(quota, true, nil) } label: {
+                    HStack(spacing: 8) {
+                        Label(L("余额"), systemImage: "cylinder.split.1x2").foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        Text(creditSummary).foregroundStyle(.primary).monospacedDigit().multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
+                        Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                    }.font(AppFont.secondary).padding(.vertical, 4).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+            }
+            if let bank = quota.bankReset {
+                Divider().opacity(0.5)
+                DisclosureGroup {
+                    ForEach(bank.credits ?? []) { credit in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(credit.title ?? "Reset Credit")
+                            Text(L(["available":"可用", "redeeming":"处理中", "redeemed":"已使用"][credit.status] ?? "未知状态") + " · " + (credit.expiresAt.map { Format.date($0) } ?? L("无到期时间"))).foregroundStyle(.secondary)
+                        }.font(AppFont.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 3)
+                    }
+                    if (bank.credits ?? []).isEmpty { Text(L("未提供")).font(AppFont.caption).foregroundStyle(.secondary) }
+                } label: {
+                    HStack {
+                        Label("Bank Reset", systemImage: "rectangle.stack").foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        Text(L("{0} 次可用", bank.availableCount)).monospacedDigit()
+                    }.font(AppFont.secondary)
+                }.tint(.primary).padding(.vertical, 4)
+            }
+            if let note = quota.metadataError { Text(L(note)).font(AppFont.caption).foregroundStyle(.secondary) }
+            if let error = quota.error {
+                ErrorNotice(message: error)
+                Button(L("重试")) { Task { await model.refreshQuotas(accountID: quota.accountId) } }
+            }
+            Button(L("查看分析"), systemImage: "arrow.up.right") { model.openAnalysis(from: compact ? "panel" : "overview", account: quota.id, provider: quota.provider) }.font(AppFont.caption)
+        }.padding(10).modifier(NeutralCard())
+    }
+    private var creditSummary: String {
+        let full = Format.creditBalance(quota.credits, estimate: EstimatePresentation.credit(model.dashboard.presentationEstimates(account: quota.id, credits: true)))
+        let prefix = L("余额 ")
+        return full.hasPrefix(prefix) ? String(full.dropFirst(prefix.count)) : full
+    }
+    private func estimateValues(_ history: [QuotaEstimate], credits: Bool) -> some View {
+        let entries = EstimatePresentation.entries(history, credits: credits, quota: quota, group: groupID)
+        let summary = entries.map { $0.label + " ≈ " + Format.compactMoney($0.value) }.joined(separator: " · ")
+        return VStack(spacing: 0) {
+            if !credits { Divider().opacity(0.5) }
+            Button {
+                if credits { model.showEstimate?(quota, true, nil) } else { model.showEstimate?(quota, false, groupID) }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chart.line.uptrend.xyaxis").foregroundStyle(.secondary)
+                    Text(L(credits ? "Credits 估值" : "额度估值")).foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Text(summary.isEmpty ? "—" : summary).foregroundStyle(.primary).monospacedDigit()
+                        .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.trailing)
+                    Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                }.font(AppFont.secondary).padding(.vertical, 4).contentShape(Rectangle())
+            }.buttonStyle(.plain).help(entries.map { $0.label + " ≈ " + Format.money($0.value) + " USD · " + ($0.historical ? L("历史采样") + " · " : "") + Format.date($0.record.checkpointAt) }.joined(separator: "\n"))
+        }
     }
 }
 
@@ -149,7 +264,7 @@ struct QuotaDialTile: View {
                     }.frame(width: size, height: size).opacity(item.quota.isStale ? 0.6 : 1)
                     HStack(spacing: 4) {
                         ProviderMark(provider: item.quota.provider, size: 14)
-                        Text(item.title).lineLimit(1).truncationMode(.tail)
+                        Text(compactQuotaGroup(item.title)).lineLimit(1).truncationMode(.tail)
                     }.font(.system(size: DesignTokens.fontCaption)).frame(maxWidth: .infinity)
                     let extras = ringExtras(item, now: context.date).prefix(2)
                     if !extras.isEmpty { HStack(spacing: 6) { ForEach(Array(extras)) { RingExtraLabel(extra: $0) } }.font(.system(size: DesignTokens.fontCaption)) }
@@ -168,7 +283,11 @@ struct QuotaDialTile: View {
     @ViewBuilder private func center(now: Date) -> some View {
         let showPercent = hovering || focused
         let font = Font.system(size: compact ? DesignTokens.fontCaption + 1 : DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)
-        switch item.kind {
+        if isQoderCredits(item.quota) {
+            Text(qoderCreditSum(item.quota)).font(font).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+                .help("Plan + Addon credits")
+        } else {
+            switch item.kind {
         case .duo(let top, let bottom):
             VStack(spacing: 3) {
                 RingTime(arc: top, now: now, percent: showPercent)
@@ -185,6 +304,7 @@ struct QuotaDialTile: View {
         case .empty:
             if item.quota.queryFailure != nil { Text("!").font(.system(size: 17, weight: .bold)).foregroundStyle(Palette.danger) }
             else { Text("—").font(font).foregroundStyle(.secondary) }
+            }
         }
     }
 }
@@ -205,16 +325,17 @@ struct QuotaRingTile: View {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 5) {
                         ProviderMark(provider: item.quota.provider, size: 14)
-                        Text(item.title).font(.system(size: DesignTokens.fontCaption + 1, weight: DesignTokens.weightMedium)).lineLimit(1).truncationMode(.tail)
+                        Text(compactQuotaGroup(item.title)).font(.system(size: DesignTokens.fontCaption + 1, weight: DesignTokens.weightMedium)).lineLimit(1).truncationMode(.tail)
                         Spacer(minLength: 4)
-                        if let plan = item.quota.plan, !Format.subscription(plan).isEmpty { Text(Format.subscription(plan)).font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).lineLimit(1).fixedSize() }
+                        if item.group == nil, let plan = item.quota.plan, !Format.subscription(plan).isEmpty { Text(Format.subscription(plan)).font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).lineLimit(1).fixedSize() }
                     }
                     HStack(alignment: .center, spacing: 10) {
                         ZStack {
                             QuotaRingView(kind: item.kind, healthy: QuotaRingModel.healthy(item.quota.provider), lineWidth: compact ? 4.5 : 5, gap: 2)
                             center
                         }.frame(width: size, height: size).opacity(item.quota.isStale ? 0.6 : 1)
-                        times(now: context.date).font(.system(size: DesignTokens.fontCaption + 1, weight: DesignTokens.weightMedium))
+                        if isQoderCredits(item.quota) { RingCreditFacts(quota: item.quota) }
+                        else { times(now: context.date).font(.system(size: DesignTokens.fontCaption + 1, weight: DesignTokens.weightMedium)) }
                         Spacer(minLength: 0)
                         let extras = ringExtras(item, now: context.date).prefix(2)
                         if !extras.isEmpty { VStack(alignment: .trailing, spacing: 3) { ForEach(Array(extras)) { RingExtraLabel(extra: $0) } }.font(.system(size: DesignTokens.fontCaption)) }
@@ -368,5 +489,20 @@ struct QuotaRingLegend: View {
     var body: some View {
         HStack(spacing: 3) { half(top: true); Text("5h"); Spacer().frame(width: 4); half(top: false); Text("7d") }
             .font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).accessibilityHidden(true)
+    }
+}
+
+private struct RingCreditFacts: View {
+    let quota: Quota
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(["addOnQuota", "userQuota"], id: \.self) { id in
+                let meter = quota.meters?.first { $0.id == id }
+                Text(qoderCreditNumber(meter?.remaining) + "/" + qoderCreditNumber(meter?.total))
+                    .monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+                    .help(id == "userQuota" ? "Plan credits" : "Addon credits")
+                    .accessibilityLabel((id == "userQuota" ? "Plan credits " : "Addon credits ") + qoderCreditNumber(meter?.remaining) + "/" + qoderCreditNumber(meter?.total))
+            }
+        }.font(.system(size: DesignTokens.fontCaption + 1, weight: DesignTokens.weightMedium))
     }
 }

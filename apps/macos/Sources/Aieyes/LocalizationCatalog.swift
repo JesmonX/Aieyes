@@ -3943,7 +3943,10 @@ enum LocalizationCatalog {
   "圆环旁第一个值": "First value beside ring",
   "圆环旁第二个值": "Second value beside ring",
   "圆环取首个账户：上半圈 5h，下半圈 7d。": "The ring shows the first account: top half 5h, bottom half 7d.",
-  "圆环取首个账户：上半圈 5h，下半圈 7d。悬停托盘图标可查看所选的值。": "The ring shows the first account: top half 5h, bottom half 7d. Hover over the tray icon to see the selected values."
+  "圆环取首个账户：上半圈 5h，下半圈 7d。悬停托盘图标可查看所选的值。": "The ring shows the first account: top half 5h, bottom half 7d. Hover over the tray icon to see the selected values.",
+  "月重置时间": "Monthly reset",
+  "Credits 估值": "Credits valuation",
+  "剩余": "Remaining"
 }
 """#.utf8))) ?? [:]
 }

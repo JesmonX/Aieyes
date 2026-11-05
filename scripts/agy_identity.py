@@ -221,6 +221,14 @@ def same_owner(left, right):
         return same('access_token') or same('refresh_token')
 
 
+def expiry_timestamp(raw):
+    # Python 3.9 only accepts 3 or 6 fractional digits; Go emits variable
+    # precision RFC3339 timestamps. Normalize to microseconds on all runtimes.
+    raw = re.sub(r'\.(\d+)(?=Z|[+-]\d{2}:\d{2}$)',
+                 lambda m: '.' + m.group(1)[:6].ljust(6, '0'), raw)
+    return datetime.datetime.fromisoformat(raw.replace('Z', '+00:00')).timestamp()
+
+
 def freshest(credentials):
     # Call only after every store has been checked for the same owner. An old
     # file-backend copy must not mask a newer grant in another CLI store.
@@ -228,7 +236,7 @@ def freshest(credentials):
         try:
             access_token(value)
             raw = value.get('token', {}).get('expiry')
-            return (True, datetime.datetime.fromisoformat(raw.replace('Z', '+00:00')).timestamp() if raw else 0)
+            return (True, expiry_timestamp(raw) if raw else 0)
         except (ValueError, TypeError, AttributeError):
             return (False, 0)
     return max(credentials, key=expiry)
@@ -297,7 +305,7 @@ def access_token(credential):
     expiry = credential.get('token', {}).get('expiry')
     if expiry:
         try:
-            expires = datetime.datetime.fromisoformat(expiry.replace('Z', '+00:00')).timestamp()
+            expires = expiry_timestamp(expiry)
         except (ValueError, TypeError, AttributeError):
             raise PublicError('Antigravity 登录有效期无法确认')
         if expires <= time.time() + 60:
