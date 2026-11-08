@@ -373,6 +373,7 @@ struct AieyesCommands: Commands {
             window.center(); estimateWindows[key] = window
         }
         window.title = quota.name + (credits ? L(" · credit 价值") : L(" · 额度估值"))
+        window.delegate = self
         window.contentView = NSHostingView(rootView: QuotaEstimateView(model: model, quota: quota, onClose: { [weak window] in window?.close() }, credits: credits, initialGroup: group))
         fitToVisibleScreen(window); showWindow(window)
     }
@@ -478,6 +479,11 @@ struct AieyesCommands: Commands {
         return false
     }
     func windowWillClose(_ notification: Notification) {
+        if let window = notification.object as? NSWindow, estimateWindows.values.contains(where: { $0 === window }) {
+            // Keep window position, but release history, subscriptions and its IPC
+            // reader. Reopening already creates a fresh estimate view.
+            window.contentView = nil
+        }
         if (notification.object as? NSWindow) === detailWindow { model.setWindowVisible(false, window: "detail") }
         if (notification.object as? NSWindow) === detailWindow { model.settingsWindowVisible = false }
     }

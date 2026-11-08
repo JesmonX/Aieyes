@@ -428,6 +428,8 @@ struct AccountFlowResult {
     private var runtimeRefresh: Task<Void, Never>?
     private var runtimeRevisions: [String: Int] = [:]
     private var pendingRuntimeDomains = Set<String>()
+    private var collectingHistory = false
+    private var historyProgressPending = false
     private var completedDashboardRevision: [String: Int] = [:]
     private var scopeCache: [String: Dashboard] = [:]
     private var scopeCacheRevision: [String: Int] = [:]
@@ -446,7 +448,14 @@ struct AccountFlowResult {
     private func startRuntimeMonitoring() {
         runtimeObserver = NotificationCenter.default.addObserver(forName: EngineClient.runtimeChanged, object: nil, queue: .main) { [weak self] note in
             let revisions = note.userInfo?["revisions"] as? [String: Int] ?? [:]
-            Task { @MainActor in self?.acceptRuntimeRevisions(revisions) }
+            let historyCommitted = note.userInfo?["historyCommitted"] as? Bool == true
+            Task { @MainActor in
+                guard let self else { return }
+                self.historyProgressPending = self.historyProgressPending || historyCommitted
+                self.acceptRuntimeRevisions(revisions)
+                // An independent revision poll may arrive before this marker.
+                if historyCommitted { self.scheduleRuntimeRefresh() }
+            }
         }
         runtimeTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -498,7 +507,10 @@ struct AccountFlowResult {
             }
             if changed.contains("accounts") { await self.loadAccountStatuses() }
             if changed.contains("notifications") { await self.resetNotifications.drain() }
-            if !self.busy, !self.quotaBusy, self.estimateBusy.isEmpty, self.completedDashboardRevision != self.dashboardRevisions { await self.reload() }
+            if (!self.busy || self.collectingHistory && self.historyProgressPending), !self.quotaBusy, self.estimateBusy.isEmpty, self.completedDashboardRevision != self.dashboardRevisions {
+                self.historyProgressPending = false
+                await self.reload()
+            }
         }
     }
     private func loadSelectedPet() async {
@@ -1078,9 +1090,9 @@ struct AccountFlowResult {
     private func collectHistory(sourceID: String?, full: Bool) async {
         guard !installingUpdate, !busy, estimateBusy.isEmpty, !full || !settingsSaving else { return }
         let key = full ? "rescan" : "scan", label = full ? L("全量重扫") : L("同步记录")
-        busy = true; activity = label; beginRefresh(key)
+        busy = true; collectingHistory = true; activity = label; beginRefresh(key)
         if full { rescanning = true; rescanMessage = nil; rescanFailed = false }
-        defer { lastScan = Date(); busy = false; activity = ""; if full { rescanning = false } }
+        defer { lastScan = Date(); busy = false; collectingHistory = false; historyProgressPending = false; activity = ""; if full { rescanning = false } }
         do {
             let rows: [Acknowledgement] = try await engine.call(full ? "sources.rescan" : "sources.scan", params: sourceID.map { ["sourceId": $0] } ?? [:])
             let failures = rows.compactMap { row -> ActionFailure? in

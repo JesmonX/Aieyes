@@ -5,6 +5,7 @@ cd "$PROJECT_DIR"
 export PATH="$HOME/.cargo/bin:$PATH"
 . scripts/native-verifiers.sh
 cargo build --workspace --locked
+python3 scripts/test-streaming-core.py
 build_native_app
 MODEL_FIXTURE=$(mktemp -d "$PROJECT_DIR/.build/model-fixture.XXXXXX")
 trap 'rm -rf "$MODEL_FIXTURE"' EXIT HUP INT TERM

@@ -329,6 +329,11 @@ def bridge():
         control.close(); log.close()
 
 
+def file_scroll_persistence(source):
+    store = source/'ScrollPositionStore.swift'
+    return store.exists() and 'private final class PositionFile:' in store.read_text()
+
+
 def build(args):
     output = args.output.resolve(); cache=ROOT/'.build/swift-module-cache'
     framework = ROOT/'.build/swift/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64'
@@ -383,7 +388,8 @@ extension AppModel {
                 '-emit-module-path',str(module/'Aieyes.swiftmodule'),*[str(p) for p in sources],'-o',str(object_path)],
                 env=env,stdout=log,stderr=log,check=True)
             fingerprint_path.write_text(fingerprint)
-        subprocess.run(['swiftc',*flags,'-D','AIEYES_PERFORMANCE_MODULE','-I',str(module),
+        driver_flags = ['-D','AIEYES_FILE_SCROLL_POSITIONS'] if file_scroll_persistence(source) else []
+        subprocess.run(['swiftc',*flags,'-D','AIEYES_PERFORMANCE_MODULE',*driver_flags,'-I',str(module),
             '-Xlinker','-rpath','-Xlinker',str(framework),str(active_source),str(ROOT/'scripts/verify-release-interactions.swift'),
             str(object_path),'-o',str(binary)],env=env,stdout=log,stderr=log,check=True)
     print(binary)
@@ -677,7 +683,8 @@ def matrix(args):
         row.update(complete=result.returncode==0,returncode=result.returncode,endedAt=time.time());write_json(status_path,status)
         print('Finished '+label+' '+str(result.returncode),flush=True)
         summarize(args)
-    execute('isolated-control-no-scroll','workspace','replay',['--only','scroll','--no-scroll-persistence'])
+    if not file_scroll_persistence(output/'source-workspace/apps/macos/Sources/Aieyes'):
+        execute('isolated-control-no-scroll','workspace','replay',['--only','scroll','--no-scroll-persistence'])
     execute('isolated-control-active','workspace','replay',['--only','=navigate.analysis','--only-active-page'])
     # Put the user's scrolling/response concern first, then fill the other cases.
     ordered=sorted(scenarios,key=lambda s:(0 if 'scroll' in s else 1,scenarios.index(s)))

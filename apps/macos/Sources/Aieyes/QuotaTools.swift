@@ -266,8 +266,21 @@ struct PanelAccountsView: View {
 }
 
 struct QuotaEstimateView: View {
+    let model: AppModel
+    let quota: Quota
+    var onClose: (() -> Void)?
+    var credits = false
+    var initialGroup: String? = nil
+    var body: some View {
+        WindowActivityView {
+            QuotaEstimateContent(model: model, quota: quota, onClose: onClose, credits: credits, initialGroup: initialGroup)
+        }
+    }
+}
+private struct QuotaEstimateContent: View {
     @StateObject private var historyReader = EstimateHistoryReader()
     @SurfaceModel var model: AppModel
+    @Environment(\.surfaceActive) private var active
     let quota: Quota
     var onClose: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
@@ -278,6 +291,7 @@ struct QuotaEstimateView: View {
     @State private var window = ""
     @State private var confirmed = false
     @State var credits = false
+    @State private var expandedCalculations = Set<String>()
     var initialGroup: String? = nil
     private var busy: Bool { model.estimateBusy.contains(quota.id) }
     private var error: String? { model.estimateErrors[quota.id] }
@@ -316,7 +330,7 @@ struct QuotaEstimateView: View {
         .aieyesAccent().font(AppFont.body).disabled(model.installingUpdate)
         .padding(DesignTokens.dialogPadding)
         .frame(minWidth: DesignTokens.dialogEstimateMinWidth, idealWidth: DesignTokens.dialogEstimateWidth)
-        .task(id: historyRevision) { await loadHistory() }
+        .task(id: active ? historyRevision : nil) { if active { await loadHistory() } }
         .onChange(of: credits) { _, _ in confirmed = false }
         .onAppear {
             selected = Set(sources.map(\.id))
@@ -334,7 +348,7 @@ struct QuotaEstimateView: View {
         }
     }
     private var content: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        LazyVStack(alignment: .leading, spacing: 16) {
             Text(credits ? L("按 credits 消耗与样本成本估算 API 等价价值，金额不可兑换。") : L("按样本成本与额度消耗比例估算 API 等价价值，金额不可兑换。") + visibility.help).foregroundStyle(.secondary)
             AutomaticValuationControls(model: model, sources: sources)
             sampling
@@ -399,7 +413,7 @@ struct QuotaEstimateView: View {
         }.buttonStyle(.aieyesPrimary).disabled(!confirmed || selected.isEmpty || (!credits && window.isEmpty) || busy)
     }
     private var progress: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
+        SurfaceTimeline(interval: 1) { context in
             let elapsed = Int(context.date.timeIntervalSince(model.estimateStartedAt[quota.id] ?? context.date))
             HStack {
                 ProgressView().controlSize(.small)
@@ -441,7 +455,12 @@ struct QuotaEstimateView: View {
             if let reason = e.rollingExcludedReason { Text(L(reason)).font(AppFont.secondary).foregroundStyle(Palette.warn) }
             if e.originalEstimateId != nil { Text(L("已修正 · 原采样记录保留")).font(AppFont.secondary).foregroundStyle(.secondary) }
             else if e.samplingMode != "automatic" && e.status == "completed" && !e.hasValue { Button(L("按原记录修复估值")) { perform("repair", ["id": e.id]) }.disabled(busy) }
-            DisclosureGroup(L("计算依据")) { calculationDetails(e) }
+            DisclosureGroup(L("计算依据"), isExpanded: Binding(
+                get: { expandedCalculations.contains(e.recordKey) },
+                set: { if $0 { expandedCalculations.insert(e.recordKey) } else { expandedCalculations.remove(e.recordKey) } }
+            )) {
+                if expandedCalculations.contains(e.recordKey) { calculationDetails(e) }
+            }
         }.padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
     }
     private func resultHeader(_ e: QuotaEstimate) -> some View {

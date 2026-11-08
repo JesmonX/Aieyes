@@ -87,6 +87,73 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
    assert.equal(meter.clipped,false,'Qoder CN remaining credits must wrap without clipping: '+JSON.stringify(meter));
    assert.deepEqual(errors,[]);await page.close();
   }
-  console.log('Quota card layout: matching collapsed heights across subscriptions, font changes, resize, expansion and removal; first panel width passed.');
+  // A partial multi-account group must leave the unused workspace columns free, including its heading hit area.
+  for(const platform of ['windows','linux']){
+   const page=await browser.newPage({viewport:{width:1600,height:1000},reducedMotion:'reduce'}),errors=[];
+   page.on('pageerror',e=>errors.push(String(e)));
+   await page.addInitScript(fixture,{platform});
+   await page.addInitScript(()=>{
+    const f=navigationFixture;
+    f.settings.accounts.splice(2,4);f.quotas.splice(2,4);
+    const account=f.settings.accounts.find(a=>a.provider==='claude');account.provider='qoder';
+    f.settings.sources.find(s=>s.accountId===account.id).provider='qoder';
+    f.settings.agents.push({provider:'qoder',enabled:true,machineIds:['local']});
+    const q=f.quotas.find(q=>q.provider==='claude');q.provider='qoder';q.windows=[];
+    q.meters=[{id:'credits',label:'套餐 Credits',unit:'credits',used:0,total:0,remaining:0}];
+   });
+   await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);await page.evaluate(()=>AieyesApp.ready);
+   const geometry=()=>page.evaluate(()=>{
+    const box=el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width};};
+    return [...document.querySelectorAll('.quota-group')].map(group=>({provider:group.dataset.provider,heading:box(group.querySelector('summary')),cards:[...group.querySelectorAll('.quota-card')].filter(c=>c.getClientRects().length).map(box)}));
+   });
+   const settle=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))));
+   const check=async width=>{
+    await page.setViewportSize({width,height:1000});await settle();
+    const groups=await geometry(),[codex,qoder,deepseek]=groups;
+    const visible=groups.flatMap(g=>[g.heading,...g.cards]);
+    for(let i=0;i<visible.length;i++)for(let j=i+1;j<visible.length;j++){
+     const a=visible[i],b=visible[j];
+     assert(!(Math.min(a.right,b.right)-Math.max(a.x,b.x)>1&&Math.min(a.bottom,b.bottom)-Math.max(a.y,b.y)>1),`${platform} ${width}px: headings and cards must not overlap: ${JSON.stringify(groups)}`);
+    }
+    if(width>=1390){
+     assert(Math.abs(codex.heading.y-qoder.heading.y)<1,'Qoder heading aligns with the partial Codex group');
+     assert(Math.abs(codex.cards[0].y-qoder.cards[0].y)<1,'Qoder card aligns with Codex cards');
+     assert(codex.heading.right<qoder.heading.x,'Codex heading hit area ends before Qoder');
+     assert(Math.abs(codex.cards[0].width-qoder.cards[0].width)<1,'All accounts retain one workspace column');
+     if(width>=1800)assert(Math.abs(deepseek.heading.y-codex.heading.y)<1,'Both single-account groups fill the spare columns');
+    }else if(width<974)assert(qoder.heading.y>codex.cards.at(-1).bottom,'Narrow layouts stack provider groups');
+   };
+   for(const width of [1600,1900,1120,760,1600])await check(width);
+   const qoder=page.locator('.quota-group[data-provider=qoder]'),codex=page.locator('.quota-group[data-provider=codex]');
+   await qoder.locator('> summary').click();await settle();
+   assert.equal(await qoder.evaluate(el=>el.open),false);assert.equal(await codex.evaluate(el=>el.open),true);
+   await qoder.locator('> summary').click();await check(1600);
+   await codex.locator('.quota-title').first().click();await check(1600);
+   // The shorter Codex column still accepts following groups when a sibling card is expanded.
+   await page.evaluate(()=>{
+    const card=document.querySelector('.quota-card[data-provider=codex]');
+    card.style.minHeight='800px';
+    const qoder=document.querySelector('.quota-card[data-provider=qoder]');qoder.style.minHeight='800px';
+   });await settle();
+   const expanded=await geometry();
+   assert(Math.abs(expanded[2].heading.x-expanded[0].cards[1].x)<1,'DeepSeek fills the shorter Codex column');
+   assert(expanded[2].heading.y>=expanded[0].cards[1].bottom,'Following group clears the shorter card');
+   assert(expanded[2].heading.y<expanded[0].cards[0].bottom,'Expanded card does not force a blank row');
+   await page.evaluate(()=>{document.documentElement.style.setProperty('--font-secondary','20px');document.documentElement.style.setProperty('--font-card-title','22px');});
+   await check(1600);
+   await page.evaluate(()=>{
+    state.settings.accounts.push({...state.settings.accounts[0],id:'extra'});
+    state.dashboard.quotas.push({...state.dashboard.quotas[0],accountId:'extra'});
+    renderOverview();
+   });
+   await page.setViewportSize({width:1900,height:1000});await settle();
+   const three=await geometry();
+   assert.equal(three[0].cards.length,3);
+   assert(Math.abs(three[0].heading.y-three[1].heading.y)<1,'A three-account group leaves the fourth column free');
+   assert(three[0].heading.right<three[1].heading.x,'Three-account heading stays in its own columns');
+   assert(three[0].cards.every(c=>Math.abs(c.width-three[1].cards[0].width)<1),'Nested three-column grids retain workspace card widths');
+   assert.deepEqual(errors,[]);await page.close();
+  }
+  console.log('Quota card layout: collapsed heights, panel width, partial-group alignment, heading hit areas, resize and masonry expansion passed.');
  }finally{if(browser)await browser.close();server.close();}
 })().catch(error=>{console.error(error);process.exit(1);});

@@ -4,6 +4,21 @@ import ScreenCaptureKit
 import Combine
 @testable import Aieyes
 
+@MainActor private final class SurfaceCounter {
+    var renders = 0
+    var value: String?
+    var active = true
+}
+private struct CountedWindowSurface: View {
+    @SurfaceModel var model: AppModel
+    @Environment(\.surfaceActive) private var active
+    let counter: SurfaceCounter
+    var body: some View {
+        let _ = { counter.renders += 1; counter.value = model.message; counter.active = active }()
+        Text(model.message ?? "Visible window")
+    }
+}
+
 @MainActor final class PerformanceDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -33,6 +48,32 @@ import Combine
         for frame in 1...30 { var pet = PetState.idle; pet.label = "工作\(frame)"; model.petState = pet }
         precondition(appNotifications == 0 && firstNotifications == 30 && secondNotifications == 0, "Live/account updates must only notify their own projections")
         appObserver.cancel(); firstObserver.cancel(); secondObserver.cancel()
+        let counter = SurfaceCounter()
+        let auxiliary = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 300, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        auxiliary.isReleasedWhenClosed = false
+        auxiliary.contentView = NSHostingView(rootView: WindowActivityView { CountedWindowSurface(model: model, counter: counter) })
+        auxiliary.orderFrontRegardless()
+        try await Task.sleep(for: .milliseconds(300))
+        model.message = "Visible update"
+        try await Task.sleep(for: .milliseconds(100))
+        precondition(counter.value == "Visible update", "Visible auxiliary content must observe its model")
+        auxiliary.orderOut(nil)
+        for _ in 0..<500 {
+            if !counter.active { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        precondition(!counter.active, "Hidden auxiliary content must receive its window's inactive state")
+        try await Task.sleep(for: .milliseconds(100))
+        let hiddenRenders = counter.renders
+        for index in 0..<20 {
+            model.message = "Hidden update \(index)"
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        precondition(counter.renders == hiddenRenders, "Hidden auxiliary windows must not rebuild on background updates: \(hiddenRenders) -> \(counter.renders), active=\(counter.active)")
+        auxiliary.orderFrontRegardless()
+        try await Task.sleep(for: .milliseconds(200))
+        precondition(counter.value == "Hidden update 19", "Reopening must publish the latest model, including updates missed while hidden")
+        auxiliary.close(); auxiliary.contentView = nil; model.message = nil
         model.settingsLoaded = true
         model.settingsDraft = model.settings
         let view = NSHostingView(rootView: SettingsView(model: model).background(Color(nsColor: .windowBackgroundColor)))

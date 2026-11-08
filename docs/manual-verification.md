@@ -2,7 +2,7 @@
 
 从仓库根目录运行。共享 Python 检查支持 Python 3.9+，旧版本复用仓库内 Tomli 解析 TOML；发布打包仍按对应构建脚本的依赖要求执行。共享检查和浏览器检查先执行 `npm ci --prefix apps/desktop`；浏览器检查安装 Playwright Chromium，WebKit 通道另安装 WebKit。核心集成检查使用先构建的 `target/debug/aieyes-core`。原生检查需要 macOS、Swift 和已解析的 Sparkle 依赖。
 
-自动化入口：`sh scripts/ci-checks.sh [--rust]`、`npm run test:ui --prefix apps/desktop`、`sh scripts/test-native.sh`。共享检查包含发布、采集、唤醒、增量历史、旧账户历史、Antigravity 身份、Node 交互、重置格式及生成契约；远端 Codex 权限/锁测试依赖 POSIX，在 Unix 检查任务执行。Web 测试链包含真实核心的主题同步；`verify-models.swift` 在原生测试链中使用真实核心输出。面板偏好和重置格式由两端读取同一组 JSON 夹具。
+自动化入口：`sh scripts/ci-checks.sh [--rust]`、`npm run test:ui --prefix apps/desktop`、`sh scripts/test-native.sh`。共享检查包含发布、采集、唤醒、增量历史、旧账户历史、Antigravity 身份、Node 交互、重置格式及生成契约；远端 Codex 权限/锁测试依赖 POSIX，在 Unix 检查任务执行。Web 测试链包含真实核心的主题同步；`verify-models.swift` 在原生测试链中使用真实核心输出，流式历史检查也随 macOS 原生 CI 执行。面板偏好和重置格式由两端读取同一组 JSON 夹具。
 
 `node scripts/test-workspace-ui.cjs` 可单独运行工作区交互检查并生成 Web 预览。
 
@@ -14,19 +14,24 @@
 | [generate-icons.py](../scripts/generate-icons.py) | 重新生成品牌图标，`python3 scripts/generate-icons.py`；会更新图标资产 |
 | [test-native-performance.sh](../scripts/test-native-performance.sh) | `sh scripts/test-native-performance.sh`，链接真实 Swift debug 对象并测量视图性能 |
 | [test-server-performance.sh](../scripts/test-server-performance.sh) | `sh scripts/test-server-performance.sh`；`--deadlines-only` 单独验证调度暂停、恢复和退出 |
-| [test-streaming-core.py](../scripts/test-streaming-core.py) | `python3 scripts/test-streaming-core.py`，真实核心与临时 SSH 流式夹具；测试中需要本机进程及监听权限 |
+| [test-streaming-core.py](../scripts/test-streaming-core.py) | `python3 scripts/test-streaming-core.py`，真实核心与临时 SSH 流式夹具，验证慢远端期间本地提交与通知、游标原子性、失败和进程退出；已纳入 macOS 原生 CI |
 | [test-update-transport.py](../scripts/test-update-transport.py) | `python3 scripts/test-update-transport.py`，真实核心子进程和本机录制代理，不访问公网 |
 | [benchmark-performance.py](../scripts/benchmark-performance.py) | `python3 scripts/benchmark-performance.py --soak-seconds 3600`，默认使用 release 核心及临时合成库；可用 `--binary` 和 `--output` 指定路径 |
 | [test-runtime-performance.sh](../scripts/test-runtime-performance.sh) | `sh scripts/test-runtime-performance.sh .local/runtime-performance 2400 600`，菜单/桌宠真实图层动画、隐藏页面与物理内存长测；只使用隔离数据 |
 | [benchmark-runtime-hotpaths.py](../scripts/benchmark-runtime-hotpaths.py) | `python3 scripts/benchmark-runtime-hotpaths.py --before <旧核心>`，合成采样历史与未变化会话读取对照 |
 | [test-estimate-display.py](../scripts/test-estimate-display.py) | `python3 scripts/test-estimate-display.py`，调用真实核心并比较 Web/Swift 完整历史与展示投影；已纳入性能 UI 套件 |
 | [benchmark-remote-history.py](../scripts/benchmark-remote-history.py) | `python3 scripts/benchmark-remote-history.py`，全量与增量采集性能对照 |
+| [benchmark-history-sync.py](../scripts/benchmark-history-sync.py) | `python3 scripts/benchmark-history-sync.py`，1,000 条合成本地记录与延迟 2 秒的假 SSH，分别测首次写入可读、整批完成和未变增量；不访问真实网络 |
+| [benchmark-interactions-ui.cjs](../scripts/benchmark-interactions-ui.cjs) | `node scripts/benchmark-interactions-ui.cjs .local/performance-ui/interactions.json`，8/32/128 账户的生产 DOM 布局、展开、滚动与切页；`AIEYES_PERF_REDUCED_MOTION=no-preference` 保留正常动画，`AIEYES_PERF_ACCOUNTS=8,32` 可缩小规模 |
+| [test-quota-layout-performance.cjs](../scripts/test-quota-layout-performance.cjs) | `node scripts/test-quota-layout-performance.cjs`，检查账户增长时布局次数有界、折叠刷新后观察目标与测量节点得到清理；已纳入 `test-performance-ui.cjs` |
 | [verify-update-transfer.swift](../scripts/verify-update-transfer.swift) | 可选真实联网读取、下载和签名校验；需要包含 Sparkle 更新源、公钥的临时 plist；不安装更新 |
 | [test-ui-native-render.sh](../scripts/test-ui-native-render.sh) | `sh scripts/test-ui-native-render.sh`，合成场景原生截图矩阵；可用 `AIEYES_RENDER_BINARY`、`AIEYES_RENDER_ROOT` 指定构建与输出 |
 
 Tauri 宿主测试先运行 `node scripts/prepare-wakeup.cjs --debug`，再运行 `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol`。Windows/macOS Tauri 测试在上述 Cargo 命令中增加 `--features native-tray`；Linux 不启用此特性。打包资源只匹配真实核心二进制，CI 也按此顺序准备资源。
 
 测试输出放在 `.local/`；历史快照与过期安装包放在 `.local/archive/YYYY-MM-DD/`。这些文件不代表当前源码或可发布产物。
+
+原生可见窗口、滚动与动画测量要求 macOS 图形会话已解锁；锁屏时窗口不会进入可见合成状态，不能将其耗时与可见基线比较。`profile-release-interactions.py` 的 `--no-scroll-persistence` 仅适用于旧版 UserDefaults 存储；当前独立文件存储拒绝该控制参数，正常版本对照仍保留实际位置保存。
 
 桌宠图形可单独执行 `sh scripts/test-native-pets.sh`，也随 `sh scripts/test-native.sh` 在 Core/macOS 工作流的 Apple Silicon 任务中运行。原生验证脚本通过 `scripts/native-verifiers.sh` 复用一次 debug 构建的 App 对象，以 `@testable import Aieyes` 链接，不再逐个重新编译源码；与 Foundation 同名的类型（如 `Host`）需在验证脚本中用 `typealias` 指明。窗口显示与隐藏检查按就绪状态等待，最多 5 秒，避免固定延迟误判。
 

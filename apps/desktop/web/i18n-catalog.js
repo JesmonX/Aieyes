@@ -3942,5 +3942,8 @@ globalThis.AieyesMessages = {
   "圆环取首个账户：上半圈 5h，下半圈 7d。悬停托盘图标可查看所选的值。": "The ring shows the first account: top half 5h, bottom half 7d. Hover over the tray icon to see the selected values.",
   "月重置时间": "Monthly reset",
   "Credits 估值": "Credits valuation",
-  "剩余": "Remaining"
+  "剩余": "Remaining",
+  "远程同步任务失败": "Remote synchronization task failed",
+  "全量重扫 · {0}": "Full rescan · {0}",
+  "远程读取结果缺失": "Remote read result is missing"
 };

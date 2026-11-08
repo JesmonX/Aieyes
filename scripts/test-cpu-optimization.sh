@@ -20,4 +20,4 @@ cp .build/verify-cpu-optimization "$check_bundle/Contents/MacOS/checks"
 cat > "$check_bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>$check_domain</string><key>CFBundleExecutable</key><string>checks</string><key>LSUIElement</key><true/></dict></plist>
 PLIST
-"$check_bundle/Contents/MacOS/checks"
+AIEYES_DATA_DIR="$check_bundle/data" "$check_bundle/Contents/MacOS/checks"

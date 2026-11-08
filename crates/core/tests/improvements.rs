@@ -286,6 +286,17 @@ fn recalculation_clears_unmatched_snapshots_and_resync_cannot_restore_them() {
 #[test]
 fn manual_boundaries_report_progress_without_duplicate_quota_refresh_scans() {
     use std::sync::{Arc, Mutex};
+    fn record_stage(progress: serde_json::Value, stages: &Mutex<Vec<String>>) {
+        if progress["kind"] == "runtime.changed" {
+            assert_eq!(progress["historyCommitted"], true);
+            assert!(progress["revisions"].is_object());
+        } else {
+            stages
+                .lock()
+                .unwrap()
+                .push(progress["stage"].as_str().unwrap().into());
+        }
+    }
     let directory = tempfile::tempdir().unwrap();
     let logs = directory.path().join("logs");
     std::fs::create_dir(&logs).unwrap();
@@ -316,7 +327,7 @@ fn manual_boundaries_report_progress_without_duplicate_quota_refresh_scans() {
         .unwrap();
     let stages = Arc::new(Mutex::new(Vec::<String>::new()));
     let observed = stages.clone();
-    let started = engine.call_with_progress("quotaEstimates.start", json!({"accountKey":"custom:account","windowId":"short","sourceIds":["source"],"confirmed":true}), Box::new(move |p| observed.lock().unwrap().push(p["stage"].as_str().unwrap().into()))).unwrap();
+    let started = engine.call_with_progress("quotaEstimates.start", json!({"accountKey":"custom:account","windowId":"short","sourceIds":["source"],"confirmed":true}), Box::new(move |p| record_stage(p, &observed))).unwrap();
     assert_eq!(
         *stages.lock().unwrap(),
         vec![
@@ -333,12 +344,7 @@ fn manual_boundaries_report_progress_without_duplicate_quota_refresh_scans() {
         .call_with_progress(
             "quotaEstimates.stop",
             json!({"id":started["id"]}),
-            Box::new(move |p| {
-                observed
-                    .lock()
-                    .unwrap()
-                    .push(p["stage"].as_str().unwrap().into())
-            }),
+            Box::new(move |p| record_stage(p, &observed)),
         )
         .unwrap();
     assert_eq!(done["status"], "completed");

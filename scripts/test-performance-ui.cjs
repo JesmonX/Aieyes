@@ -2,6 +2,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {chromium}=require('../apps/desktop/node_modules/playwright');
 const fixture=require('./fixtures/browser-ui.cjs');
+require('node:child_process').execFileSync(process.execPath,[path.join(__dirname,'test-quota-layout-performance.cjs')],{cwd:path.resolve(__dirname,'..'),stdio:'inherit'});
 require('node:child_process').execFileSync(process.env.PYTHON||(process.platform==='win32'?'python':'python3'),[path.join(__dirname,'test-estimate-display.py')],{cwd:path.resolve(__dirname,'..'),stdio:'inherit'});
 (async()=>{
  const root=path.resolve(__dirname,'../apps/desktop/web');
@@ -183,6 +184,19 @@ require('node:child_process').execFileSync(process.env.PYTHON||(process.platform
      return {retries,whileBusy,status:modernCalls.slice(before).filter(c=>c.method==='dashboard.status').length};
    }finally{state.busy=false;window.setTimeout=set;}
  });assert.deepEqual(busyRefresh,{retries:1,whileBusy:0,status:1});
+ const partialHistory=await modern.evaluate(async()=>{
+   const previous=state.refreshState.scan,before=modernCalls.length;
+   state.busy=true;state.refreshState.scan={busy:true};ownedOperations.set('history-progress',Date.now());
+   try{
+     for(let i=0;i<3;i++){
+       modernRevisions.usage++;
+       __listeners['runtime:changed']({payload:{revisions:{...modernRevisions}}});
+       __listeners['runtime:changed']({payload:{revisions:{...modernRevisions},operationId:'history-progress',historyCommitted:true}});
+     }
+     await new Promise(r=>setTimeout(r,350));
+     return {reads:modernCalls.slice(before).filter(c=>c.method==='dashboard').length,busy:state.busy,scanBusy:state.refreshState.scan.busy};
+   }finally{state.busy=false;state.refreshState.scan=previous;ownedOperations.delete('history-progress');updateActivity();}
+ });assert.deepEqual(partialHistory,{reads:1,busy:true,scanBusy:true},'Committed sources refresh during a slow scan without completing its busy state');
  const hostMonitor=await modern.evaluate(async()=>{
    const saved=structuredClone(state.settings),invoke=window.__TAURI__.core.invoke;
    let configurations=0,refreshes=0,version=10;

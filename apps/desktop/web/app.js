@@ -481,7 +481,7 @@ function quotaSection(d) {
     const rows = accounts.filter((a) => AieyesUI.sameAgent(a.provider, provider)),quotas = rows.map((a) => (d.quotas ?? []).find((q) => q.provider === a.provider && q.accountId === a.id));
     const attention = quotas.filter(quotaNeedsAttention).length;
     // The failure button shares the heading row but stays outside <summary>, so it is never nested in the toggle.
-    return `<section class="quota-group-shell" data-single-account="${rows.length === 1}"><button type="button" class="group-attention" data-quota-failures="${escapeHTML(provider)}" aria-haspopup="dialog" aria-expanded="false" aria-controls="quota-failures-popover" title="${AieyesI18n.t("查看失败原因与重试")}" ${attention ? '' : 'hidden'}>${uiIcon('warning')}<span data-quota-attention>${AieyesI18n.t("{0} 个账户查询失败", attention)}</span></button><details class="quota-group" data-single-account="${rows.length === 1}" data-provider="${escapeHTML(provider)}" data-persist-disclosure="quota-group:${provider}" ${disclosureOpen('quota-group:' + provider) ? 'open' : ''}><summary class="quota-group-heading"><span class="category-dot"></span><strong>${escapeHTML(AieyesUI.quotaProviderName(provider))}</strong><span class="muted">${AieyesI18n.t("{0} 个账户", rows.length)}</span></summary><div class="quotas">${rows.map((a, i) => quotas[i] ? quotaCard(quotas[i], accounts.length) : `<div class="card quota-placeholder" tabindex="0" data-provider="${escapeHTML(provider)}" data-quota-placeholder="${escapeHTML(a.provider + ':' + a.id)}"><h3>${providerMark(provider)} ${escapeHTML(a.name)}</h3><p class="muted" role="status">${quotaPlaceholderText()}</p></div>`).join('')}</div></details></section>`;
+    return `<section class="quota-group-shell" style="--quota-account-count:${rows.length}" data-single-account="${rows.length === 1}"><button type="button" class="group-attention" data-quota-failures="${escapeHTML(provider)}" aria-haspopup="dialog" aria-expanded="false" aria-controls="quota-failures-popover" title="${AieyesI18n.t("查看失败原因与重试")}" ${attention ? '' : 'hidden'}>${uiIcon('warning')}<span data-quota-attention>${AieyesI18n.t("{0} 个账户查询失败", attention)}</span></button><details class="quota-group" data-single-account="${rows.length === 1}" data-provider="${escapeHTML(provider)}" data-persist-disclosure="quota-group:${provider}" ${disclosureOpen('quota-group:' + provider) ? 'open' : ''}><summary class="quota-group-heading"><span class="category-dot"></span><strong>${escapeHTML(AieyesUI.quotaProviderName(provider))}</strong><span class="muted">${AieyesI18n.t("{0} 个账户", rows.length)}</span></summary><div class="quotas">${rows.map((a, i) => quotas[i] ? quotaCard(quotas[i], accounts.length) : `<div class="card quota-placeholder" tabindex="0" data-provider="${escapeHTML(provider)}" data-quota-placeholder="${escapeHTML(a.provider + ':' + a.id)}"><h3>${providerMark(provider)} ${escapeHTML(a.name)}</h3><p class="muted" role="status">${quotaPlaceholderText()}</p></div>`).join('')}</div></details></section>`;
   }).join('') + '</div>';
 }
 async function job(label, fn, refreshKey = null, refreshItem = null) {
@@ -1929,15 +1929,16 @@ async function listenForSharedState() {
     const opened = !state.panelOpen && payload.panelOpen;state.panelOpen = Boolean(payload.panelOpen);state.panelPage = payload.panelPage ?? state.panelPage;scheduleRefreshes();if (opened && state.dashboardDirty) {state.dashboardDirty = false;void refreshExternalData(true);}
   });
   const revisions = runtimeVersions,seenOperations = new Set();
-  let sharedRefreshTimer,sharedSettings = false,sharedPending = false,sharedReady = false,sharedMethod = '';
+  let sharedRefreshTimer,sharedSettings = false,sharedPending = false,sharedReady = false,sharedMethod = '',sharedHistory = false;
   resumeSharedRefresh = () => {
-    if (!sharedPending || !sharedReady || externalRefresh || state.busy || state.quotaBusy || state.estimateBusy || state.settingsSaving || state.settingsCommitting || state.refreshState.quotas?.busy) return;
+    const committedDuringScan = sharedHistory && (state.refreshState.scan?.busy || state.refreshState.rescan?.busy) && !state.refreshState.prices?.busy;
+    if (!sharedPending || !sharedReady || externalRefresh || state.busy && !committedDuringScan || state.quotaBusy || state.estimateBusy || state.settingsSaving || state.settingsCommitting || state.refreshState.quotas?.busy) return;
     const readSettings = sharedSettings,method = sharedMethod;
-    sharedPending = false;sharedReady = false;sharedSettings = false;sharedMethod = '';
+    sharedPending = false;sharedReady = false;sharedSettings = false;sharedMethod = '';sharedHistory = false;
     if (readSettings || lastDashboardVersion !== dashboardVersion()) void refreshExternalData(readSettings, method).finally(resumeSharedRefresh);
   };
-  const queueSharedRefresh = (settings, method = '') => {
-    sharedSettings ||= settings;sharedMethod = method || sharedMethod;sharedPending = true;sharedReady = false;
+  const queueSharedRefresh = (settings, method = '', history = false) => {
+    sharedSettings ||= settings;sharedMethod = method || sharedMethod;sharedHistory ||= history;sharedPending = true;sharedReady = false;
     clearTimeout(sharedRefreshTimer);sharedRefreshTimer = setTimeout(() => {sharedReady = true;resumeSharedRefresh();}, 120);
   };
   const rememberOperation = (id) => {if (id) {seenOperations.add(id);if (seenOperations.size > 256) seenOperations.delete(seenOperations.values().next().value);}};
@@ -1949,15 +1950,18 @@ async function listenForSharedState() {
   });
   await events.listen('runtime:changed', ({ payload }) => {
     if (!state.revisionEvents || !payload.revisions) return;
+    const historyCommitted = payload.historyCommitted === true;
     const changed = Object.keys(payload.revisions).filter((key) => payload.revisions[key] > (revisions[key] ?? -1));
     for (const key of changed) revisions[key] = payload.revisions[key];
-    if (!changed.length) return;
+    // The background revision observer may beat the operation's committed marker.
+    // That marker must still release a pending history refresh during the scan.
+    if (!changed.length && !historyCommitted) return;
     if (changed.some((key) => ['settings', 'usage', 'prices'].includes(key))) clearUsageSnapshots();
-    if (ownedOperations.has(payload.operationId) || seenOperations.has(payload.operationId) || !state.settings) return;
-    rememberOperation(payload.operationId);
+    if (!state.settings || !historyCommitted && (ownedOperations.has(payload.operationId) || seenOperations.has(payload.operationId))) return;
+    if (!historyCommitted) rememberOperation(payload.operationId);
     if (changed.includes('accounts')) void window.AieyesAgentSettings?.refreshStatuses(false);
     if (document.hidden || PANEL && !state.panelOpen) {state.dashboardDirty = true;return;}
-    if (changed.some((key) => ['settings', 'usage', 'quotas', 'estimates', 'prices', 'sources'].includes(key))) queueSharedRefresh(changed.includes('settings'));
+    if (historyCommitted || changed.some((key) => ['settings', 'usage', 'quotas', 'estimates', 'prices', 'sources'].includes(key))) queueSharedRefresh(changed.includes('settings'), '', historyCommitted);
   });
   await events.listen('desktop:settings', () => {if (state.revisionEvents) return;invalidateQuotaSchedule();window.AieyesNetwork?.invalidate();if (PANEL) return refreshExternalData(true);});
   await events.listen('desktop:quotas', ({ payload }) => applyQuotaSamples(payload));

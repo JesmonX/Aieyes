@@ -20,6 +20,16 @@ SPEC.loader.exec_module(profiler)
 
 
 class IsolationTests(unittest.TestCase):
+    def test_file_scroll_store_disables_the_legacy_defaults_control(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)
+            self.assertFalse(profiler.file_scroll_persistence(source))
+            store=source/'ScrollPositionStore.swift'
+            store.write_text('defaults.set(point, forKey: key)')
+            self.assertFalse(profiler.file_scroll_persistence(source))
+            store.write_text('private final class PositionFile: @unchecked Sendable {}')
+            self.assertTrue(profiler.file_scroll_persistence(source))
+
     def test_relinking_a_baseline_keeps_captured_sources(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);output=root/'audit';source=output/'source-workspace/apps/macos/Sources/Aieyes'

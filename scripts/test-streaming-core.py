@@ -16,16 +16,19 @@ BINARY = pathlib.Path(os.environ.get('AIEYES_TEST_CORE', ROOT/'target/debug/aiey
 
 class Core:
     def __init__(self, data, bin_directory):
-        self.child = subprocess.Popen([str(BINARY)],env={**os.environ,'AIEYES_DATA_DIR':str(data),'PATH':str(bin_directory)+os.pathsep+os.environ['PATH']},stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        self.child = subprocess.Popen([str(BINARY)],env={**os.environ,'AIEYES_AUTO_SCAN':'off','AIEYES_DATA_DIR':str(data),'PATH':str(bin_directory)+os.pathsep+os.environ['PATH']},stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         self.sequence=0
-    def call(self, method, params=None):
+    def call(self, method, params=None, on_progress=None):
         self.sequence+=1
         self.child.stdin.write(json.dumps(dict(id=self.sequence,method=method,params=params or {}))+'\n');self.child.stdin.flush()
         while True:
             line=self.child.stdout.readline()
             if not line: raise RuntimeError(self.child.stderr.read())
             response=json.loads(line)
-            if response.get('id')!=self.sequence:continue
+            if response.get('id')!=self.sequence:
+                if on_progress and response.get('method') == 'operations.progress':
+                    on_progress(response.get('params', {}))
+                continue
             if 'error' in response:raise RuntimeError(response['error'])
             return response['result']
     def close(self):
@@ -36,6 +39,59 @@ class Core:
 
 
 class StreamingCore(unittest.TestCase):
+    def test_local_commits_and_progress_arrive_before_slow_remote_finishes(self):
+        with tempfile.TemporaryDirectory(prefix='aieyes-local-first-') as temporary:
+            root = pathlib.Path(temporary).resolve()
+            directory = root/'bin'; directory.mkdir()
+            history = root/'history'; history.mkdir()
+            (history/'fixture.jsonl').write_text('\n'.join(json.dumps(row) for row in [
+                dict(type='session_meta', payload=dict(id='local-fixture')),
+                dict(type='turn_context', payload=dict(model='fixture')),
+                dict(type='event_msg', timestamp=int(time.time()), payload=dict(type='token_count', info=dict(total_token_usage=dict(input_tokens=100))))
+            ])+'\n')
+            ssh = directory/'ssh'
+            ssh.write_text("""#!/usr/bin/env python3
+import sys,time,json,pathlib
+sys.stdin.read()
+root=pathlib.Path(__file__).parent
+(root/'started').touch()
+deadline=time.monotonic()+15
+while not (root/'release').exists() and time.monotonic()<deadline:time.sleep(.01)
+print(json.dumps(dict(protocol=2,kind='done',files=0,events=0,readBytes=0,failedFiles=0)),flush=True)
+""")
+            ssh.chmod(0o700)
+            core = Core(root/'data', directory)
+            try:
+                settings = core.call('settings.get')
+                settings.update(accounts=[], sources=[
+                    dict(id='remote', provider='codex', accountId='', path='/fixture', enabled=True, hostId='fixture'),
+                    dict(id='local', provider='codex', accountId='', path=str(history), enabled=True)
+                ], hosts=[dict(id='fixture', target='synthetic.invalid', enabled=True)])
+                settings['agents'] = [dict(provider='codex', enabled=True, machineIds=['local', 'fixture'])]
+                settings['localMonitor']['enabled'] = False
+                core.call('settings.save', settings)
+                progress = []
+                with concurrent.futures.ThreadPoolExecutor(1) as executor:
+                    work = executor.submit(core.call, 'sources.scan', {}, progress.append)
+                    try:
+                        with sqlite3.connect(root/'data/aieyes.sqlite') as db:
+                            deadline = time.monotonic()+10
+                            while time.monotonic()<deadline:
+                                count = db.execute("SELECT count(*) FROM event_sources WHERE source_id='local'").fetchone()[0]
+                                if count and any(p.get('historyCommitted') for p in progress) and (directory/'started').exists(): break
+                                time.sleep(.01)
+                            self.assertEqual(count, 1, 'Local import must not wait for remote completion')
+                            self.assertTrue(any(p.get('historyCommitted') and p.get('revisions', {}).get('usage', 0)>0 for p in progress))
+                            self.assertFalse(work.done(), 'Remote must still be pending when local progress is published')
+                    finally:
+                        (directory/'release').touch()
+                    rows = work.result(timeout=10)
+                self.assertEqual([r['id'] for r in rows], ['remote', 'local'])
+                self.assertTrue(all('error' not in row for row in rows), rows)
+            finally:
+                (directory/'release').touch()
+                core.close()
+
     def test_corrupt_frame_after_stream_start_does_not_report_success(self):
         with tempfile.TemporaryDirectory(prefix='aieyes-corrupt-stream-') as root:
             root = pathlib.Path(root)

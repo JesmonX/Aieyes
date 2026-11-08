@@ -9,13 +9,16 @@
   layer.className = 'quota-measure-layer';layer.inert = true;layer.setAttribute('aria-hidden', 'true');
   document.body.append(layer);
   // Each card's collapsed height is cached against its width and text; only changed cards are cloned.
-  const measured = new WeakMap();
+  let measured = new WeakMap();
   function measure() {
     frame = 0;
-    const cards = [...content.querySelectorAll('.quota-card[data-provider],.quota-placeholder[data-provider]')].filter(card => card.getBoundingClientRect().width > 0);
-    const maxima = new Map();
-    for (const card of cards) {
-      const width = card.getBoundingClientRect().width, key = width + '|' + card.textContent, provider = (PROVIDER_ALIAS[card.dataset.provider] ?? card.dataset.provider);
+    // Read the live grid before inserting any probes. Measuring after each insertion
+    // makes the browser lay out the entire quota grid once for every account.
+    const cards = [...content.querySelectorAll('.quota-card[data-provider],.quota-placeholder[data-provider]')]
+      .map(card => ({card, width:card.getBoundingClientRect().width})).filter(({width}) => width > 0);
+    const maxima = new Map(), probes = [], fragment = document.createDocumentFragment();
+    for (const {card, width} of cards) {
+      const key = width + '|' + card.textContent, provider = (PROVIDER_ALIAS[card.dataset.provider] ?? card.dataset.provider);
       const cached = measured.get(card);
       if (cached?.key === key) {maxima.set(provider, Math.max(maxima.get(provider) || 0, cached.height));continue;}
       const clone = card.cloneNode(true);
@@ -26,18 +29,23 @@
       const wrapper = document.createElement('div');
       wrapper.className = document.body.dataset.view === 'panel' ? 'panel-body' : '';
       wrapper.style.cssText = 'padding:0;overflow:visible;display:block;width:' + width + 'px';
-      wrapper.append(clone);layer.replaceChildren(wrapper);
-      const height = Math.ceil(clone.getBoundingClientRect().height);measured.set(card, { key, height });
+      wrapper.append(clone);fragment.append(wrapper);probes.push({card, clone, key, provider});
+    }
+    // One insertion and one layout for every changed card, followed by writes only.
+    if (probes.length) layer.replaceChildren(fragment);
+    for (const {card, clone, key, provider} of probes) {
+      const height = Math.ceil(clone.getBoundingClientRect().height);measured.set(card, {key, height});
       maxima.set(provider, Math.max(maxima.get(provider) || 0, height));
     }
-    layer.replaceChildren();
-    for (const card of cards) {
+    if (probes.length) layer.replaceChildren();
+    for (const {card} of cards) {
       const provider = (PROVIDER_ALIAS[card.dataset.provider] ?? card.dataset.provider);
       const height = maxima.get(provider) + 'px';
       if (card.style.getPropertyValue('--quota-collapsed-min') !== height) card.style.setProperty('--quota-collapsed-min', height);
     }
   }
   const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
+  const invalidate = () => { measured = new WeakMap();schedule(); };
   // Live values elsewhere in #content (servers, sessions) change constantly; only quota cards need measuring.
   const QUOTA = '.quota-card,.quota-placeholder';
   const touchesQuota = record => {
@@ -48,20 +56,20 @@
   content.addEventListener('toggle', schedule, true);
   let width = -1;
   new ResizeObserver(() => { if (content.clientWidth !== width) { width = content.clientWidth;schedule(); } }).observe(content);
-  new MutationObserver(schedule).observe(document.documentElement, { attributes:true, attributeFilter:['class','style','lang'] });
-  new MutationObserver(schedule).observe(document.body, { attributes:true, attributeFilter:['class','style','data-view'] });
-  document.fonts?.ready.then(schedule);document.fonts?.addEventListener('loadingdone', schedule);
-  addEventListener('resize', schedule);addEventListener('aieyes:language', schedule);schedule();
+  new MutationObserver(invalidate).observe(document.documentElement, { attributes:true, attributeFilter:['class','style','lang'] });
+  new MutationObserver(invalidate).observe(document.body, { attributes:true, attributeFilter:['class','style','data-view'] });
+  document.fonts?.ready.then(invalidate);document.fonts?.addEventListener('loadingdone', invalidate);
+  addEventListener('resize', schedule);addEventListener('aieyes:language', invalidate);schedule();
 })();
 // Masonry for multi-column quota grids. Each item goes to the shortest column and spans rows of a
 // small implicit track in proportion to its height, so an expanded card leaves no hole beside it.
-// A full-width group (several accounts) reports how far each of its columns reaches, so the groups
+// A group occupies only as many columns as it has accounts and reports how far each column reaches, so groups
 // after it start under its shorter columns. Only grid lines are written: DOM, reading and Tab order
 // are unchanged, and single-column grids (the panel, narrow windows) keep normal flow.
 (() => {
   const content = document.querySelector('#content');
   if (!content) return;
-  const GRIDS = '.quota-groups,.quotas', UNIT = 4, observed = new WeakSet();
+  const GRIDS = '.quota-groups,.quotas', UNIT = 4, observed = new Set();
   // Placement is written per column count (--masonry-row-N, --masonry-column-N); workspace.css applies
   // it only while N columns are current, so a resize falls back to plain grid flow until this re-runs.
   const clear = (element, keep = '') => {for (const name of [...element.style]) if (name.startsWith('--masonry-') && !name.endsWith('-' + keep)) element.style.removeProperty(name);};
@@ -82,22 +90,24 @@
     const ROW = '--masonry-row-' + columns, COLUMN = '--masonry-column-' + columns;
     // Read everything first, then write, so the layout is computed once.
     const measured = items.map(item => {
-      const box = item.getBoundingClientRect(), full = getComputedStyle(item).gridColumnEnd === '-1';
+      const box = item.getBoundingClientRect(), width = item.matches('.quota-group-shell') ? Math.min(columns, Number(item.style.getPropertyValue('--quota-account-count')) || columns) : 1;
       let reach = null;
-      if (full) {
-        const inner = item.querySelector(`.quotas[data-masonry="${columns}"]`), area = inner?.getBoundingClientRect();
-        if (inner && Math.abs(area.width - grid.getBoundingClientRect().width) < 1) {
-          reach = Array(columns).fill(area.top - box.top);
-          for (const card of inner.children) if (card.getClientRects().length) {const column = parseInt(card.style.getPropertyValue(COLUMN), 10) - 1;if (column >= 0 && column < columns) reach[column] = Math.max(reach[column], card.getBoundingClientRect().bottom - box.top);}
+      if (width > 1) {
+        const inner = item.querySelector(`.quotas[data-masonry="${width}"]`), area = inner?.getBoundingClientRect();
+        if (inner && Math.abs(area.width - box.width) < 1) {
+          reach = Array(width).fill(area.top - box.top);
+          for (const card of inner.children) if (card.getClientRects().length) {const column = parseInt(card.style.getPropertyValue('--masonry-column-' + width), 10) - 1;if (column >= 0 && column < width) reach[column] = Math.max(reach[column], card.getBoundingClientRect().bottom - box.top);}
         }
       }
-      return { item, span: rows(box.height), full, reach };
+      return { item, span: rows(box.height), width, reach };
     });
     const filled = Array(columns).fill(0);
-    for (const { item, span, full, reach } of measured) {
-      let start, column = '';
-      if (full) {start = Math.max(...filled);filled.forEach((_, i) => filled[i] = start + (reach ? rows(reach[i]) : span));}
-      else {const index = filled.indexOf(Math.min(...filled));start = filled[index];filled[index] += span;column = String(index + 1);}
+    for (const { item, span, width, reach } of measured) {
+      // Choose the lowest contiguous block that fits the group; untouched columns stay available.
+      const starts = Array.from({ length: columns - width + 1 }, (_, i) => Math.max(...filled.slice(i, i + width)));
+      const start = Math.min(...starts), index = starts.indexOf(start);
+      for (let i = 0; i < width; i++) filled[index + i] = start + (reach ? rows(reach[i]) : span);
+      const column = width === 1 ? String(index + 1) : `${index + 1} / span ${width}`;
       const row = `${start + 1} / span ${span}`;
       if (item.style.getPropertyValue(ROW) !== row) item.style.setProperty(ROW, row);
       if (column && item.style.getPropertyValue(COLUMN) !== column) item.style.setProperty(COLUMN, column);
@@ -114,7 +124,12 @@
     // Card grids first: their spans set the height of the group grid around them.
     for (const inner of [true, false]) for (const grid of grids) if (grid.matches('.quotas') === inner) layout(grid);
   });
-  const discover = () => {for (const card of content.querySelectorAll('.quotas > *')) if (!observed.has(card)) {observed.add(card);sizes.observe(card);}};
+  const discover = () => {
+    // A card removed while its provider group is collapsed already has zero size,
+    // so ResizeObserver need not deliver another entry that could release it.
+    for (const card of observed) if (!content.contains(card)) {sizes.unobserve(card);observed.delete(card);}
+    for (const card of content.querySelectorAll('.quotas > *')) if (!observed.has(card)) {observed.add(card);sizes.observe(card);}
+  };
   new MutationObserver(discover).observe(content, { childList:true, subtree:true });
   discover();
 })();

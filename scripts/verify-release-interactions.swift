@@ -8,18 +8,32 @@ import ObjectiveC
 @testable import Aieyes
 #endif
 
-// A process-local causal control: suppress only scroll-position persistence.
+// A process-local causal control for the legacy UserDefaults scroll store.
 // Page, account, expansion and other production preferences keep normal semantics.
 private enum ScrollPersistenceControl {
     static var enabled=false
     static var suppressed=0
     static var writes=0
     static let lock=NSLock()
+    @MainActor static var persistenceWrites: Int {
+#if AIEYES_FILE_SCROLL_POSITIONS
+        ScrollPositionStore.shared.writes
+#else
+        writes
+#endif
+    }
     static func install() {
+#if AIEYES_FILE_SCROLL_POSITIONS
+        if CommandLine.arguments.contains("--no-scroll-persistence") {
+            fputs("The legacy UserDefaults control cannot disable file-based scroll persistence; compare normal builds instead.\n", stderr)
+            exit(2)
+        }
+#else
         guard let original=class_getInstanceMethod(UserDefaults.self,NSSelectorFromString("setObject:forKey:")),
             let replacement=class_getInstanceMethod(UserDefaults.self,#selector(UserDefaults.audit_setObject(_:forKey:))) else { return }
         enabled=CommandLine.arguments.contains("--no-scroll-persistence")
         method_exchangeImplementations(original,replacement)
+#endif
     }
 }
 extension UserDefaults {
@@ -137,7 +151,7 @@ extension UserDefaults {
             maxLag = 0
             scrollMetrics = [:]
             let start = uptime(), beforeCPU = cpu(), before = publications, beforeLive=livePublications, epoch=Date().timeIntervalSince1970
-            let beforeWrites=ScrollPersistenceControl.writes
+            let beforeWrites=ScrollPersistenceControl.persistenceWrites
             let work = Task { try await action() }
             try await pause(0.001); flush()
             let feedback = (uptime()-start)*1000
@@ -149,7 +163,7 @@ extension UserDefaults {
                 // Include deferred persistence and the resulting render work.
                 try await pause(0.35);flush();try await quiesce(debounce:false)
                 scrollMetrics["settleCpuMs"]=(cpu()-settleCPU)*1000
-                scrollMetrics["scrollPositionWrites"]=ScrollPersistenceControl.writes-beforeWrites
+                scrollMetrics["scrollPositionWrites"]=ScrollPersistenceControl.persistenceWrites-beforeWrites
             }
             let elapsed = uptime()-start, cpuMs = (cpu()-beforeCPU)*1000
             var row: [String:Any] = ["scenario":name,"iteration":iteration,"first":iteration==0,
@@ -220,7 +234,9 @@ extension UserDefaults {
     }
     private func scroll(in root: NSView, interacting: Bool = false,target:NSScrollView?=nil) async throws {
         guard let scroll=target ?? scrollView(in:root),let document=scroll.documentView else {
-            throw ClientError.message("Expected an overflowing content scroll view")
+            scrollMetrics["unsupportedNativeAction"] = "No overflowing content is currently available; no scroll latency claim"
+            scrollMetrics["scrollCandidates"] = scrollViews(in:root).map { ["width":$0.bounds.width,"height":$0.contentView.bounds.height,"contentHeight":$0.documentView?.bounds.height ?? 0] }
+            return
         }
         scroll.contentView.scroll(to:.zero); scroll.reflectScrolledClipView(scroll.contentView)
         var durations:[Double]=[],positions:[Double]=[], inputDelays:[Double]=[]
@@ -406,6 +422,19 @@ extension UserDefaults {
             self.page("analysis");if self.dialog?.isVisible != true { try await self.openEstimate() }
         }) { _ = await self.model.reload() }
         try await measure("details.estimate.open",setup:{ self.dialog?.orderOut(nil) }) { try await self.openEstimate() }
+        try await measure("details.estimate.idle",debounce:false,setup:{
+            if self.dialog?.isVisible != true { try await self.openEstimate() }
+        }) { try await self.pause(2) }
+        try await measure("details.estimate.hidden-updates",debounce:false,setup:{
+            if self.dialog == nil { try await self.openEstimate() }
+            self.dialog?.orderOut(nil); self.workspace.orderOut(nil)
+            self.model.setWindowVisible(false,window:"detail"); try await self.pause(0.2)
+        }) {
+            for index in 0..<20 {
+                self.model.message="Isolated background update \(index)"
+                try await self.pause(0.05)
+            }
+        }
         var disclosure:NSObject?
         try await measure("click.estimate.calculation",debounce:false,setup:{
             if self.dialog?.isVisible != true { try await self.openEstimate() }; try await self.quiesce()

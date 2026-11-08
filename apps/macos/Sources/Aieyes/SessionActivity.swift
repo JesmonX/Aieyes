@@ -286,6 +286,45 @@ extension EnvironmentValues {
     }
 }
 struct SurfaceTimeContext { let date: Date }
+/// Auxiliary windows retain their controls when minimized or occluded, while
+/// their model subscriptions and timelines sleep until the window is visible.
+struct WindowActivityView<Content: View>: View {
+    @State private var active = true
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        content().environment(\.surfaceActive, active)
+            .background(WindowActivityProbe { active = $0 }.allowsHitTesting(false))
+    }
+}
+private struct WindowActivityProbe: NSViewRepresentable {
+    var changed: (Bool) -> Void
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) { view.changed = changed; view.sync() }
+    final class Probe: NSView {
+        var changed: ((Bool) -> Void)?
+        private var active: Bool?
+        private var observers = Set<AnyCancellable>()
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow(); observers.removeAll()
+            if let window {
+                for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification] {
+                    NotificationCenter.default.publisher(for: name, object: window).sink { [weak self] _ in self?.sync() }.store(in: &observers)
+                }
+                NotificationCenter.default.publisher(for: NSWindow.willCloseNotification, object: window).sink { [weak self] _ in self?.publish(false) }.store(in: &observers)
+            }
+            sync()
+        }
+        func sync() { publish(window?.isVisible == true && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true) }
+        private func publish(_ value: Bool) {
+            guard active != value else { return }; active = value
+            // Representable updates and window attachment may occur during layout.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.active == value else { return }; self.changed?(value)
+            }
+        }
+    }
+}
 struct SurfaceTimeline<Content: View>: View {
     var interval: TimeInterval
     @ViewBuilder var content: (SurfaceTimeContext) -> Content

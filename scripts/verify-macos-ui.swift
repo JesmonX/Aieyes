@@ -166,6 +166,15 @@ for line in sys.stdin:
         response['result']=json.load(open(root+'/dashboard.json'))
         if req.get('params',{}).get('model'): response['result']['summary']['total']=77
     elif method in ('sources.scan','sources.rescan'):
+        if os.path.exists(root+'/stream-history'):
+            import time
+            revisions=json.load(open(root+'/runtime-revisions.json'))
+            print(json.dumps(dict(method='runtime.changed',params=dict(revisions=revisions))),flush=True)
+            open(root+'/history-announced','w').close()
+            deadline=time.monotonic()+10
+            while not os.path.exists(root+'/history-commit-marker') and time.monotonic()<deadline: time.sleep(.01)
+            print(json.dumps(dict(method='operations.progress',params=dict(kind='runtime.changed',historyCommitted=True,revisions=revisions,requestId=req['id']))),flush=True)
+            while not os.path.exists(root+'/release-history') and time.monotonic()<deadline: time.sleep(.01)
         rows=json.load(open(root+'/scan-result.json')) if os.path.exists(root+'/scan-result.json') else []
         response['result']=[r for r in rows if not req.get('params',{}).get('sourceId') or r['id']==req['params']['sourceId']]
     elif method=='settings.patch' and os.path.exists(root+'/fail-configuration'): response['error']=dict(message='模拟配置保存失败')
@@ -195,7 +204,7 @@ for line in sys.stdin:
         while os.path.exists(root+'/hold-account-status') and not os.path.exists(root+'/release-account-status') and time.monotonic()<deadline: time.sleep(.01)
         response['result']=json.load(open(root+'/account-status.json')) if os.path.exists(root+'/account-status.json') else []
     elif method=='accounts.status.refreshBatch': response['result']=[]
-    elif method=='runtime.revisions': response['result']={'usage':1} if os.path.exists(root+'/enable-revisions') else {}
+    elif method=='runtime.revisions': response['result']=json.load(open(root+'/runtime-revisions.json')) if os.path.exists(root+'/runtime-revisions.json') else ({'usage':1} if os.path.exists(root+'/enable-revisions') else {})
     elif method=='accounts.status.refresh': response['error']=dict(message='不应再次检查已确认的登录')
     elif method=='accounts.deployments.sync':
         if os.path.exists(root+'/hold-deployment-sync'):
@@ -709,6 +718,35 @@ for line in sys.stdin:
         let nextDayReads = try calls("dashboard", owner: cacheOwner);precondition(nextDayReads == reusedReads+1,"Midnight must invalidate cached relative ranges")
         calendarCache.stop();try FileManager.default.removeItem(at:root.appendingPathComponent("enable-revisions"))
         print("Relative dashboard caches refresh on calendar-day changes without data writes")
+        // A generic watcher notification may precede the same revision's committed
+        // marker. Only the latter allows a refresh while the history RPC is busy.
+        try Data(#"{"usage":1}"#.utf8).write(to:root.appendingPathComponent("runtime-revisions.json"))
+        dashboard.summary.total = 321
+        try encoder.encode(dashboard).write(to:root.appendingPathComponent("dashboard.json"))
+        let progressiveHistory = AppModel(autostart:false)
+        defer { progressiveHistory.stop() }
+        await progressiveHistory.bootstrap()
+        try await Task.sleep(for: .milliseconds(250))
+        await progressiveHistory.reload()
+        precondition(progressiveHistory.dashboard.summary.total == 321)
+        dashboard.summary.total = 654
+        try encoder.encode(dashboard).write(to:root.appendingPathComponent("dashboard.json"),options:.atomic)
+        try Data(#"{"usage":2}"#.utf8).write(to:root.appendingPathComponent("runtime-revisions.json"),options:.atomic)
+        try Data().write(to:root.appendingPathComponent("stream-history"))
+        let historyScan = Task { await progressiveHistory.scan() }
+        try await waitFor("history revision announcement") { FileManager.default.fileExists(atPath:root.appendingPathComponent("history-announced").path) }
+        try await Task.sleep(for: .milliseconds(250))
+        let waitedForCommit = progressiveHistory.busy && progressiveHistory.dashboard.summary.total == 321
+        try Data().write(to:root.appendingPathComponent("history-commit-marker"))
+        let historyDeadline = ProcessInfo.processInfo.systemUptime + 2
+        while progressiveHistory.dashboard.summary.total != 654 && ProcessInfo.processInfo.systemUptime < historyDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let refreshedWhileBusy = progressiveHistory.busy && progressiveHistory.refreshStates["scan"]?.busy == true && progressiveHistory.dashboard.summary.total == 654
+        try Data().write(to:root.appendingPathComponent("release-history"))
+        await historyScan.value; progressiveHistory.stop()
+        precondition(waitedForCommit && refreshedWhileBusy, "A committed history marker must refresh during the unfinished scan even if its revision was already observed")
+        print("Committed history refreshes before the scan finishes, including revision notifications arriving before the commit marker")
         print("Antigravity login accepts committed identity immediately, rejects older status reads, retains identity after quota failure, and preserves drafts")
         print("Theme quick toggle saves globally, preserves unrelated drafts and retains theme after failure")
         print("Atomic filtered/today snapshots and mapping save/reprice failure recovery passed")
