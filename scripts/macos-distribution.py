@@ -26,6 +26,8 @@ def bundle(app, mode):
     plist_path = app / 'Contents/Info.plist'
     info = plistlib.loads(plist_path.read_bytes())
     key = os.environ.get('SPARKLE_PUBLIC_KEY', '').strip()
+    if info.get('AieyesDisplayLab'):
+        key = ''
     if os.environ.get('AIEYES_REQUIRE_UPDATER') == '1' and not key:
         raise ValueError('SPARKLE_PUBLIC_KEY is required for release updates')
     if key:
@@ -45,6 +47,11 @@ def bundle(app, mode):
     # Sign nested code from the inside out; never use --deep to paper over missing signatures.
     nested = [target / 'Versions/B/Autoupdate', *sorted((target / 'Versions/B/XPCServices').glob('*.xpc')), target / 'Versions/B/Updater.app', target, app / 'Contents/Resources/aieyes-core', app]
     for path in nested:
+        if path == app:
+            for extension in sorted((app / 'Contents/PlugIns').glob('*.appex')):
+                if not info.get('AieyesDisplayLab'):
+                    raise ValueError('Widget development entitlements are only valid for Display Lab builds')
+                run('codesign', '--force', '--sign', identity, *flags, '--entitlements', ROOT / 'apps/macos/WidgetExtension/Development.entitlements', extension)
         run('codesign', '--force', '--sign', identity, *flags, path)
     run('codesign', '--verify', '--deep', '--strict', app)
     if mode == 'release' and identity != '-':

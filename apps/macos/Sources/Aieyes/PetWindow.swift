@@ -30,7 +30,7 @@ struct PetTimingControl: View {
     @AppStorage("aieyes.pet.uniformTiming") private var enabled = false
     var body: some View { DisclosureGroup(L("调试")) { Toggle(L("匀速动画（调试）"), isOn: $enabled).help(L("所有动作每帧 100ms，用于检查停顿")) } }
 }
-private enum PetSprites {
+enum PetSprites {
     private final class Atlas {
         let image: CGImage, frames: [[CGImage]]
         init(_ image: CGImage, asset: ImportedPet) {
@@ -304,7 +304,7 @@ private final class PetHost: NSHostingView<PetView> {
 
     init(model: AppModel, checkUpdates: @escaping () -> Void = {}, open: @escaping (NSView, Bool) -> Void) {
         self.model = model
-        UserDefaults.standard.register(defaults: ["aieyes.pet.enabled": true, "aieyes.pet.scale": 1.0,"aieyes.pet.hideInFullscreen":true])
+        UserDefaults.standard.register(defaults: ["aieyes.pet.enabled": !DisplayPreferences.isLabBuild, "aieyes.pet.scale": 1.0,"aieyes.pet.hideInFullscreen":true])
         panel = PetPanel(contentRect: NSRect(x: 0,y: 0,width: 144,height: 168), styleMask: [.borderless,.nonactivatingPanel], backing: .buffered, defer: false)
         panel.title=L("Aieyes 宠物"); panel.isOpaque=false; panel.backgroundColor = .clear; panel.hasShadow=false
         panel.level = .floating; panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]; panel.hidesOnDeactivate=false

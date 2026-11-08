@@ -5,6 +5,7 @@ import AppKit
 @MainActor final class DockPresence {
     private var windows = Set<ObjectIdentifier>()
     private var regular = false
+    private var persistent = false
     private let apply: @MainActor (NSApplication.ActivationPolicy) -> Void
 
     init(apply: @escaping @MainActor (NSApplication.ActivationPolicy) -> Void = { NSApp.setActivationPolicy($0) }) {
@@ -16,6 +17,11 @@ import AppKit
 
     func open(_ window: NSWindow) {
         windows.insert(ObjectIdentifier(window))
+        update()
+    }
+
+    func setPersistent(_ enabled: Bool) {
+        persistent = enabled
         update()
     }
 
@@ -32,7 +38,7 @@ import AppKit
     }
 
     private func update() {
-        let wanted = !windows.isEmpty
+        let wanted = persistent || !windows.isEmpty
         guard regular != wanted else { return }
         regular = wanted
         apply(wanted ? .regular : .accessory)

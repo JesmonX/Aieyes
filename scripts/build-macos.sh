@@ -16,6 +16,7 @@ if [ "${AIEYES_OFFLINE:-0}" = 1 ]; then export CARGO_NET_OFFLINE=true; fi
 if [ "$BUILD_MODE" = release ]; then cargo build --locked --release; else cargo build --locked; fi
 swift build --package-path apps/macos --scratch-path "$PROJECT_DIR/.build/swift" --cache-path "$PROJECT_DIR/.build/spm-cache" --config-path "$PROJECT_DIR/.build/spm-config" --security-path "$PROJECT_DIR/.build/spm-security" --disable-sandbox -c "$BUILD_MODE" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 APP_DIR="$PROJECT_DIR/dist/Aieyes.app"
+if [ "${AIEYES_DISPLAY_LAB:-0}" = 1 ]; then APP_DIR="$PROJECT_DIR/dist/Aieyes Lab.app"; fi
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$PROJECT_DIR/.build/swift/$BUILD_MODE/Aieyes" "$APP_DIR/Contents/MacOS/Aieyes"
 cp "$PROJECT_DIR/target/$BUILD_MODE/aieyes-core" "$APP_DIR/Contents/Resources/aieyes-core"
@@ -30,6 +31,7 @@ for lproj in zh-Hans en; do mkdir -p "$APP_DIR/Contents/Resources/$lproj.lproj";
 if [ "$BUILD_MODE" = debug ]; then
   /usr/libexec/PlistBuddy -c "Add :AieyesDevelopmentDataDirectory string $PROJECT_DIR/.local/app" "$APP_DIR/Contents/Info.plist"
 fi
+if [ "${AIEYES_DISPLAY_LAB:-0}" = 1 ]; then python3 scripts/build-macos-widget.py "$APP_DIR"; fi
 python3 scripts/macos-distribution.py bundle "$APP_DIR" --mode "$BUILD_MODE"
 echo "$APP_DIR"
 if [ "$PACKAGE_MODE" = --dmg ]; then

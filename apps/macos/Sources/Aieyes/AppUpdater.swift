@@ -58,6 +58,7 @@ import OSLog
     private var wantsPresentation = false
 
     func start() {
+        guard !DisplayPreferences.isLabBuild else { message = L("显示实验室开发版，请手动安装新构建。"); return }
         guard updater == nil else { return }
         guard let key = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String, !key.isEmpty else {
             message = L("此开发构建未配置更新签名公钥"); return

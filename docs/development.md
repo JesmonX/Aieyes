@@ -15,6 +15,8 @@
 
 ## 当前开发版
 
+macOS 多种显示方式的测评包可运行 `sh scripts/build-macos-display-lab.sh`，输出独立的 `dist/Aieyes Lab.app`。包含三种动态 Dock、实时桌面卡片、状态条和原生 WidgetKit 小组件，操作与验证见[显示实验室](macos-display-lab.md)。
+
 macOS 开发包输出到 `dist/Aieyes.app`，目前已验证 Intel macOS 14+ 构建。双击后从系统菜单栏的眼睛图标打开；右键可打开详情、设置或退出。只打开悬浮或菜单栏面板时不显示程序坞图标；打开详情、设置等独立窗口时显示，窗口最小化时保留，点击图标可返回窗口。独立窗口全部关闭后隐藏程序坞图标，继续在菜单栏运行。
 
 调试包的数据位于项目的 `.local/app/`，发布构建使用 `~/Library/Application Support/Aieyes/`。调试包包含当前项目路径，请保留项目目录。应用内置核心程序，运行时不需要 Node 或 Rust。

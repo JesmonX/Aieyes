@@ -77,7 +77,7 @@ struct SettingsView: View {
             Divider().opacity(0.5)
             if model.settingsTab == "general" {
                 FlowLayout(spacing: 8) {
-                    ForEach([( "appearance", L("外观")), ("desktop", L("桌宠与会话")), ("network", L("网络代理")), ("refresh", L("刷新与历史")), ("notifications", L("通知")), ("advanced", L("高级")), ("updates", L("更新与关于"))], id: \.0) { key, title in
+                    ForEach([( "appearance", L("外观")), ("displays", L("显示实验室")), ("desktop", L("桌宠与会话")), ("network", L("网络代理")), ("refresh", L("刷新与历史")), ("notifications", L("通知")), ("advanced", L("高级")), ("updates", L("更新与关于"))], id: \.0) { key, title in
                         Button(title) { model.generalPage = key }
                             .buttonStyle(.chip(selected: model.generalPage == key, in: generalChips, font: AppFont.body))
                     }
@@ -90,7 +90,9 @@ struct SettingsView: View {
                 case "wakeups": WakeupsView(model: model)
                 case "sources": AgentsSettingsView(model: model)
                 case "servers": servers
-                case "general", "connection": general
+                case "general", "connection":
+                    if model.generalPage == "displays" { DisplayLabView(model: model) }
+                    else { general }
                 default: AgentsSettingsView(model: model)
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).padding(.horizontal, 16).padding(.bottom, 16).disabled(model.repricing || !model.settingsLoaded)

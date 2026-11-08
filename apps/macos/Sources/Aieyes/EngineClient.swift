@@ -530,6 +530,7 @@ struct AccountFlowResult {
     let live = LiveSessionState()
     lazy var menuStatus = MenuStatusStore(model: self)
     lazy var sessionStripStatus = SessionStripStore(model: self)
+    lazy var displays = DisplayStore(model: self)
     var sessions: [LiveSession] { get { live.sessions } set { if live.sessions != newValue { live.sessions = newValue } } }
     var sessionSources: [SessionSourceHealth] { get { live.sources } set { if live.sources != newValue { live.sources = newValue } } }
     var sessionsUnavailable: Bool { get { live.unavailable } set { if live.unavailable != newValue { live.unavailable = newValue } } }

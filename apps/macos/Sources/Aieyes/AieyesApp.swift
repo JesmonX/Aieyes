@@ -25,6 +25,7 @@ struct AieyesCommands: Commands {
             Button(L("总览")) { delegate.menuShowPage("agent") }.keyboardShortcut("1")
             Button(L("用量分析")) { delegate.menuShowPage("analysis") }.keyboardShortcut("2")
             Button(L("服务器")) { delegate.menuShowPage("servers") }.keyboardShortcut("3")
+            Button(L("显示实验室")) { delegate.menuOpenDisplayLab() }.keyboardShortcut("4")
             Divider()
             Button(L("刷新")) { delegate.menuRefresh() }.keyboardShortcut("r")
             Divider()
@@ -41,6 +42,8 @@ struct AieyesCommands: Commands {
     private let popover = PanelPopover()
     private var petWindow: PetWindowController?
     private let dockPresence = DockPresence()
+    private var dynamicDock: DynamicDockController?
+    private var desktopDisplays: DesktopDisplaysController?
     private var appearanceController: AppAppearanceController?
     private var detailWindow: NSWindow?
     private var accountSwitchWindow: NSWindow?
@@ -65,6 +68,9 @@ struct AieyesCommands: Commands {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        if DisplayPreferences.isLabBuild {
+            UserDefaults.standard.register(defaults: [DisplayPreferences.dockEnabled: true, DisplayPreferences.cardEnabled: true, "aieyes.pet.enabled": false, "updates.automatic": false])
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--render"), CommandLine.arguments.count > index + 1 {
             UserDefaults.standard.setVolatileDomain(NativePanelKey.snapshotOverrides(), forName: UserDefaults.argumentDomain)
             model = AppModel(autostart: false)
@@ -87,7 +93,7 @@ struct AieyesCommands: Commands {
         model.showSettings = { [weak self] in self?.openSettings() }
         model.showDetailPage = { [weak self] page in self?.openDetail(page: page) }
         model.$settingsLoaded.filter { $0 }.prefix(1).sink { [weak self] _ in
-            guard let self, !UserDefaults.standard.bool(forKey: "setup.seen.v1") else { return }
+            guard let self, !DisplayPreferences.isLabBuild, !UserDefaults.standard.bool(forKey: "setup.seen.v1") else { return }
             UserDefaults.standard.set(true, forKey: "setup.seen.v1")
             if SetupGuide.needsSetup(self.model.settings) { self.openDetail(page: "setup") }
         }.store(in: &cancellables)
@@ -122,6 +128,8 @@ struct AieyesCommands: Commands {
             self.model.setWindowVisible(true, window: "panel")
         })
         model.live.objectWillChange.sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
+        dynamicDock = DynamicDockController(model: model, presence: dockPresence)
+        desktopDisplays = DesktopDisplaysController(store: model.displays, open: { [weak self] in self?.openDetail(page: "agent") }, lab: { [weak self] in self?.menuOpenDisplayLab() })
         model.objectWillChange.sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         model.menuStatus.$snapshot.dropFirst().sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification).sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
@@ -159,6 +167,13 @@ struct AieyesCommands: Commands {
         }
         NotificationCenter.default.addObserver(self, selector: #selector(applicationDeactivated), name: NSApplication.didResignActiveNotification, object: nil)
         if CommandLine.arguments.contains("--show-detail") { openDetail() }
+        if DisplayPreferences.isLabBuild && !UserDefaults.standard.bool(forKey: "display.lab.seen") {
+            UserDefaults.standard.set(true, forKey: "display.lab.seen")
+            model.displays.scenario = .working
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--display-demo"), CommandLine.arguments.count > index + 1,
+           let scenario = DisplayScenario(rawValue: CommandLine.arguments[index + 1]) { model.displays.scenario = scenario }
+        if CommandLine.arguments.contains("--show-display-lab") || DisplayPreferences.isLabBuild { menuOpenDisplayLab() }
     }
     @objc private func togglePopover() {
         guard let button = statusItem.button else { return }
@@ -226,6 +241,23 @@ struct AieyesCommands: Commands {
     }
     @objc private func detailAction() { openDetail() }
     func menuOpenSettings() { model.openSettings(.init(category: "general")) }
+    func menuOpenDisplayLab() { model.openSettings(.init(category: "general", section: "displays")) }
+    @objc private func displayLabAction() { menuOpenDisplayLab() }
+    @objc private func syncWidgetsAction() { model.displays.syncWidgets() }
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        for (title, action) in [(L("打开总览"), #selector(detailAction)), (L("显示实验室"), #selector(displayLabAction)), (L("同步小组件"), #selector(syncWidgetsAction))] {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: ""); item.target = self
+        }
+        return menu
+    }
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard model != nil else { return }
+        for url in urls where url.scheme == "aieyes-display-lab" {
+            if url.host == "displays" { menuOpenDisplayLab() }
+            else if url.host == "overview" { openDetail(page: "agent") }
+        }
+    }
     func menuShowPage(_ page: String) { openDetail(page: page) }
     func menuRefresh() { Task { if model.detailPage == "servers" { await model.sampleHosts() } else { await model.scan() } } }
     @objc private func settingsAction() { model.openSettings(.init(category: "general")) }
@@ -573,6 +605,7 @@ struct AieyesCommands: Commands {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) {
         if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }; if let localEventMonitor { NSEvent.removeMonitor(localEventMonitor) }
+        dynamicDock?.stop(); desktopDisplays?.stop(); model?.displays.stop()
         model?.stop()
     }
     private func capture<V: View>(_ content: V, size: NSSize, dark: Bool, to url: URL, opaqueBackground: Bool = true) async throws {
