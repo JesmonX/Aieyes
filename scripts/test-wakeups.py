@@ -21,7 +21,7 @@ wake = load_script('wake', 'remote_wakeup.py')
 
 class WakeTests(unittest.TestCase):
     def test_runs_report_every_aieyes_run_since_a_time_and_the_zone(self):
-        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {'HOME': home, 'TZ': 'Europe/Berlin'}):
+        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {'HOME': home, 'USERPROFILE': home, 'TZ': 'Europe/Berlin'}):
             root = pathlib.Path(home) / '.local/share/aieyes-wakeups' / ('a' * 20)
             request = {'action': 'runs', 'root': str(root), 'since': 100}
             self.assertEqual(wake.manage(request)['runs'], [], 'No runner database yet')

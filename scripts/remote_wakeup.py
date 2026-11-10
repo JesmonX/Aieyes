@@ -365,7 +365,7 @@ def response_ok(provider, v):
 def history(root, identifier):
     if not (root / 'runner.sqlite').exists():
         return []
-    db = sqlite3.connect('file:' + str(root / 'runner.sqlite') + '?mode=ro', uri=True)
+    db = sqlite3.connect((root / 'runner.sqlite').as_uri() + '?mode=ro', uri=True)
     details = db.execute("SELECT 1 FROM sqlite_master WHERE name='run_diagnostics'").fetchone()
     query = 'SELECT r.started,r.ended,r.status,r.model,r.effort,d.stage,d.code,d.message FROM runs r LEFT JOIN run_diagnostics d ON d.run_id=r.id WHERE r.task=? ORDER BY r.id DESC LIMIT 30' if details else 'SELECT started,ended,status,model,effort,NULL,NULL,NULL FROM runs WHERE task=? ORDER BY id DESC LIMIT 30'
     rows = [dict(startedAt=s, endedAt=e, status=st, model=m, effort=ef, stage=stage, errorCode=code, message=message) for s,e,st,m,ef,stage,code,message in db.execute(query, (identifier,))]
@@ -397,7 +397,7 @@ def runs(root, since):
     # Every Aieyes run on this machine since `since` (seconds), with the zone that schedules them.
     rows, identities = [], []
     if (root / 'runner.sqlite').exists():
-        db = sqlite3.connect('file:' + str(root / 'runner.sqlite') + '?mode=ro', uri=True)
+        db = sqlite3.connect((root / 'runner.sqlite').as_uri() + '?mode=ro', uri=True)
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='runs'").fetchone():
             has_identity = db.execute("SELECT 1 FROM sqlite_master WHERE name='run_identity'").fetchone()
             for run_id, task, started, ended in db.execute("SELECT id,task,started,ended FROM runs WHERE started >= ? AND status != 'skipped-overlap'", (int(since),)):
