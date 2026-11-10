@@ -1264,11 +1264,20 @@ mod tests {
     use super::*;
     #[test]
     fn hook_events_keep_only_an_absolute_working_directory() {
-        let input = serde_json::json!({"session_id":"s","cwd":"/work/project","prompt":"PRIVATE PROMPT","tool_input":{"command":"PRIVATE"}});
+        // Windows only treats a path with a drive or UNC prefix as absolute.
+        let root = if cfg!(windows) {
+            r"C:\work\project"
+        } else {
+            "/work/project"
+        };
+        let input = serde_json::json!({"session_id":"s","cwd":root,"prompt":"PRIVATE PROMPT","tool_input":{"command":"PRIVATE"}});
         let event = hook("claude", "UserPromptSubmit", &input, 1);
-        assert_eq!(event.workspace, "/work/project");
+        assert_eq!(event.workspace, root);
         let row = serde_json::to_string(&event).unwrap();
-        assert!(row.contains("\"workspace\":\"/work/project\"") && !row.contains("PRIVATE"));
+        assert!(
+            row.contains(&format!("\"workspace\":{}", serde_json::json!(root)))
+                && !row.contains("PRIVATE")
+        );
         for cwd in [
             serde_json::json!("relative/path"),
             serde_json::json!(7),
@@ -1292,7 +1301,7 @@ mod tests {
         let context = crate::session_processes::context("claude", &journal.to_string_lossy(), "s");
         assert_eq!(
             context.workspace.as_deref(),
-            Some(std::path::Path::new("/work/project"))
+            Some(std::path::Path::new(root))
         );
     }
     #[test]
