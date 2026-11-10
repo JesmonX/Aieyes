@@ -558,6 +558,12 @@ class ObserverTests(unittest.TestCase):
             self.assertEqual(row['events'][-1]['kind'],'start');self.assertEqual(m.collect(source,{str(p):row})['files'][0]['events'],[])
             with p.open('a') as f:f.write(json.dumps({'type':'response_item','payload':{'type':'function_call','name':'request_user_input','call_id':'ask','arguments':'SECRET'}})+'\n')
             self.assertEqual(m.collect(source,{str(p):row})['files'][0]['events'][0]['call'],'ask')
+    def test_collector_reports_only_an_absolute_workspace_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=pathlib.Path(temp);project=root/'project';project.mkdir();p=root/'s.jsonl'
+            p.write_text(json.dumps({'type':'session_meta','payload':{'id':'s','cwd':str(project),'instructions':'SECRET'}})+'\n'+json.dumps({'type':'event_msg','payload':{'type':'task_started','turn_id':'turn','text':'SECRET'}})+'\n')
+            result=m.collect(dict(id='s',provider='codex',path=temp),{},processes=[])
+            self.assertEqual(result['files'][0]['workspace'],os.path.realpath(project));self.assertNotIn('SECRET',json.dumps(result))
 
     def test_qoder_api_error_is_terminal_without_forwarding_response_or_stack(self):
         row=dict(type='assistant',sessionId='session',timestamp='2026-10-18T06:17:32Z',isApiErrorMessage=True,error='PRIVATE_ERROR',errorDetails='PRIVATE_STACK',message=dict(stop_reason='stop_sequence',content=[dict(type='text',text='PRIVATE_BODY')]))

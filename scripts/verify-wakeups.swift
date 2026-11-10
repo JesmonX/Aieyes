@@ -4,6 +4,14 @@ import Darwin
 
 @main struct VerifyWakeups {
     @MainActor static func main() async throws {
+        // Suggestions only edit the draft: no duplicates, and only an untouched default is replaced.
+        precondition(WakeSuggestion.apply("06:15", to: ["08:00"], edited: false) == ["06:15"])
+        precondition(WakeSuggestion.apply("06:15", to: ["08:00"], edited: true) == ["08:00", "06:15"])
+        precondition(WakeSuggestion.apply("06:15", to: ["06:15"], edited: false) == ["06:15"])
+        let suggested = try JSONDecoder().decode(WakeSuggestion.self, from: Data(#"{"typicalStart":"09:10","suggested":"06:15","resetAt":"11:15","days":12,"timezone":"Asia/Shanghai"}"#.utf8))
+        precondition(WakeSuggestion.text(suggested, loading: false, shared: true).contains("建议 06:15 唤醒") && WakeSuggestion.text(suggested, loading: false, shared: true).contains("不按账户档案拆分"))
+        let few = try JSONDecoder().decode(WakeSuggestion.self, from: Data(#"{"insufficient":true,"reason":"days","days":3}"#.utf8))
+        precondition(WakeSuggestion.text(few, loading: false, shared: false).contains("只有 3 个活跃日") && few.suggested == nil)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("aieyes-native-wakeups-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }

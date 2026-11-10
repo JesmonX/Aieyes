@@ -133,6 +133,11 @@
   // ---- Tile models ----
   function models(q) {
     const key = q.provider + ':' + q.accountId,grouped = groupsWindows(q);
+    if (q.provider === 'kiro' && q.meters?.length) return q.meters.map((meter, index) => {
+      let value = ring({...q, windows: [], meters: [meter]});
+      if (value.kind === 'empty' && q.error) value = {kind:'error'};
+      return {id:key + '#meter:' + meter.id, index, key, q, meter, group:'', name:t(meter.label), ring:value, hidden:[]};
+    });
     return windowSets(q).map((set, index) => {
       let value = ring(q, set.windows);
       if (value.kind === 'empty' && q.error) value = { kind: 'error' };
@@ -185,6 +190,7 @@
   }
   const separators = () => globalThis.AieyesI18n?.language === 'en' ? { comma: ', ', semi: '; ' } : { comma: '，', semi: '；' };
   function label(m, now) {
+    if (m.meter) return [m.q.name, t(m.meter.label), creditNumber(m.meter.remaining) + '/' + creditNumber(m.meter.total), m.meter.resetsAt > 0 ? globalThis.AieyesUI?.resetText(m.meter.resetsAt, now) : ''].filter(Boolean).join(separators().semi);
     if (isQoderCredits(m.q)) return m.q.name + ': ' + ['addOnQuota','userQuota'].map(id => {
       const meter = (m.q.meters ?? []).find(m => m.id === id);
       return (id === 'userQuota' ? 'Plan credits ' : 'Addon credits ') + creditNumber(meter?.remaining) + '/' + creditNumber(meter?.total);
@@ -246,6 +252,7 @@
     return `<span class="ring" data-kind="${value.kind}"${value.low ? ' data-low' : ''}${m.q.staleSince ? ' data-stale' : ''} style="--ring-size:${size}px">${ringSVG(value, size, width)}<span class="ring-center">${center}</span></span>`;
   }
   function dialCenter(m, now) {
+    if (m.meter) return `<span class="ring-value meter-credit-value"><span class="ring-swap-time">${esc(creditNumber(m.meter.remaining))}</span><span class="ring-swap-pct">${m.ring.top ? percent(m.ring.top.remaining) : '—'}</span></span>${m.meter.resetsAt > 0 ? `<span class="ring-value ring-sub">${timeHTML({resetsAt:m.meter.resetsAt}, now)}</span>` : ''}`;
     if (isQoderCredits(m.q) && m.ring.kind === 'duo') {
       const line = a => `<span class="ring-value qoder-credit-value"><span class="ring-swap-time">${esc(creditNumber(a.meter?.remaining))}</span><span class="ring-swap-pct">${percent(a.remaining)}</span></span>`;
       return line(m.ring.top) + '<i class="ring-divider" aria-hidden="true"></i>' + line(m.ring.bottom);
@@ -274,6 +281,7 @@
     return '';
   }
   function tileTimes(m, now) {
+    if (m.meter) return `<span class="tile-time meter-credit-ratio"><span>${esc(creditNumber(m.meter.remaining))}/</span><wbr><span>${esc(creditNumber(m.meter.total))}</span></span>${m.meter.resetsAt > 0 ? `<span class="tile-time meter-reset">${timeHTML({resetsAt:m.meter.resetsAt}, now)}</span>` : ''}`;
     if (isQoderCredits(m.q)) return ['addOnQuota','userQuota'].map(id => {
       const meter = (m.q.meters ?? []).find(m => m.id === id), name = id === 'userQuota' ? 'Plan credits' : 'Addon credits';
       return `<span class="tile-time qoder-credit-ratio" title="${name}" aria-label="${name} ${esc(creditNumber(meter?.remaining))}/${esc(creditNumber(meter?.total))}">${esc(creditNumber(meter?.remaining))}/${esc(creditNumber(meter?.total))}</span>`;
@@ -293,7 +301,7 @@
     const text = label(m, now),list = extras(m, tileStyle).slice(0, 2);
     const attributes = `type="button" class="quota-tile" data-style="${tileStyle}" data-provider="${esc(m.q.provider)}" data-quota-account="${esc(m.key)}" data-quota-tile="${esc(m.id)}" aria-expanded="${open === m.id}" aria-label="${esc(text)}" title="${esc(text)}"`;
     if (tileStyle === 'dial') return `<button ${attributes}>${ringHTML(m, 'dial', dialCenter(m, now))}<span class="tile-name">${mark(m.q.provider)}<span>${esc(shortName(m.name))}</span></span>${list.length ? `<span class="tile-extras">${extrasHTML(list)}</span>` : ''}</button>`;
-    const plan = !m.group && m.q.plan ? globalThis.AieyesUI?.subscription(m.q.plan) ?? m.q.plan : '';
+    const plan = !m.group && !m.meter && m.q.plan ? globalThis.AieyesUI?.subscription(m.q.plan) ?? m.q.plan : '';
     return `<button ${attributes}><span class="tile-head">${mark(m.q.provider)}<span class="tile-head-name">${esc(shortName(m.name))}</span>${plan ? `<span class="tile-plan">${esc(plan)}</span>` : ''}</span><span class="tile-body">${ringHTML(m, 'tile', tileCenter(m))}<span class="tile-times">${tileTimes(m, now)}</span><span class="tile-extras">${extrasHTML(list)}</span></span></button>`;
   }
   function placeholderHTML(account, tileStyle) {

@@ -124,12 +124,16 @@
     // Card grids first: their spans set the height of the group grid around them.
     for (const inner of [true, false]) for (const grid of grids) if (grid.matches('.quotas') === inner) layout(grid);
   });
+  // Group headings move their cards without resizing them (font loading, language), so they are observed too.
+  const WATCHED = '.quotas > *, .quota-group-shell .quota-group-heading';
   const discover = () => {
     // A card removed while its provider group is collapsed already has zero size,
     // so ResizeObserver need not deliver another entry that could release it.
     for (const card of observed) if (!content.contains(card)) {sizes.unobserve(card);observed.delete(card);}
-    for (const card of content.querySelectorAll('.quotas > *')) if (!observed.has(card)) {observed.add(card);sizes.observe(card);}
+    for (const card of content.querySelectorAll(WATCHED)) if (!observed.has(card)) {observed.add(card);sizes.observe(card);}
   };
   new MutationObserver(discover).observe(content, { childList:true, subtree:true });
   discover();
+  const relayout = () => requestAnimationFrame(() => {for (const inner of [true, false]) for (const grid of content.querySelectorAll(GRIDS)) if (grid.matches('.quotas') === inner) layout(grid);});
+  document.fonts?.ready.then(relayout);document.fonts?.addEventListener('loadingdone', relayout);addEventListener('aieyes:language', relayout);
 })();

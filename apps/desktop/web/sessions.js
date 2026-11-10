@@ -7,7 +7,46 @@
   const phaseLabel = (key) => AieyesI18n.t(phases[phaseKey(key)]);
   const escape = (value) => window.AieyesUI.escapeHTML(value);
   let latest = null;
-  globalThis.AieyesSessions = { visibility() {if (latest) renderLiveSessions(latest);} };
+  // Turn time includes tool and user waits and stops at the terminal event; unknown sessions show none.
+  const elapsed = (s, now = Date.now()) => {
+    if (s.phase === 'unknown' || !(s.turnStartedAt > 0)) return null;
+    const active = ['working', 'thinking', 'tool', 'needsInput'].includes(s.phase),end = s.turnEndedAt > 0 ? s.turnEndedAt : active ? now : null;
+    return end != null && end >= s.turnStartedAt ? (end - s.turnStartedAt) / 1000 : null;
+  };
+  const elapsedText = (seconds) => {const total = Math.floor(seconds);return total < 3600 ? `${Math.floor(total / 60)}m${String(total % 60).padStart(2, '0')}s` : `${Math.floor(total / 3600)}h${String(Math.floor(total % 3600 / 60)).padStart(2, '0')}m`;};
+  const project = (s) => {const name = String(s.workspace ?? '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();return name || null;};
+  const updatedText = (s) => AieyesI18n.t("最后更新 {0}", Number.isFinite(s.updatedAt) ? new Date(s.updatedAt * 1000).toLocaleTimeString(AieyesI18n.locale, { hour: '2-digit', minute: '2-digit', ...AieyesI18n.clock }) : '—');
+  // Unknown parts are omitted, never shown as zero.
+  const usageText = (s) => {
+    const u = s.usage;if (!u) return '';
+    const format = (n) => typeof compact === 'function' ? compact(n) : String(n);
+    return [AieyesI18n.t("会话 {0}", format(u.sessionTokens)), u.turnTokens != null ? AieyesI18n.t("本轮 {0} Token", format(u.turnTokens)) : null, Number.isFinite(u.outputTokensPerSecond) && u.outputTokensPerSecond > 0 ? (u.outputTokensPerSecond < 1 ? '<1' : Math.round(u.outputTokensPerSecond)) + ' tok/s' : null].filter(Boolean).join(' · ');
+  };
+  const detailText = (s, now) => {const time = elapsed(s, now);return [project(s), time == null ? null : AieyesI18n.t("本轮 {0}", elapsedText(time))].filter(Boolean).concat(time == null ? [updatedText(s)] : []).join(' · ');};
+  // Only running turns tick, and only while the list is visible.
+  // A one-second timer runs only while a rendered turn is still counting.
+  let tickTimer = 0;
+  const tick = () => {
+    tickTimer = 0;
+    const list = document.querySelector('#session-list'),rows = list ? [...list.querySelectorAll('[data-turn-ticking]')] : [];
+    if (!rows.length) return;
+    if (!document.hidden && list.closest('details')?.open && !list.closest('[hidden]')) {
+      for (const el of rows) {const s = latest?.sessions?.find((row) => row.id === el.dataset.turnTicking);if (s) el.textContent = detailText(s);}
+    }
+    scheduleTick();
+  };
+  const scheduleTick = () => {if (!tickTimer && document.querySelector('#session-list [data-turn-ticking]')) tickTimer = setTimeout(tick, 1000);};
+  const focusMessages = { window: "已切换到 {0}", application: "已激活 {0}，未定位到具体窗口", noWindow: "未找到所属窗口（可能运行在 tmux、screen 或后台服务中）", exited: "会话进程已退出", unsupported: "当前桌面不支持切换窗口", failed: "无法切换到 {0}" };
+  async function focusSession(id) {
+    const s = latest?.sessions?.find((row) => row.id === id);if (!s || !Number.isInteger(s.pid)) return;
+    let result;
+    try {result = await window.__TAURI__.core.invoke('focus_session', { pid: s.pid, processStart: s.processStart ?? 0 });} catch (error) {result = { outcome: 'failed', name: '' };}
+    const message = focusMessages[result?.outcome] ?? focusMessages.failed;
+    if (typeof notify === 'function') notify(AieyesI18n.t(message, result?.name || AieyesI18n.t("会话所在应用")), ['window', 'application'].includes(result?.outcome) ? 'info' : 'error');
+  }
+  document.addEventListener('click', (event) => {const row = event.target instanceof Element ? event.target.closest('[data-focus-session]') : null;if (row) void focusSession(row.dataset.focusSession);});
+  document.addEventListener('keydown', (event) => {const row = event.target instanceof Element ? event.target.closest('[data-focus-session]') : null;if (row && (event.key === 'Enter' || event.key === ' ')) {event.preventDefault();void focusSession(row.dataset.focusSession);}});
+  globalThis.AieyesSessions = { visibility() {if (latest) renderLiveSessions(latest);}, tick, elapsed, elapsedText, detailText, usageText, focusSession };
   globalThis.renderLiveSessions = (info) => {
     latest = info;
     const rank = { needsInput: 0, failed: 1, unknown: 2, working: 3, thinking: 4, tool: 5, complete: 6, interrupted: 7, idle: 8 };
@@ -31,13 +70,16 @@
 
     const rows = active.map((s) => {
       const symbol = uiIcon(phaseKey(s.phase)),label = phaseLabel(s.phase);
-      return `<div class="live-row" data-phase="${escape(s.phase)}"><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(({ codex: 'Codex', claude: 'Claude Code', antigravity: 'Antigravity' }[s.provider] || s.source || 'Agent') + ' · ' + (s.machine || AieyesI18n.t("本机")))}</strong><small>${AieyesI18n.t("最后更新 {0}", Number.isFinite(s.updatedAt) ? escape(new Date(s.updatedAt * 1000).toLocaleTimeString(AieyesI18n.locale, { hour: '2-digit', minute: '2-digit', ...AieyesI18n.clock })) : '—')}</small></div><span>${label}</span></div>`;
+      // Local sessions open the terminal or IDE that runs them; SSH sessions are information only.
+      const focus = s.machineId === 'local' && Number.isInteger(s.pid) ? ` role="button" tabindex="0" data-focus-session="${escape(s.id)}" title="${escape(AieyesI18n.t("切换到会话所在的终端或 IDE"))}"` : '';
+      return `<div class="live-row" data-phase="${escape(s.phase)}"${focus}><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(({ codex: 'Codex', claude: 'Claude Code', antigravity: 'Antigravity' }[s.provider] || s.source || 'Agent') + ' · ' + (s.machine || AieyesI18n.t("本机")))}</strong><small class="session-detail" title="${escape([s.workspace, updatedText(s)].filter(Boolean).join('\n'))}"${elapsed(s) != null && !(s.turnEndedAt > 0) ? ` data-turn-ticking="${escape(s.id)}"` : ''}>${escape(detailText(s))}</small>${s.usage ? `<small class="session-usage" title="${escape(AieyesI18n.t("输出 Token ÷ 模型请求耗时（含首字等待，不含工具执行和用户等待）"))}">${escape(usageText(s))}</small>` : ''}</div><span>${label}</span></div>`;
     }).join('') + processSources.map((s) => {
       const provider = window.AieyesContract.providers[s.provider] ?? s.provider;
       const machine = s.machineId === 'local' ? AieyesI18n.t("本机") : state.settings?.hosts?.find((h) => h.id === s.machineId)?.name || s.machineId;
       return `<div class="live-row" data-process-provider="${escape(s.provider)}" data-process-running="${s.processRunning}"><span class="phase-mark" aria-hidden="true">${uiIcon('idle')}</span><div><strong>${escape(provider + ' · ' + machine)}</strong><small>${AieyesI18n.t("对话存储已加密，会话数量未知")}</small></div><span>${AieyesI18n.t(s.processRunning ? "IDE 正在运行" : "IDE 未运行")}</span></div>`;
     }).join('') || `<p class="muted">${AieyesI18n.t("暂无活跃会话")}</p>`;
     if (list._rows !== rows) {list.innerHTML = rows;list._rows = rows;}
+    scheduleTick();
     container.hidden = state.page !== 'agent' || !active.length && !processSources.length && !failures.length && !info.unavailable;
     if (failures.length) summary.textContent = AieyesI18n.t("{0} · {1} 个来源异常", summary.textContent, failures.length);
     warning.hidden = !failures.length;

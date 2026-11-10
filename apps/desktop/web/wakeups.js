@@ -68,11 +68,13 @@
     if (!task.sourceId) task.sourceId = sources[0].id;
     const deployed = records?.find((r) => r.task.id === task.id)?.deployment;
     const values = (f) => ({ ...task, name: f.get('name').trim(), sourceId: deployed ? task.sourceId : f.get('sourceId'), codexProfileId: deployed ? task.codexProfileId : f.get('codexProfileId') || null, times: f.get('times').split(/[,，、\s]+/).filter(Boolean), model: f.get('model').trim(), effort: f.get('effort'), prompt: f.get('prompt'), binary: f.get('binary').trim() });
-    showEditor(existing ? AieyesI18n.t("编辑唤醒任务") : AieyesI18n.t("新建唤醒任务"), `${field('name', AieyesI18n.t("名称"), task.name)}<label>${AieyesI18n.t("账户")}<select id="wake-account"></select></label><label>${AieyesI18n.t("运行位置")}<select name="sourceId" id="wake-source">${sources.map((s) => option(s.id, `${s.name} · ${s.hostId ? state.settings.hosts.find((h) => h.id === s.hostId)?.name ?? s.hostId : AieyesI18n.t("本机")}`, task.sourceId)).join('')}</select></label><div id="wake-profile"></div><p id="wake-target-reason" class="tiny muted" role="status"></p><div class="actions"><button type="button" id="wake-reconcile">${AieyesI18n.t("检查并关联")}</button><button type="button" id="wake-manage-account">${AieyesI18n.t("完成账户关联 / 登录")}</button></div><fieldset class="wake-times"><legend>${AieyesI18n.t("每天固定时刻 · 目标机器时区")}</legend><input type="hidden" id="field-times" name="times" value="${escapeHTML(task.times.join(','))}"><div id="wake-time-rows"></div><button type="button" id="wake-add-time">${AieyesI18n.t("添加时刻")}</button><p id="wake-time-zone" class="muted tiny">${AieyesI18n.t("读取模型后显示目标时区及本机时间")}</p></fieldset><details class="settings-details"><summary>${AieyesI18n.t("执行选项")}</summary>${field('binary', AieyesI18n.t("CLI 路径（留空使用数据源配置）"), task.binary)}</details><button id="wake-probe" type="button">${AieyesI18n.t("读取可用模型")}</button><p class="tiny muted" id="wake-capability"></p><label>${AieyesI18n.t("模型")}<input name="model" id="wake-model" list="wake-models" value="${escapeHTML(task.model)}" required><datalist id="wake-models"></datalist></label><label>${AieyesI18n.t("推理强度")}<select name="effort" id="wake-effort">${['', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((e) => option(e, e || AieyesI18n.t("模型默认"), task.effort)).join('')}</select></label><label>${AieyesI18n.t("提示词")}<textarea name="prompt" rows="3" maxlength="4000">${escapeHTML(task.prompt)}</textarea></label><p class="tiny muted">${AieyesI18n.t("模型请求可能消耗订阅额度，实际消耗取决于模型和提示词。")}</p>`, async (f) => {const value = values(f);if (!deployed && !targets.some((t) => t.accountKey === $('#wake-account').value && t.sourceId === value.sourceId && (t.profileId ?? null) === (value.codexProfileId ?? null) && (t.canDraft ?? t.canWake))) throw new Error(AieyesI18n.t("此账户与所选目录尚未关联，请检查账户和执行档案"));await api('wakeups.save', { task: value });await refresh();}, 'wakeup');
+    showEditor(existing ? AieyesI18n.t("编辑唤醒任务") : AieyesI18n.t("新建唤醒任务"), `${field('name', AieyesI18n.t("名称"), task.name)}<label>Agent<select id="wake-agent"></select></label><label>${AieyesI18n.t("账户")}<select id="wake-account"></select></label><label>${AieyesI18n.t("运行位置")}<select name="sourceId" id="wake-source">${sources.map((s) => option(s.id, `${s.name} · ${s.hostId ? state.settings.hosts.find((h) => h.id === s.hostId)?.name ?? s.hostId : AieyesI18n.t("本机")}`, task.sourceId)).join('')}</select></label><div id="wake-profile"></div><p id="wake-target-reason" class="tiny muted" role="status"></p><div class="actions"><button type="button" id="wake-reconcile">${AieyesI18n.t("检查并关联")}</button><button type="button" id="wake-manage-account">${AieyesI18n.t("完成账户关联 / 登录")}</button></div><fieldset class="wake-times"><legend>${AieyesI18n.t("每天固定时刻 · 目标机器时区")}</legend><input type="hidden" id="field-times" name="times" value="${escapeHTML(task.times.join(','))}"><div id="wake-time-rows"></div><button type="button" id="wake-add-time">${AieyesI18n.t("添加时刻")}</button><div class="wake-suggestion" role="status"><span id="wake-suggestion" class="tiny muted"></span><button type="button" id="wake-apply-suggestion" hidden>${AieyesI18n.t("采用")}</button></div><p id="wake-time-zone" class="muted tiny">${AieyesI18n.t("读取模型后显示目标时区及本机时间")}</p></fieldset><details class="settings-details"><summary>${AieyesI18n.t("执行选项")}</summary>${field('binary', AieyesI18n.t("CLI 路径（留空使用数据源配置）"), task.binary)}</details><button id="wake-probe" type="button">${AieyesI18n.t("读取可用模型")}</button><p class="tiny muted" id="wake-capability"></p><label>${AieyesI18n.t("模型")}<input name="model" id="wake-model" list="wake-models" value="${escapeHTML(task.model)}" required><datalist id="wake-models"></datalist></label><label>${AieyesI18n.t("推理强度")}<select name="effort" id="wake-effort">${['', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((e) => option(e, e || AieyesI18n.t("模型默认"), task.effort)).join('')}</select></label><label>${AieyesI18n.t("提示词")}<textarea name="prompt" rows="3" maxlength="4000">${escapeHTML(task.prompt)}</textarea></label><p class="tiny muted">${AieyesI18n.t("模型请求可能消耗订阅额度，实际消耗取决于模型和提示词。")}</p>`, async (f) => {const value = values(f);if (!deployed && !targets.some((t) => t.accountKey === $('#wake-account').value && t.sourceId === value.sourceId && (t.profileId ?? null) === (value.codexProfileId ?? null) && (t.canDraft ?? t.canWake))) throw new Error(AieyesI18n.t("此账户与所选目录尚未关联，请检查账户和执行档案"));await api('wakeups.save', { task: value });await refresh();}, 'wakeup');
     $('#editor-form button[type=submit]').textContent = AieyesI18n.t("保存草稿");
     if (deployed) {$('#wake-source').disabled = true;$('#wake-source').insertAdjacentHTML('afterend', `<p class="muted">${AieyesI18n.t("更换运行位置前请移除旧部署。")}</p>`);}
     let targetZone = deployed?.timezone;const updateLocalTimes = () => document.querySelectorAll('[data-local-time]').forEach((el) => el.textContent = AieyesUI.targetTimeLocal(times[Number(el.dataset.localTime)], targetZone));
     let times = [...task.times];
+    // Only an untouched default of a new task is replaced by a suggestion; otherwise it is added.
+    let timesEdited = Boolean(existing),suggestion = null,suggestionRevision = 0;
     // Adding or removing a time keeps keyboard focus in the list instead of dropping it to <body>.
     function drawTimes(focus) {
       const root = $('#wake-time-rows');
@@ -83,22 +85,43 @@
       }).join('');
       root.querySelectorAll('[data-wake-time]').forEach((input) => input.onchange = () => {
         const index = Number(input.dataset.wakeTime),row = input.closest('.wake-time-row');
-        times[index] = row.querySelector('[data-time-part="hour"]').value + ':' + row.querySelector('[data-time-part="minute"]').value;
+        times[index] = row.querySelector('[data-time-part="hour"]').value + ':' + row.querySelector('[data-time-part="minute"]').value;timesEdited = true;
         $('#field-times').value = times.join(',');
         row.querySelector('[data-remove-time]').setAttribute('aria-label', AieyesI18n.t("移除时刻 {0}", times[index]));
         updateLocalTimes();
       });
-      root.querySelectorAll('[data-remove-time]').forEach((b) => b.onclick = () => {const i = Number(b.dataset.removeTime);times.splice(i, 1);$('#field-times').value = times.join(',');drawTimes(times.length ? `[data-remove-time="${Math.min(i, times.length - 1)}"]` : '#wake-add-time');});
+      root.querySelectorAll('[data-remove-time]').forEach((b) => b.onclick = () => {const i = Number(b.dataset.removeTime);times.splice(i, 1);timesEdited = true;$('#field-times').value = times.join(',');drawTimes(times.length ? `[data-remove-time="${Math.min(i, times.length - 1)}"]` : '#wake-add-time');});
       updateLocalTimes();
       window.AieyesSingleSelect?.mountAll(root);
       if (focus) {const field = $(focus);(window.AieyesSingleSelect?.visible(field) ?? field)?.focus();}
     }
-    drawTimes();$('#wake-add-time').onclick = () => {times.push('08:00');$('#field-times').value = times.join(',');drawTimes(`[data-wake-time="${times.length - 1}"][data-time-part="hour"]`);};
+    const reasons = { wakeupIdentity: "唤醒记录缺少会话身份，无法排除自动用量，暂不推荐", days: "数据不足：最近 30 个完整自然日只有 {0} 个活跃日", timezone: "无法确定目标机器时区，暂不推荐", wakeupRuns: "无法读取目标机器的唤醒记录，暂不推荐" };
+    async function loadSuggestion() {
+      const revision = ++suggestionRevision,label = $('#wake-suggestion'),apply = $('#wake-apply-suggestion');suggestion = null;apply.hidden = true;
+      const sourceId = $('#wake-source')?.value || task.sourceId,profile = $('#wake-profile select')?.value || task.codexProfileId || null;
+      if (!sourceId) {label.textContent = '';return;}
+      label.textContent = AieyesI18n.t("正在根据最近 30 天用量计算推荐时间…");
+      try {
+        const value = await api('wakeups.suggest', { sourceId, codexProfileId: profile });
+        if (revision !== suggestionRevision || !$('#editor').open) return;
+        const shared = state.settings.sources.find((s) => s.id === sourceId)?.codexHomeId ? AieyesI18n.t("；共享 Codex 来源不按账户档案拆分") : '';
+        if (value.insufficient) {label.textContent = AieyesI18n.t(reasons[value.reason] ?? "暂无推荐", value.days ?? 0);return;}
+        suggestion = value.suggested;apply.hidden = false;
+        label.textContent = AieyesI18n.t("你通常 {0} 开始使用，建议 {1} 唤醒，5h 窗口约 {2} 重置（{3} 时区，{4} 个活跃日，按所选来源整体统计{5}）", value.typicalStart, value.suggested, value.resetAt, value.timezone, value.days, shared);
+      } catch (error) {if (revision === suggestionRevision) label.textContent = AieyesI18n.message(error.message ?? String(error));}
+    }
+    $('#wake-apply-suggestion').onclick = () => {
+      if (!suggestion || times.includes(suggestion)) return;
+      if (!timesEdited && times.length === 1 && times[0] === '08:00') times[0] = suggestion;else times.push(suggestion);
+      timesEdited = true;$('#field-times').value = times.join(',');drawTimes();
+    };
+    drawTimes();$('#wake-add-time').onclick = () => {timesEdited = true;times.push('08:00');$('#field-times').value = times.join(',');drawTimes(`[data-wake-time="${times.length - 1}"][data-time-part="hour"]`);};
     let models = [],capabilityRevision = 0;
     const updateEffort = () => {const m = models.find((m) => m.id === $('#wake-model').value);if (!m) return;const value = $('#wake-effort').value,efforts = m.efforts ?? [];$('#wake-effort').innerHTML = ['', ...efforts].map((e) => option(e, e || AieyesI18n.t("模型默认"), efforts.includes(value) ? value : efforts.includes('low') ? 'low' : '')).join('');};
     $('#wake-model').onchange = updateEffort;
     const formElement = $('#editor-form');
     let accountSelection = targets.find((t) => t.sourceId === task.sourceId && (t.profileId ?? null) === (task.codexProfileId ?? null))?.accountKey ?? targets[0]?.accountKey ?? '';
+    let providerSelection = AieyesUI.agentProvider(state.settings.sources.find(s => s.id === task.sourceId)?.provider ?? targets.find(t => t.accountKey === accountSelection)?.provider ?? window.AieyesContract.wakeupProviders[0]);
     const clearCapabilities = () => {capabilityRevision++;models = [];targetZone = null;$('#wake-models').innerHTML = '';$('#wake-model').value = '';$('#wake-capability').textContent = AieyesI18n.t("选择已更改，请重新读取执行能力。");$('#wake-time-zone').textContent = AieyesI18n.t("目标时区待读取");updateLocalTimes();};
     const profilePicker = () => {
       const chosen = $('#wake-profile select')?.value ?? task.codexProfileId ?? '';
@@ -113,19 +136,22 @@
     };
     const populate = () => {
       if (editorRevision !== editorGeneration || formElement !== $('#editor-form') || !$('#editor').open) return;
-      const accounts = [...new Map(targets.filter((t) => window.AieyesContract.wakeupProviders.includes(t.provider)).map((t) => [t.accountKey, t])).values()];
+      $('#wake-agent').innerHTML = window.AieyesContract.wakeupProviders.map(p => option(p, providers[p] ?? p, providerSelection)).join('');$('#wake-agent').disabled = Boolean(deployed);
+      const accounts = [...new Map(targets.filter((t) => AieyesUI.sameAgent(t.provider,providerSelection) && window.AieyesContract.wakeupProviders.includes(t.provider)).map((t) => [t.accountKey, t])).values()];
       if (!accounts.some((t) => t.accountKey === accountSelection) && !deployed) accountSelection = accounts[0]?.accountKey ?? '';
-      $('#wake-account').innerHTML = accounts.map((t) => option(t.accountKey, t.accountName, accountSelection)).join('');$('#wake-account').disabled = deployed;
+      $('#wake-account').innerHTML = accounts.length ? accounts.map((t) => option(t.accountKey, t.accountName, accountSelection)).join('') : option('',AieyesI18n.t("请选择账户"),'');$('#wake-account').disabled = Boolean(deployed) || !accounts.length;
       const current = $('#wake-source').value || task.sourceId,rows = [...new Map(targets.filter((t) => t.accountKey === accountSelection).map((t) => [t.sourceId, t])).values()];
       $('#wake-source').innerHTML = rows.map((t) => option(t.sourceId, t.machineName + ' · ' + AieyesUI.shortPath(t.path), current)).join('');
       if (deployed && !rows.some((t) => t.sourceId === task.sourceId)) $('#wake-source').innerHTML = option(task.sourceId, state.settings.sources.find((s) => s.id === task.sourceId)?.name ?? task.sourceId, task.sourceId);
       if (current !== $('#wake-source').value && !deployed) {task.codexProfileId = null;$('#wake-profile').innerHTML = '';clearCapabilities();}
-      profilePicker();
+      profilePicker();$('#wake-probe').disabled = !$('#wake-source').value;
     };
-    $('#wake-account').onchange = () => {accountSelection = $('#wake-account').value;task.codexProfileId = null;$('#wake-profile').innerHTML = '';clearCapabilities();populate();};
-    $('#wake-source').onchange = () => {task.codexProfileId = null;$('#wake-profile').innerHTML = '';clearCapabilities();profilePicker();};
+    $('#wake-agent').onchange = () => {providerSelection = $('#wake-agent').value;accountSelection = '';task.sourceId = '';task.codexProfileId = null;$('#wake-source').value = '';$('#wake-profile').innerHTML = '';$('#field-binary').value = '';$('#wake-effort').value = '';clearCapabilities();populate();void loadSuggestion();};
+    $('#wake-account').onchange = () => {accountSelection = $('#wake-account').value;task.codexProfileId = null;$('#wake-profile').innerHTML = '';clearCapabilities();populate();void loadSuggestion();};
+    $('#wake-source').onchange = () => {task.codexProfileId = null;$('#wake-profile').innerHTML = '';clearCapabilities();profilePicker();void loadSuggestion();};
     $('#field-binary').addEventListener('input', clearCapabilities);
-    populate();
+    populate();void loadSuggestion();
+    $('#wake-profile').addEventListener('change', () => void loadSuggestion());
     $('#wake-manage-account').onclick = () => window.AieyesAccountTargets.open(accountSelection, async () => {try {const next = await api('accounts.targets', { includeUnavailable: true });if (editorRevision !== editorGeneration || formElement !== $('#editor-form') || !$('#editor').open) return;targets = next;populate();} catch (error) {if (formElement === $('#editor-form')) $('#wake-target-reason').textContent = AieyesI18n.message(error.message ?? String(error));}});
     $('#wake-reconcile').onclick = async () => {
       const button = $('#wake-reconcile'),sourceId = $('#wake-source').value,account = accountSelection;button.disabled = true;
@@ -139,7 +165,7 @@
       } catch (error) {if (editorRevision === editorGeneration && formElement === $('#editor-form')) $('#wake-target-reason').textContent = AieyesI18n.message(error.message ?? String(error));} finally
       {button.disabled = false;}
     };
-    $('#wake-probe').onclick = async () => {const b = $('#wake-probe'),revision = ++capabilityRevision,account = accountSelection;b.disabled = true;try {const form = $('#editor-form'),t = values(new FormData(form)),previousEffort = t.effort;t.model = '';t.effort = '';const info = await api('wakeups.probe', { task: t });if (editorRevision !== editorGeneration || revision !== capabilityRevision || account !== accountSelection || !$('#editor').open || form !== $('#editor-form') || form.elements.sourceId.value !== t.sourceId || (new FormData(form).get('codexProfileId') || null) !== (t.codexProfileId || null) || form.elements.binary.value.trim() !== t.binary) return;models = info.models ?? [];$('#wake-models').innerHTML = models.map((m) => `<option value="${escapeHTML(m.id)}">${m.referenceCost != null ? AieyesI18n.t("参考成本 ${0}", m.referenceCost) : AieyesI18n.t("价格未知")}</option>`).join('');if (!$('#wake-model').value && info.recommendedModel) $('#wake-model').value = info.recommendedModel;$('#wake-effort').innerHTML = ['', ...(info.efforts ?? [])].map((e) => option(e, e || AieyesI18n.t("模型默认"), (info.efforts ?? []).includes(previousEffort) ? previousEffort : (info.efforts ?? []).includes('low') ? 'low' : '')).join('');updateEffort();targetZone = info.timezone;updateLocalTimes();$('#wake-capability').textContent = info.timezone + ' · ' + AieyesI18n.message(info.message);$('#wake-time-zone').textContent = AieyesI18n.t("目标时区 {0} · 本机时区 {1}；下次具体执行时间以部署状态为准", info.timezone, Intl.DateTimeFormat().resolvedOptions().timeZone);} catch (e) {if (editorRevision === editorGeneration && revision === capabilityRevision && $('#editor').open && $('#wake-capability')) $('#wake-capability').textContent = AieyesI18n.message(e.message ?? String(e));} finally {b.disabled = false;}};
+    $('#wake-probe').onclick = async () => {const b = $('#wake-probe'),revision = ++capabilityRevision,account = accountSelection;b.disabled = true;try {const form = $('#editor-form'),t = values(new FormData(form)),previousEffort = t.effort;t.model = '';t.effort = '';const info = await api('wakeups.probe', { task: t });if (editorRevision !== editorGeneration || revision !== capabilityRevision || account !== accountSelection || !$('#editor').open || form !== $('#editor-form') || form.elements.sourceId.value !== t.sourceId || (new FormData(form).get('codexProfileId') || null) !== (t.codexProfileId || null) || form.elements.binary.value.trim() !== t.binary) return;models = info.models ?? [];$('#wake-models').innerHTML = models.map((m) => `<option value="${escapeHTML(m.id)}">${m.referenceCost != null ? AieyesI18n.t("参考成本 ${0}", m.referenceCost) : AieyesI18n.t("价格未知")}</option>`).join('');if (!$('#wake-model').value && info.recommendedModel) $('#wake-model').value = info.recommendedModel;$('#wake-effort').innerHTML = ['', ...(info.efforts ?? [])].map((e) => option(e, e || AieyesI18n.t("模型默认"), (info.efforts ?? []).includes(previousEffort) ? previousEffort : (info.efforts ?? []).includes('low') ? 'low' : '')).join('');updateEffort();targetZone = info.timezone;updateLocalTimes();$('#wake-capability').textContent = info.timezone + ' · ' + AieyesI18n.message(info.message);$('#wake-time-zone').textContent = AieyesI18n.t("目标时区 {0} · 本机时区 {1}；下次具体执行时间以部署状态为准", info.timezone, Intl.DateTimeFormat().resolvedOptions().timeZone);} catch (e) {if (editorRevision === editorGeneration && revision === capabilityRevision && $('#editor').open && $('#wake-capability')) $('#wake-capability').textContent = AieyesI18n.message(e.message ?? String(e));} finally {b.disabled = !$('#wake-source')?.value;}};
   }
   function bind() {
     if (records === null && !loading) void refresh();

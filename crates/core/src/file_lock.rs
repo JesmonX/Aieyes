@@ -43,6 +43,24 @@ pub(crate) fn history(root: &std::path::Path, source_id: &str) -> anyhow::Result
     }
 }
 
+/// The same history lock without waiting: `None` while another import holds it.
+pub(crate) fn try_history(
+    root: &std::path::Path,
+    source_id: &str,
+) -> anyhow::Result<Option<FileLock>> {
+    let path = root.join(format!("history-{}.lock", crate::models::hash(source_id)));
+    let file = File::options()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)?;
+    match FileLock::try_exclusive(file) {
+        Ok(lock) => Ok(Some(lock)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

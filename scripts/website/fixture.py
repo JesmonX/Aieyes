@@ -52,6 +52,9 @@ dashboard["modelOptions"] = [m[0] for m in models]
 today = date(2026, 10, 21)
 dashboard["heatmap"] = [usage(0 if i%11 == 0 else 120000+(i*71239)%2800000, round(2+(i%23)*1.7, 2), (today-timedelta(days=364-i)).isoformat()) for i in range(365)]
 dashboard["trendDays"] = [usage(total, round(total*.00001717, 2), (today-timedelta(days=6-i)).isoformat()) for i,total in enumerate([1240000, 1850000, 1560000, 2310000, 1980000, 2570000, 2840000])]
+# Today so far against all of yesterday, as the analysis KPIs show it.
+side = lambda day, total, cost, records: dict(start=day, end=day, total=total, cost=cost, pricedTokens=total, recordCount=records, pricingComplete=True)
+dashboard["comparison"] = dict(current=side(today.isoformat(), 2840000, 48.76, 1840), previous=side((today-timedelta(days=1)).isoformat(), 2570000, 44.13, 1712), currentOpen=True)
 dashboard["dayModels"] = [dict(day=day["key"], model=key, usage=usage(int(day["total"]*ratio), round(day["cost"]*ratio, 2))) for day in dashboard["trendDays"] for key,ratio,_ in models]
 dashboard["sources"] = [dict(source, status=dict(updatedAt=STAMP)) for source in settings["sources"]]
 for record in dashboard["quotaEstimates"] + dashboard["creditEstimates"]:

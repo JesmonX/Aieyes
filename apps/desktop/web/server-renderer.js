@@ -17,6 +17,10 @@
     children(target, template.content);
   }
   const visible = (el) => {const r = el.getBoundingClientRect();return r.bottom >= -200 && r.top <= innerHeight + 200;};
+  function setView(value, paint = true) {
+    state.serverView = value;try {localStorage.setItem('aieyes.server.view.v2.' + (PANEL ? 'panel' : 'detail'), value);} catch (_) {}
+    if (paint) {savePanelView();render();document.querySelector(`[data-server-view="${CSS.escape(value)}"]`)?.focus({ preventScroll: true });}
+  }
   function request() {if (!frame && !document.hidden) frame = requestAnimationFrame(() => {frame = 0;if (state.page === 'servers') render();else clear();});}
   function clear() {for (const list of lists) list.dispose();cards.clear();root = null;}
   class DeviceList {
@@ -49,7 +53,9 @@
     card.signature = signature;
     const sample = result?.sample;
     patch(card.heading, `<div><h2 style="margin:0">${escapeHTML(host.name || host.target)}</h2><div class="sub">${escapeHTML(host.target)}</div></div><div class="server-card-actions"><button type="button" data-host-settings="${escapeHTML(host.id)}" aria-label="${AieyesI18n.t("{0}的监控设置", escapeHTML(host.name || host.target))}">${AieyesI18n.t("监控设置")}</button><button type="button" class="host-status" data-host-status="${escapeHTML(host.id)}"><i aria-hidden="true"></i><span data-host-status-label></span></button></div>`);
-    patch(card.summary, serverSummary(host, sample));
+    // A host without any reading is one row: name, status/refresh and settings; errors stay expandable below.
+    card.el.toggleAttribute('data-compact', !sample);
+    patch(card.summary, sample ? serverSummary(host, sample) : '');
     patch(card.health, `${result?.error ? `<div class="server-feedback-summary">${AieyesUI.errorHTML(result.error, AieyesI18n.t("服务器连接失败"))}</div>` : ''}${Object.keys(sample?.errors ?? {}).filter((k) => (host.metrics ?? Object.keys(groups)).includes(k)).map((k) => `<p class="server-feedback-summary">${AieyesI18n.t("{0} · 采集失败", escapeHTML(groups[k] ?? k))}</p>`).join('')}`);
     if (!card.disclosure.open) return;
     const enabled = (host.metrics ?? Object.keys(groups)).filter((key) => sample?.[key]);
@@ -67,16 +73,17 @@
     const content = document.querySelector('#content');if (!content) return;
     if (!root?.isConnected) {clear();root = document.createElement('div');root.className = 'server-list';content.replaceChildren(root);// Count and filter on the left, actions on the right; the panel keeps adding in its "more" menu and
       // refreshing in its header, so its toolbar only filters.
-      const head = document.createElement('div');head.className = 'section-head server-toolbar';head.innerHTML = `<div class="server-toolbar-start"><span class="muted" data-server-count></span><div class="segmented" role="group" aria-label="${AieyesI18n.t("服务器筛选")}">${[['all', AieyesI18n.t("全部")], ['errors', AieyesI18n.t("异常")], ['paused', AieyesI18n.t("已暂停")]].map(([key, label]) => `<button type="button" data-server-filter="${key}">${label}</button>`).join('')}</div></div>${PANEL ? '' : `<div class="server-toolbar-end"><button type="button" id="add-server" class="tinted">${AieyesI18n.t("添加 SSH 主机")}</button><button id="sample" title="${AieyesI18n.t("立即采样所有已启用的服务器")}">${AieyesI18n.t("刷新服务器")}</button></div>`}`;content.prepend(head);const tabs = document.createElement('div');tabs.className = 'agent-selector server-selector';tabs.setAttribute('role', 'group');tabs.setAttribute('aria-label', AieyesI18n.t("选择服务器"));tabs.dataset.serverSelector = '';content.prepend(tabs);tabs.onclick = (event) => {const button = event.target.closest('[data-server-select]');if (!button) return;state.serverSelection = button.dataset.serverSelect;try {localStorage.setItem('aieyes.server.selection.' + (PANEL ? 'panel' : 'detail'), state.serverSelection);} catch (_) {}savePanelView();render();};if (!PANEL) {head.querySelector('#add-server').onclick = () => openSettings({ category: 'hosts', section: 'add-host' });head.querySelector('#sample').onclick = () => sample();}head.addEventListener('click', (event) => {const button = event.target.closest('[data-server-filter]');if (!button) return;state.serverFilter = button.dataset.serverFilter;savePanelView();render();});}
-    for (const button of document.querySelectorAll('[data-server-filter]')) {const on = button.dataset.serverFilter === (state.serverFilter || 'all');button.setAttribute('aria-pressed', String(on));button.tabIndex = on ? 0 : -1;}
+      const head = document.createElement('div');head.className = 'section-head server-toolbar';head.innerHTML = `<div class="server-toolbar-start"><span class="muted" data-server-count></span></div>${PANEL ? '' : `<div class="server-toolbar-end"><button type="button" id="add-server" class="tinted">${AieyesI18n.t("添加 SSH 主机")}</button><button id="sample" title="${AieyesI18n.t("立即采样所有已启用的服务器")}">${AieyesI18n.t("刷新服务器")}</button></div>`}`;content.prepend(head);const tabs = document.createElement('div');tabs.className = 'agent-selector server-selector';tabs.setAttribute('role', 'group');tabs.setAttribute('aria-label', AieyesI18n.t("选择服务器"));tabs.dataset.serverSelector = '';content.prepend(tabs);tabs.setAttribute('aria-label', AieyesI18n.t("服务器筛选"));tabs.onclick = (event) => {const button = event.target.closest('[data-server-view]');if (button) setView(button.dataset.serverView);};if (!PANEL) {head.querySelector('#add-server').onclick = () => openSettings({ category: 'hosts', section: 'add-host' });head.querySelector('#sample').onclick = () => sample();}}
     const hosts = monitoredHosts();for (const key of expansion.keys()) if (!hosts.some((h) => key === 'host:' + h.id || key.startsWith('group:' + h.id + ':'))) expansion.delete(key);const byID = new Map(state.hosts.map((row) => [row.id, row]));
-    if (state.serverSelection !== 'all' && !hosts.some((h) => h.id === state.serverSelection)) {
-      state.serverSelection = 'all';try {localStorage.setItem('aieyes.server.selection.' + (PANEL ? 'panel' : 'detail'), 'all');} catch (_) {}
-    }
+    const hostIds = hosts.map((h) => h.id),statuses = new Map(hosts.map((h) => [h.id, hostStatus(h, byID.get(h.id))]));
+    if (state.serverView == null && state.settings) setView(AieyesUI.migrateServerView({ selection: state.serverSelection, filter: state.serverFilter }, hostIds), false);
+    const view = AieyesUI.serverView(state.serverView, hostIds);if (view !== state.serverView && state.serverView != null) setView(view, false);
+    const issues = hosts.filter((h) => AieyesUI.serverViewMatches('errors', h, statuses.get(h.id))).length,paused = hosts.filter((h) => !h.enabled).length;
     const tabs = document.querySelector('[data-server-selector]');
-    patch(tabs, [{ id: 'all', name: AieyesI18n.t("全部") }, ...hosts].map((h) => `<button type="button" data-server-select="${escapeHTML(h.id)}" aria-pressed="${state.serverSelection === h.id}" tabindex="${state.serverSelection === h.id ? 0 : -1}" title="${escapeHTML(h.name || h.target)}">${escapeHTML(h.name || h.target)}</button>`).join(''));if (!tabs.querySelector('[tabindex="0"]')) tabs.querySelector('button')?.setAttribute('tabindex', '0');
+    const choice = (id, label, count = null, title = label) => `<button type="button" data-server-view="${escapeHTML(id)}" aria-pressed="${view === id}" tabindex="${view === id ? 0 : -1}" title="${escapeHTML(title)}">${escapeHTML(label)}${count == null ? '' : `<span class="count" aria-label="${escapeHTML(AieyesI18n.t("{0} 台", count))}">${count}</span>`}</button>`;
+    patch(tabs, `<div class="tab-scroller">${choice('all', AieyesI18n.t("全部"))}${choice('errors', AieyesI18n.t("异常"), issues)}${choice('paused', AieyesI18n.t("已暂停"), paused)}${hosts.length ? '<span class="server-view-divider" aria-hidden="true"></span>' : ''}${hosts.map((h) => choice(h.id, h.name || h.target)).join('')}</div>`);
     patch(document.querySelector('[data-server-count]'), AieyesI18n.t("{0} 台主机", hosts.length) + ' ' + refreshIndicator('hosts'));
-    const selected = hosts.filter((h) => (!state.serverSelection || state.serverSelection === 'all' || state.serverSelection === h.id) && (!state.serverFilter || state.serverFilter === 'all' || (state.serverFilter === 'paused' ? !h.enabled : h.enabled && hostStatus(h, byID.get(h.id)) !== 'ok'))),ids = new Set(selected.map((h) => h.id));
+    const selected = hosts.filter((h) => AieyesUI.serverViewMatches(view, h, statuses.get(h.id))),ids = new Set(selected.map((h) => h.id));
     for (const [id, card] of cards) if (!ids.has(id)) {for (const g of card.groups.values()) g.list?.dispose();card.el.remove();cards.delete(id);}
     let previous = null;
     for (const host of selected) {
@@ -93,7 +100,7 @@
       if (!empty) {empty = document.createElement('div');empty.className = 'card empty';root.append(empty);}
       const filtered = hosts.length > 0;
       patch(empty, filtered ? `<p>${AieyesI18n.t("当前筛选没有匹配的服务器")}</p><button type="button" id="clear-server-filter">${AieyesI18n.t("清除筛选")}</button>` : `<p>${AieyesI18n.t("尚未添加服务器")}</p><button id="add-first-host" class="primary">${AieyesI18n.t("添加服务器")}</button>`);
-      if (filtered) empty.querySelector('#clear-server-filter').onclick = () => {state.serverFilter = 'all';state.serverSelection = 'all';try {localStorage.setItem('aieyes.server.selection.' + (PANEL ? 'panel' : 'detail'), 'all');} catch (_) {}savePanelView();render();};else
+      if (filtered) empty.querySelector('#clear-server-filter').onclick = () => setView('all');else
       bindSetup();
     }
     for (const list of lists) list.paint();updateHostStatuses();

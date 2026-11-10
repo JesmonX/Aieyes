@@ -10,6 +10,7 @@ struct AgentsSettingsView: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 12) {
+            CapabilityMatrix(model: model)
             AgentEntrySelector(model: model)
             if model.settingsAgentIDs.isEmpty && model.requestedAccountKey == nil {
                 Text(L("添加要接入的 Agent")).foregroundStyle(.secondary)
@@ -17,6 +18,51 @@ struct AgentsSettingsView: View {
                 AccountsSettingsView(model: model, provider: model.settingsAgent) { model.requestedAccountKey = $0.key }.id(model.settingsAgent)
             }
         }.padding(.top, 12)
+    }
+}
+
+/// Which integrations each Agent supports and whether they are configured. Collapsed by default;
+/// the disclosure state is remembered. Cells open the matching settings section.
+struct CapabilityMatrix: View {
+    @SurfaceModel var model: AppModel
+    @AppStorage("settings.capabilityMatrix.expanded") private var expanded = false
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    static func title(_ capability: String) -> String { ["history": L("历史用量"), "quota": L("账户额度"), "api": L("API 配置"), "sessions": L("会话状态"), "wakeup": L("定时唤醒")][capability] ?? capability }
+    static func label(_ state: Settings.CapabilityState) -> String { [.ready: L("已启用"), .setup: L("支持"), .unsupported: L("不支持"), .unneeded: L("无需")][state]! }
+    var body: some View {
+        let _ = interfaceLanguage;
+        DisclosureGroup(isExpanded: $expanded) {
+            ScrollView(.horizontal) {
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+                    GridRow {
+                        Text("Agent").foregroundStyle(.secondary)
+                        ForEach(Settings.capabilityColumns, id: \.self) { Text(Self.title($0)).foregroundStyle(.secondary) }
+                    }.font(AppFont.caption)
+                    ForEach(CoreContract.agentProviders, id: \.self) { provider in
+                        GridRow {
+                            Text(Format.provider(provider)).lineLimit(1)
+                            ForEach(Settings.capabilityColumns, id: \.self) { capability in cell(provider, capability) }
+                        }.font(AppFont.secondary)
+                    }
+                }.padding(.vertical, 6)
+            }
+        } label: {
+            Text(L("接入能力一览")).font(AppFont.section)
+        }.accessibilityIdentifier("settings.capabilityMatrix")
+    }
+    @ViewBuilder private func cell(_ provider: String, _ capability: String) -> some View {
+        let state = model.settings.capabilityState(provider, capability, quotas: model.dashboard.quotas)
+        let name = Format.provider(provider) + " · " + Self.title(capability) + " · " + Self.label(state)
+        if state == .unsupported || state == .unneeded {
+            Text(Self.label(state)).foregroundStyle(.secondary).accessibilityLabel(name)
+        } else {
+            Button(Self.label(state)) { open(provider, capability) }.buttonStyle(.plain)
+                .foregroundStyle(state == .ready ? Palette.accent : Color.primary).accessibilityLabel(name).help(name)
+        }
+    }
+    private func open(_ provider: String, _ capability: String) {
+        if capability == "wakeup" { model.openSettings(.init(category: "wakeups")); return }
+        model.openSettings(.init(provider: provider, section: ["history": "machines", "sessions": "machines", "quota": "accounts", "api": "api"][capability]))
     }
 }
 

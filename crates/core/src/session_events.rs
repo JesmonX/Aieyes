@@ -1,4 +1,5 @@
-//! Provider-neutral lifecycle reduction. No prompts, tool arguments or output are retained.
+//! Provider-neutral lifecycle reduction. No prompts, tool arguments or output are retained;
+//! only identifiers, timing, state and the absolute working directory path cross this boundary.
 use crate::sessions::Phase;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -35,6 +36,9 @@ pub struct Event {
     pub failed: bool,
     pub interrupted: bool,
     pub notification: String,
+    /// Absolute working directory from a hook payload; the session header reads it back.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub workspace: String,
 }
 fn field(v: &Value, names: &[&str]) -> String {
     names
@@ -422,6 +426,11 @@ pub fn hook(provider: &str, kind: &str, input: &Value, at: u64) -> Event {
             .as_str()
             .is_some_and(|s| s.contains("cancel") || s.contains("interrupt")),
         notification: field(input, &["notification_type"]),
+        workspace: input["cwd"]
+            .as_str()
+            .filter(|cwd| cwd.len() <= 4096 && std::path::Path::new(cwd).is_absolute())
+            .unwrap_or("")
+            .into(),
         ..Event::default()
     };
     if matches!(provider, "codebuddy" | "claude")
@@ -1253,6 +1262,39 @@ pub fn agy_steps(rows: &[(i64, i64, i64)]) -> (Option<Phase>, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hook_events_keep_only_an_absolute_working_directory() {
+        let input = serde_json::json!({"session_id":"s","cwd":"/work/project","prompt":"PRIVATE PROMPT","tool_input":{"command":"PRIVATE"}});
+        let event = hook("claude", "UserPromptSubmit", &input, 1);
+        assert_eq!(event.workspace, "/work/project");
+        let row = serde_json::to_string(&event).unwrap();
+        assert!(row.contains("\"workspace\":\"/work/project\"") && !row.contains("PRIVATE"));
+        for cwd in [
+            serde_json::json!("relative/path"),
+            serde_json::json!(7),
+            serde_json::json!("/".repeat(4097)),
+        ] {
+            assert!(
+                hook(
+                    "claude",
+                    "Stop",
+                    &serde_json::json!({"session_id":"s","cwd":cwd}),
+                    1
+                )
+                .workspace
+                .is_empty()
+            );
+        }
+        // The session header supplies the workspace back to the monitor.
+        let dir = tempfile::tempdir().unwrap();
+        let journal = dir.path().join("hook.jsonl");
+        std::fs::write(&journal, row + "\n").unwrap();
+        let context = crate::session_processes::context("claude", &journal.to_string_lossy(), "s");
+        assert_eq!(
+            context.workspace.as_deref(),
+            Some(std::path::Path::new("/work/project"))
+        );
+    }
     #[test]
     fn headless_argv_table_matches_fixture() {
         let cases: Vec<Value> =

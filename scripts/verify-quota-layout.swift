@@ -72,6 +72,26 @@ private struct GridFixture: View {
             .onPreferenceChange(GridFrames.self) { state.frames = $0 }
     }
 }
+@MainActor private final class MasonryState: ObservableObject {
+    /// (group, header, height); header rows carry the group's account count as span.
+    @Published var items: [(String, Bool, CGFloat)] = []
+    @Published var columns = 2
+    var frames: [Int: CGRect] = [:]
+}
+private struct MasonryFixture: View {
+    @ObservedObject var state: MasonryState
+    var body: some View {
+        QuotaMasonryLayout(columns: state.columns) {
+            ForEach(state.items.indices, id: \.self) { index in
+                let item = state.items[index]
+                Rectangle().fill(item.1 ? Color.gray.opacity(0.2) : Color.blue.opacity(0.2)).frame(height: item.2)
+                    .background(GeometryReader { geometry in Color.clear.preference(key: GridFrames.self, value: [index: geometry.frame(in: .named("masonry"))]) })
+                    .layoutValue(key: QuotaMasonryItem.self, value: QuotaMasonryRole(group: item.0, span: state.items.filter { $0.0 == item.0 && !$0.1 }.count, header: item.1))
+            }
+        }.coordinateSpace(name: "masonry").frame(width: 1000)
+            .onPreferenceChange(GridFrames.self) { state.frames = $0 }
+    }
+}
 @main struct VerifyQuotaLayout {
     @MainActor static func main() async throws {
         _ = NSApplication.shared
@@ -100,6 +120,21 @@ private struct GridFixture: View {
         precondition(qoderCreditSum(qoder) == "1975")
         qoder.meters?.removeLast()
         guard case .empty = QuotaRingModel.ring([], quota: qoder).0 else { fatalError("Addon must not substitute for missing Plan") }
+        var kiro = withoutAddon
+        kiro.provider = "kiro"
+        kiro.meters = [QuotaMeter(id: "plan", label: "套餐 Credits", used: 25, total: 2000, remaining: 1975, unit: "credits", resetsAt: 1900000000),
+                       QuotaMeter(id: "bonus", label: "赠送 Credits", used: 25, total: 100, remaining: 75, unit: "credits", resetsAt: 1900500000),
+                       QuotaMeter(id: "overage", label: "超额 Credits", used: 12.5, unit: "credits", resetsAt: 1900000000)]
+        let kiroItems = QuotaRingModel.items(kiro)
+        precondition(kiroItems.count == 3 && Set(kiroItems.map(\.id)).count == 3)
+        precondition(kiroItems[0].kind.top?.remaining == 98.75 && kiroItems[1].kind.top?.remaining == 75)
+        precondition(kiroItems[0].meterReset?.resetsAt == 1900000000 && kiroItems[1].meterReset?.resetsAt == 1900500000)
+        precondition(kiroItems[2].kind == .empty && kiroItems[2].meterReset?.resetsAt == 1900000000)
+        precondition(QuotaRingModel.accessibility(kiroItems[0]).contains("1975"))
+        kiro.meters?.reverse()
+        precondition(QuotaRingModel.items(kiro).map(\.id) == kiroItems.reversed().map(\.id))
+        kiro.meters = []
+        precondition(QuotaRingModel.items(kiro).count == 1 && QuotaRingModel.items(kiro)[0].kind == .empty)
         precondition(Format.subscription("personal_professional") == "Pro")
         let state = FixtureState()
         let raw = #"""
@@ -200,6 +235,45 @@ private struct GridFixture: View {
                 precondition(abs(primary.height - 20) < 1, "Quota cards must keep their natural height when facts are shorter: \(details.frames)")
             }
         }
+        // Account groups: a group spans only its account columns, and later groups fill the shorter ones.
+        func place(_ items: [(String, Bool, CGFloat)], columns: Int, width: CGFloat = 1000) -> [CGRect] {
+            QuotaMasonryLayout(columns: columns).frames(width: width, count: items.count, role: { index in
+                let item = items[index]; return QuotaMasonryRole(group: item.0, span: items.filter { $0.0 == item.0 && !$0.1 }.count, header: item.1)
+            }, height: { index, _ in items[index].2 }).1
+        }
+        func disjoint(_ frames: [CGRect]) { for i in frames.indices { for j in frames.indices where i < j { precondition(!frames[i].insetBy(dx: 0.5, dy: 0.5).intersects(frames[j]), "Masonry items overlap: \(i), \(j) \(frames)") } } }
+        // The reported overview: an expanded and a collapsed Codex card, then Claude Code and Antigravity.
+        let overview: [(String, Bool, CGFloat)] = [("codex", true, 30), ("codex", false, 460), ("codex", false, 150), ("claude", true, 30), ("claude", false, 120), ("antigravity", true, 30), ("antigravity", false, 230)]
+        let two = place(overview, columns: 2); disjoint(two)
+        let cell = (1000 - 14) / 2.0
+        precondition(abs(two[0].width - 1000) < 1 && two[0].minY == 0, "A two-account group heading spans both columns")
+        precondition(abs(two[1].minX) < 1 && abs(two[2].minX - (cell + 14)) < 1 && two[1].minY == two[2].minY)
+        precondition(abs(two[3].minX - two[2].minX) < 1 && abs(two[3].minY - (two[2].maxY + 10)) < 1, "Claude Code fills the space under the shorter Codex card: \(two)")
+        precondition(abs(two[4].minY - (two[3].maxY + 8)) < 1 && abs(two[4].width - cell) < 1)
+        precondition(abs(two[5].minX - two[2].minX) < 1 && two[5].minY > two[4].maxY, "The next group also takes the lower column")
+        let three = place(overview, columns: 3); disjoint(three)
+        let third = (1000 - 28) / 3.0
+        precondition(abs(three[0].width - (2 * third + 14)) < 1, "A two-account group spans two of three columns")
+        precondition(three[3].minY == 0 && abs(three[3].minX - 2 * (third + 14)) < 1, "The free third column starts the next group at the top")
+        let collapsed = place([("codex", true, 30), ("claude", true, 30), ("claude", false, 120), ("antigravity", true, 30)], columns: 2); disjoint(collapsed)
+        precondition(abs(collapsed[0].width - cell) < 1 && collapsed[1].minY == 0, "A collapsed group heading leaves the other column free")
+        precondition(abs(collapsed[3].minX - collapsed[0].minX) < 1 && abs(collapsed[3].minY - 40) < 1, "Groups after a collapsed heading fill beneath it")
+        let single = place(overview, columns: 1, width: 400); disjoint(single)
+        precondition(zip(single, single.dropFirst()).allSatisfy { $0.maxY <= $1.minY + 0.5 } && single.allSatisfy { abs($0.width - 400) < 1 }, "One column keeps data order")
+        let masonry = MasonryState(); masonry.items = overview
+        let masonryView = NSHostingView(rootView: MasonryFixture(state: masonry))
+        let masonryWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 1400), styleMask: [.borderless], backing: .buffered, defer: false)
+        masonryWindow.isReleasedWhenClosed = false; masonryWindow.contentView = masonryView
+        masonryWindow.setFrameOrigin(NSPoint(x: -20000, y: -20000)); masonryWindow.orderBack(nil)
+        defer { masonryWindow.close() }
+        for columns in [2, 3, 1] {
+            masonry.columns = columns
+            try await Task.sleep(for: .milliseconds(300)); masonryView.layoutSubtreeIfNeeded()
+            let expected = place(overview, columns: columns), rendered = (0..<overview.count).map { masonry.frames[$0] ?? .null }
+            for (want, got) in zip(expected, rendered) { precondition(abs(want.minX - got.minX) < 1 && abs(want.minY - got.minY) < 1 && abs(want.width - got.width) < 1, "SwiftUI placement matches the masonry model: \(columns) \(rendered)") }
+            disjoint(rendered)
+        }
+        print("Native account-group masonry: groups span their account columns, later groups fill shorter columns, collapsed headings and one column keep order")
         print("Native masonry: 1–4 columns, expanding cards, shortest-column packing and full-width groups pass")
         print("Native detail columns: quota cards stretch to a taller facts column and keep their natural height when it is shorter")
         print("Native quota layout: collapsed heights match for multiple subscriptions, long text, errors, meters, stale and non-Codex cards and widths; group shrinks; initial panel layers fill their width")

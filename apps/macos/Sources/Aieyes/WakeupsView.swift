@@ -84,10 +84,15 @@ struct WakeEditor: View {
     var save: (WakeTask) async throws -> Void
     @Environment(\.dismiss) private var dismiss
     @StateObject private var targets = AccountTargetsModel()
+    @State private var selectedProvider = ""
     @State private var selectedAccount = ""
     @State private var initialDraft = ""
     @State private var confirmDiscard = false
     @State private var capabilities: WakeCapabilities?
+    @State private var suggestion: WakeSuggestion?
+    @State private var suggestionLoading = false
+    /// Only the untouched default of a new task is replaced by a suggestion; otherwise it is added.
+    @State private var timesEdited = false
     @State private var associationSource: AgentSource?
     @State private var busy = false
     @State private var error: String?
@@ -102,10 +107,17 @@ struct WakeEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     LabeledContent(L("名称")) { TextField(L("名称"), text: $task.name).labelsHidden() }
+                    Picker("Agent", selection: Binding(get: { selectedProvider }, set: {
+                        selectedProvider = $0; selectedAccount = ""; task.sourceId = ""; task.codexProfileId = nil
+                        task.binary = ""; task.model = ""; task.effort = ""; capabilities = nil
+                    })) {
+                        Text(L("请选择 Agent")).tag("")
+                        ForEach(CoreContract.wakeupProviders, id: \.self) { Text(Format.provider($0)).tag($0) }
+                    }.disabled(deployed).accessibilityIdentifier("wake-agent")
                     Picker(L("账户"), selection: Binding(get: { selectedAccount }, set: { selectedAccount = $0; task.sourceId = ""; task.codexProfileId = nil; task.model = ""; capabilities = nil })) {
                         Text(L("请选择账户")).tag("")
-                        ForEach(model.settings.accounts.filter { a in a.archived != true && targets.rows.contains { $0.accountKey == a.key && CoreContract.wakeupProviders.contains($0.provider) } }, id: \.key) { Text($0.name).tag($0.key) }
-                    }.disabled(deployed)
+                        ForEach(model.settings.accounts.filter { a in a.archived != true && CoreContract.sameAgent(a.provider, selectedProvider) && targets.rows.contains { $0.accountKey == a.key && CoreContract.wakeupProviders.contains($0.provider) } }, id: \.key) { Text($0.name).tag($0.key) }
+                    }.disabled(deployed || selectedProvider.isEmpty).accessibilityIdentifier("wake-account")
                     Picker(L("运行位置"), selection: Binding(get: { targets.rows.first { $0.accountKey == selectedAccount && $0.sourceId == task.sourceId && $0.profileId == task.codexProfileId }?.id ?? "" }, set: { id in
                         guard let target = targets.rows.first(where: { $0.id == id }) else { return }
                         task.sourceId = target.sourceId; task.codexProfileId = target.profileId; task.model = ""; capabilities = nil
@@ -128,7 +140,8 @@ struct WakeEditor: View {
                     ForEach(task.times.indices, id: \.self) { index in
                         timeRow(index)
                     }
-                    Button(L("添加时刻")) { task.times.append("08:00") }
+                    Button(L("添加时刻")) { timesEdited = true; task.times.append("08:00") }
+                    suggestionRow
                     Text(L("跟随目标机器时区，错过时刻不补发。")).font(AppFont.secondary).foregroundStyle(.secondary)
                     DisclosureGroup(L("执行选项")) { TextField(L("CLI 路径（留空使用数据源配置）"), text: $task.binary) }
                     Button(L("读取可用模型")) { probe() }.disabled(task.sourceId.isEmpty)
@@ -152,7 +165,11 @@ struct WakeEditor: View {
             if let error { ErrorNotice(message: error) }
             AccountFlowNotice(model: model)
             HStack { if busy { ProgressView().controlSize(.small) }; Spacer(); Button(L("取消")) { if initialDraft != draftSnapshot(task) { confirmDiscard = true } else { dismiss() } }.keyboardShortcut(.cancelAction); Button(L("保存草稿")) { submit() }.buttonStyle(.aieyesPrimary).disabled(task.sourceId.isEmpty || task.model.isEmpty) }
-        }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogWakeupWidth).font(AppFont.body).disabled(busy).onAppear { if task.sourceId.isEmpty { task.sourceId = sources.first?.id ?? "" }; initialDraft = draftSnapshot(task) }
+        }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogWakeupWidth).font(AppFont.body).disabled(busy).onAppear {
+            if task.sourceId.isEmpty { task.sourceId = sources.first?.id ?? "" }
+            selectedProvider = model.settings.sources.first { $0.id == task.sourceId }.map { CoreContract.agentProvider($0.provider) } ?? ""
+            initialDraft = draftSnapshot(task)
+        }
         .interactiveDismissDisabled(busy || initialDraft != draftSnapshot(task))
         .discardDraftConfirmation($confirmDiscard) { dismiss() }
         .updateDraftGuard(L("定时唤醒"), snapshot: draftSnapshot(task), dirty: !initialDraft.isEmpty && initialDraft != draftSnapshot(task), saving: busy, save: { await saveDraft() }, discard: { dismiss() })
@@ -161,12 +178,36 @@ struct WakeEditor: View {
             AccountConnectionView(model: model, account: model.settings.accounts.first { $0.key == selectedAccount }, initialSourceID: source.id, intent: "login")
         }
         .onChange(of: targets.rows.map(\.id)) { _, _ in
-            if selectedAccount.isEmpty { selectedAccount = targets.rows.first { $0.sourceId == task.sourceId && $0.profileId == task.codexProfileId }?.accountKey ?? "" }
+            if selectedAccount.isEmpty, let target = targets.rows.first(where: { $0.sourceId == task.sourceId && $0.profileId == task.codexProfileId }) {
+                selectedAccount = target.accountKey; selectedProvider = CoreContract.agentProvider(target.provider)
+            }
         }
-        .onChange(of: task.sourceId) { _, _ in capabilities = nil }
-        .onChange(of: task.codexProfileId) { _, _ in capabilities = nil }
+        .onChange(of: task.sourceId, initial: true) { _, _ in capabilities = nil; loadSuggestion() }
+        .onChange(of: task.codexProfileId) { _, _ in capabilities = nil; loadSuggestion() }
         .onChange(of: task.binary) { _, _ in capabilities = nil; task.model = "" }
         .onChange(of: task.model) { _, _ in if !efforts.contains(task.effort) { task.effort = efforts.contains("low") ? "low" : "" } }
+    }
+    @ViewBuilder private var suggestionRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if suggestionLoading { ProgressView().controlSize(.small) }
+            Text(WakeSuggestion.text(suggestion, loading: suggestionLoading, shared: model.settings.sources.first { $0.id == task.sourceId }?.codexHomeId != nil))
+                .font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if let time = suggestion?.suggested { Button(L("采用")) { task.times = WakeSuggestion.apply(time, to: task.times, edited: timesEdited || !task.id.isEmpty); timesEdited = true } }
+        }
+    }
+    private func loadSuggestion() {
+        let sourceID = task.sourceId, profile = task.codexProfileId
+        suggestion = nil; suggestionLoading = false
+        guard !sourceID.isEmpty else { return }
+        suggestionLoading = true
+        Task { @MainActor in
+            var parameters: [String: Any] = ["sourceId": sourceID]
+            if let profile { parameters["codexProfileId"] = profile }
+            let value: WakeSuggestion? = try? await engine.call("wakeups.suggest", params: parameters)
+            guard sourceID == task.sourceId && profile == task.codexProfileId else { return }
+            suggestion = value; suggestionLoading = false
+        }
     }
     private func timeRow(_ index: Int) -> some View {
         HStack(spacing: 8) {
@@ -180,7 +221,7 @@ struct WakeEditor: View {
             }.pickerStyle(.menu).labelsHidden().frame(width: 76)
             Text(localTime(task.times[index])).font(AppFont.secondary).foregroundStyle(.secondary)
             Spacer()
-            Button(L("移除")) { task.times.remove(at: index) }
+            Button(L("移除")) { timesEdited = true; task.times.remove(at: index) }
                 .accessibilityLabel(L("移除时刻 {0}", task.times[index]))
         }
     }
@@ -195,6 +236,7 @@ struct WakeEditor: View {
         return Binding(get: { parts()[component] }, set: { value in
             guard task.times.indices.contains(index) else { return }
             var next = parts(); next[component] = value
+            timesEdited = true
             task.times[index] = String(format: "%02d:%02d", next[0], next[1])
         })
     }

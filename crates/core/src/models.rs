@@ -74,6 +74,21 @@ pub struct UsageEvent {
     /// e.g. `chatgpt-work` on the shared Codex pool.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub agent: String,
+    /// Model request duration, including time to first token, when native boundaries are known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_timing: Option<OutputTiming>,
+}
+
+/// Model request/response time, including first-token wait, excluding tools and user waits.
+/// The wire name remains outputTiming for compatibility; evidence identifies the new basis.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct OutputTiming {
+    pub duration_ms: u64,
+    pub evidence: String,
+    /// One native request can produce several records; its duration is counted only once.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub request_id: String,
 }
 
 fn is_zero_revision(value: &u32) -> bool {
@@ -819,6 +834,11 @@ pub struct ParseState {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inherited_usage: bool,
     pub task_started_at: Option<i64>,
+    /// Native request clocks only; never request bodies or response content.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub request_starts: BTreeMap<String, u64>,
+    pub request_start_ms: Option<u64>,
+    pub request_end_ms: Option<u64>,
     pub session_id: String,
     pub model: String,
     pub last_cumulative: Option<Tokens>,
@@ -1125,8 +1145,49 @@ pub struct Dashboard {
     pub credit_estimates: Vec<crate::estimates::Estimate>,
     pub automatic_estimate_summaries: Vec<crate::rolling_estimates::Summary>,
     pub sources: Vec<Value>,
+    /// The same filters over the preceding equal run of local natural days; absent for "all".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparison: Option<PeriodComparison>,
     #[serde(skip_serializing)]
     pub price_updated_at: Option<i64>,
+}
+
+/// One side of a period comparison. Dates are inclusive local natural days.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PeriodSide {
+    pub start: String,
+    pub end: String,
+    pub total: u64,
+    pub cost: f64,
+    pub priced_tokens: u64,
+    /// Usage records counted in the period; zero means "no records", not a measured zero.
+    pub record_count: u64,
+    /// Every token in the period has a price, so `cost` is the full API-equivalent value.
+    pub pricing_complete: bool,
+}
+
+impl PeriodSide {
+    pub fn from_summary(start: chrono::NaiveDate, end: chrono::NaiveDate, a: &Aggregate) -> Self {
+        Self {
+            start: start.to_string(),
+            end: end.to_string(),
+            total: a.total,
+            cost: a.cost,
+            priced_tokens: a.priced_tokens,
+            record_count: a.events,
+            pricing_complete: a.priced_tokens >= a.total,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PeriodComparison {
+    pub current: PeriodSide,
+    pub previous: PeriodSide,
+    /// The current period includes today, so it is still accumulating.
+    pub current_open: bool,
 }
 
 impl Dashboard {

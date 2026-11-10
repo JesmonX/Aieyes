@@ -64,6 +64,7 @@ pub mod session_events;
 pub mod session_hooks;
 mod session_processes;
 pub mod session_sounds;
+pub mod session_usage;
 pub mod sessions;
 pub mod settings;
 mod sqlite_ro;
@@ -500,9 +501,11 @@ impl Engine {
             )?),
             "sessions.list" => {
                 self.sessions.set_internal(self.store.internal_sessions()?);
-                let snapshot = self
-                    .sessions
-                    .read(&self.store.settings()?, std::time::SystemTime::now());
+                let snapshot = self.sessions.read_with_usage(
+                    &self.store.settings()?,
+                    std::time::SystemTime::now(),
+                    &self.store,
+                );
                 let mut value = serde_json::to_value(&snapshot)?;
                 value["pet"] = serde_json::to_value(pets::project(&snapshot))?;
                 value["summary"] = json!(snapshot.summary());
@@ -510,6 +513,13 @@ impl Engine {
                 value["activeCount"] = json!(snapshot.active_count());
                 Ok(value)
             }
+            "sessions.focusTarget" => Ok(sessions::focus_target(
+                params["pid"]
+                    .as_u64()
+                    .and_then(|v| u32::try_from(v).ok())
+                    .context("缺少会话进程")?,
+                params["processStart"].as_u64().unwrap_or(0),
+            )),
             "pets.current" => pet_import::current(
                 &self.store,
                 params["includeImage"].as_bool().unwrap_or(false),

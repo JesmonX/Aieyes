@@ -163,6 +163,34 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
         .parent()
         .context("数据目录不可用")?;
     let _lock = crate::file_lock::history(root, &source.id)?;
+    scan_locked(store, settings, source, full, None)
+}
+
+/// Prompt incremental import for a live session: never waits for another import of the same
+/// source. `only` limits a JSONL source to the session's transcripts; cursors, de-duplication
+/// and revisions are the regular ones. A partial file scan does not replace the source status.
+pub(crate) fn scan_when_idle(
+    store: &Store,
+    settings: &Settings,
+    source: &Source,
+    only: Option<&[PathBuf]>,
+) -> Result<Option<Value>> {
+    let root = Path::new(store.db.path().context("数据目录不可用")?)
+        .parent()
+        .context("数据目录不可用")?;
+    let Some(_lock) = crate::file_lock::try_history(root, &source.id)? else {
+        return Ok(None);
+    };
+    scan_locked(store, settings, source, false, only).map(Some)
+}
+
+fn scan_locked(
+    store: &Store,
+    settings: &Settings,
+    source: &Source,
+    full: bool,
+    only: Option<&[PathBuf]>,
+) -> Result<Value> {
     let current = current_settings(store, settings, source)?;
     let settings = &current;
     crate::history_counting::prepare_source(store, settings, source)?;
@@ -232,7 +260,19 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
     let mut missing_history = 0;
     let mut history_issues = Vec::new();
     let mut file_issues = Vec::new();
-    for path in &files {
+    // Live transcript keys may be canonicalized; compare the same file identity.
+    let only: Option<Vec<PathBuf>> = only.map(|paths| {
+        paths
+            .iter()
+            .map(|p| dunce::canonicalize(p).unwrap_or_else(|_| p.clone()))
+            .collect()
+    });
+    for path in files.iter().filter(|path| {
+        only.as_ref().is_none_or(|only| {
+            let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            only.contains(&path)
+        })
+    }) {
         let scanned = scan_file(
             store,
             settings,
@@ -303,6 +343,12 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
             .as_array_mut()
             .unwrap()
             .extend(qoder_issues);
+    }
+    if only.is_some() {
+        if count > 0 {
+            store.repair_history_estimates()?;
+        }
+        return Ok(result);
     }
     let tx = store.write_transaction()?;
     current_settings(store, settings, source)?;

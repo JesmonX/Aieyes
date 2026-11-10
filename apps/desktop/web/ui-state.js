@@ -1,5 +1,45 @@
 /* Shared UI semantics. Query timestamps deliberately never imply a successful sync. */
 window.AieyesUI = {
+  /* Previous-period line for an analysis KPI. metric: 'tokens' | 'cost'. Returns null when there is
+     no comparison (the "all" range). `direction` is 'up', 'down', 'flat' or null when no percent is shown. */
+  periodChange(comparison, metric) {
+    if (!comparison?.current || !comparison?.previous) return null;
+    const { current, previous } = comparison, t = AieyesI18n.t;
+    const days = Math.round((Date.parse(current.end + 'T00:00:00Z') - Date.parse(current.start + 'T00:00:00Z')) / 86400000) + 1;
+    const note = '';
+    const title = t("上一周期：{0} – {1}", previous.start, previous.end);
+    const result = (text, direction = null) => ({ text, direction, note, title });
+    if (!previous.recordCount) return result(t("上一周期无记录"));
+    const now = metric === 'cost' ? current.cost : current.total, before = metric === 'cost' ? previous.cost : previous.total;
+    if (!(before > 0)) return result(now > 0 ? t("上一周期为 0") : t("与上一周期持平"), now > 0 ? null : 'flat');
+    const percent = (now - before) / before * 100, rounded = Math.round(Math.abs(percent));
+    const direction = rounded === 0 ? 'flat' : percent > 0 ? 'up' : 'down';
+    const change = direction === 'flat' ? t("持平") : (direction === 'up' ? '↑' : '↓') + rounded + '%';
+    return result(days === 1 && comparison.currentOpen ? t("较昨日全天 {0}", change) : t("较前 {0} 天 {1}", days, change), direction);
+  },
+  /* Values of the selected days only; trendDays may extend before the range. */
+  rangeSeries(days, comparison, metric) {
+    if (!comparison?.current) return [];
+    return (days ?? []).filter((d) => d.key >= comparison.current.start && d.key <= comparison.current.end).map((d) => metric === 'cost' ? d.cost : d.total);
+  },
+  /* One server view value: 'all', 'errors', 'paused' or a host id. */
+  serverIssue(status) { return ['failed', 'stale', 'partial'].includes(status); },
+  serverViewMatches(view, host, status) {
+    if (!view || view === 'all') return true;
+    if (view === 'paused') return !host.enabled;
+    if (view === 'errors') return host.enabled && this.serverIssue(status);
+    return host.id === view;
+  },
+  /* The former host + status pair has no exact single value: a host that still exists wins,
+     then a status filter, then everything. */
+  migrateServerView(legacy, hostIds) {
+    const selection = legacy?.selection, filter = legacy?.filter;
+    if (selection && selection !== 'all' && hostIds.includes(selection)) return selection;
+    if (['errors', 'paused'].includes(filter)) return filter;
+    return 'all';
+  },
+  /* A stored view that no longer names a host falls back to everything. */
+  serverView(value, hostIds) { return ['all', 'errors', 'paused'].includes(value) || hostIds.includes(value) ? value : 'all'; },
   syncFailure(status) {
     if (status?.error) return AieyesI18n.message(status.error);
     if (!status?.partial) return null;
@@ -50,6 +90,29 @@ window.AieyesUI = {
   },
   agentSupports(provider, feature, settings) {
     return Object.keys(window.AieyesContract.providers).some((key) => this.sameAgent(key, provider) && this.supports(key, feature, settings));
+  },
+  /* Integration matrix columns and enabled/configurable states. */
+  capabilityColumns: ['history', 'quota', 'api', 'sessions', 'wakeup'],
+  capabilityState(settings, provider, capability, quotas = []) {
+    const contract = window.AieyesContract,same = (p) => this.sameAgent(p, provider);
+    const supported = capability === 'wakeup' ? contract.wakeupProviders.some(same) : capability === 'api' ? this.agentSupports(provider, 'api', settings) : this.agentSupports(provider, capability, settings);
+    if (!supported) {
+      if (capability === 'wakeup') {
+        const fiveHour = this.agentSupports(provider, 'fiveHourQuota', settings) || quotas.some(q => same(q.provider) && q.windows?.some(w => w.windowMinutes === contract.windows.fiveHour));
+        return fiveHour ? 'unsupported' : 'unneeded';
+      }
+      return 'unsupported';
+    }
+    const agent = (settings?.agents ?? []).filter((a) => same(a.provider));
+    if (agent.length && !agent.some((a) => a.enabled)) return 'setup';
+    const sources = (settings?.sources ?? []).filter((s) => same(s.provider) && this.sourceEnabled(settings, s));
+    const directories = sources.filter((s) => !s.subscription && s.path?.trim() && this.supports(s.provider, capability === 'history' ? 'history' : capability === 'sessions' ? 'sessions' : 'machines', settings));
+    const accounts = (settings?.accounts ?? []).filter((a) => same(a.provider) && !a.archived);
+    const ready = capability === 'history' || capability === 'sessions' ? directories.length > 0
+      : capability === 'quota' ? accounts.some((a) => a.quotaEnabled !== false) || sources.some((s) => s.quotaCommand?.trim())
+      : capability === 'api' ? (provider === 'codex' && (settings?.codexApis ?? []).length > 0) || (settings?.nativeConnections ?? []).some((r) => same(r.provider) && r.kind === 'api')
+      : sources.some((s) => contract.wakeupProviders.includes(s.provider) && (s.accountId || s.codexHomeId));
+    return ready ? 'ready' : 'setup';
   },
   agentConfigurations(rows) {
     const groups = new Map();

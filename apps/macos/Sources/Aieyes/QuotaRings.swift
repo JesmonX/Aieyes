@@ -124,13 +124,13 @@ private struct QuotaRingDetail: View {
                     }
                 }.frame(maxHeight: .infinity)
             }
-            if isQoderCredits(quota), let meters = quota.meters, !meters.isEmpty {
+            if isQoderCredits(quota) || quota.provider == "kiro", let meters = quota.meters, !meters.isEmpty {
                 QuotaDetailGrid(columns: min(2, meters.count)) {
                     ForEach(meters) { meter in
                         QuotaDetailMetric(title: L(meter.label), reset: meter.resetsAt.map { Format.date($0) },
                                           resetHelp: meter.resetsAt.map { Format.date($0) },
                                           usedPercent: meter.fraction.map { $0 * 100 }, healthy: QuotaRingModel.healthy(quota.provider),
-                                          summary: quota.meterSummary(meter), showsMissingReset: false)
+                                          summary: quota.provider == "kiro" && meter.remaining != nil ? meter.remainingSummary : quota.meterSummary(meter), showsMissingReset: false)
                     }
                 }.frame(maxHeight: .infinity)
             } else if !(quota.meters ?? []).isEmpty {
@@ -311,7 +311,15 @@ struct QuotaDialTile: View {
     @ViewBuilder private func center(now: Date) -> some View {
         let showPercent = hovering || focused
         let font = Font.system(size: compact ? DesignTokens.fontCaption + 1 : DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)
-        if isQoderCredits(item.quota), case .duo(let top, let bottom) = item.kind {
+        if let meter = item.meter {
+            VStack(spacing: 3) {
+                Text(showPercent ? item.kind.top.map(QuotaRingModel.remainingText) ?? "—" : qoderCreditNumber(meter.remaining))
+                    .font(font).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+                if let arc = item.meterReset, arc.resetsAt != nil {
+                    Text(QuotaRingModel.resetText(arc, now: now)).font(.system(size: DesignTokens.fontCaption, weight: DesignTokens.weightMedium)).foregroundStyle(.secondary).monospacedDigit()
+                }
+            }
+        } else if isQoderCredits(item.quota), case .duo(let top, let bottom) = item.kind {
             VStack(spacing: 3) {
                 Text(showPercent ? QuotaRingModel.remainingText(top) : qoderCreditNumber(item.quota.meters?.first { $0.id == "addOnQuota" }?.remaining))
                 Rectangle().fill(Palette.cardBorder.opacity(0.6)).frame(width: 22, height: 1)
@@ -360,14 +368,21 @@ struct QuotaRingTile: View {
                         ProviderMark(provider: item.quota.provider, size: 14)
                         Text(compactQuotaGroup(item.title)).font(.system(size: DesignTokens.fontCaption + 1, weight: DesignTokens.weightMedium)).lineLimit(1).truncationMode(.tail)
                         Spacer(minLength: 4)
-                        if item.group == nil, let plan = item.quota.plan, !Format.subscription(plan).isEmpty { Text(Format.subscription(plan)).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium)).foregroundStyle(.secondary).lineLimit(1).fixedSize() }
+                        if item.group == nil, item.meter == nil, let plan = item.quota.plan, !Format.subscription(plan).isEmpty { Text(Format.subscription(plan)).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium)).foregroundStyle(.secondary).lineLimit(1).fixedSize() }
                     }
                     HStack(alignment: .center, spacing: 10) {
                         ZStack {
                             QuotaRingView(kind: item.kind, healthy: QuotaRingModel.healthy(item.quota.provider), lineWidth: compact ? 4.5 : 5, composition: RingBalanceComposition.make(item.quota), gap: 2)
                             center
                         }.frame(width: size, height: size).opacity(item.quota.isStale ? 0.6 : 1)
-                        if isQoderCredits(item.quota) { RingCreditFacts(quota: item.quota) }
+                        if let meter = item.meter {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(qoderCreditNumber(meter.remaining) + "/\u{200B}" + qoderCreditNumber(meter.total)).monospacedDigit().lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                                if let arc = item.meterReset, arc.resetsAt != nil {
+                                    Text(QuotaRingModel.resetText(arc, now: context.date)).foregroundStyle(.secondary).monospacedDigit()
+                                }
+                            }.font(.system(size: DesignTokens.fontCaption + 1, weight: DesignTokens.weightMedium))
+                        } else if isQoderCredits(item.quota) { RingCreditFacts(quota: item.quota) }
                         else { times(now: context.date).font(.system(size: DesignTokens.fontCaption + 1, weight: DesignTokens.weightMedium)) }
                         let extras = ringExtras(item, now: context.date).prefix(2)
                         if !extras.isEmpty { Spacer(minLength: 0); VStack(alignment: .trailing, spacing: 3) { ForEach(Array(extras)) { RingExtraLabel(extra: $0) } }.font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)) }

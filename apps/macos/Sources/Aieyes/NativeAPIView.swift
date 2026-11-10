@@ -32,7 +32,7 @@ struct NativeAPISettingsSection: View {
                 }
                 Spacer()
                 HelpNote(title: L("API 连接"), text: L("验证 {0} 端点后，保存到本机 {1} 配置并设为默认模型。已有配置会备份，Key 保存在原生配置文件中。", provider == "claude" ? "Anthropic Messages" : "Chat Completions", name))
-                if ["pi", "omp"].contains(provider) { HelpNote(title: L("额度"), text: L("额度由当前模型服务商提供；本地 Token 和预估费用不代表可用余额。")) }
+                if ["pi", "omp"].contains(provider) { HelpNote(title: L("额度"), text: L("额度由当前模型服务商提供。")) }
             }
             if let message { Text(L(message)).font(AppFont.secondary).foregroundStyle(.secondary) }
         }.sheet(item: $editing) { source in NativeAPIEditor(model: model, source: source) { message = L("API 已验证并保存，可重新打开 {0} 使用。" , name) } }

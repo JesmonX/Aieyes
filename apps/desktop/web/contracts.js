@@ -858,6 +858,13 @@
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
+    "sessions.focusTarget": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
     "settings.get": {
       "lane": "configuration",
       "invalidates": [],
@@ -1015,6 +1022,13 @@
       "updateBehavior": "observe"
     },
     "wakeups.probe": {
+      "lane": "wakeups",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    "wakeups.suggest": {
       "lane": "wakeups",
       "invalidates": [],
       "invalidateOnFailure": false,
@@ -1292,25 +1306,34 @@
     "codex": [
       "accounts",
       "api",
+      "history",
       "machines",
       "quota",
       "quotaReset",
-      "valuation"
+      "sessions",
+      "valuation",
+      "fiveHourQuota"
     ],
     "claude": [
       "accounts",
       "api",
+      "history",
       "machines",
       "quota",
       "quotaReset",
-      "valuation"
+      "sessions",
+      "valuation",
+      "fiveHourQuota"
     ],
     "antigravity": [
       "accounts",
+      "history",
       "machines",
       "quota",
       "quotaReset",
-      "valuation"
+      "sessions",
+      "valuation",
+      "fiveHourQuota"
     ],
     "deepseek": [
       "accounts",
@@ -1319,79 +1342,103 @@
     "zcode": [
       "accounts",
       "api",
+      "history",
       "machines",
       "quota",
       "quotaReset",
-      "valuation"
+      "sessions",
+      "valuation",
+      "fiveHourQuota"
     ],
     "qoder": [
       "accounts",
       "api",
+      "history",
       "machines",
       "quota",
-      "quotaReset"
+      "quotaReset",
+      "sessions"
     ],
     "qoder-cn": [
       "accounts",
       "api",
+      "history",
       "machines",
       "quota",
-      "quotaReset"
+      "quotaReset",
+      "sessions"
     ],
     "grok": [
       "accounts",
       "api",
+      "history",
       "machines",
       "quota",
-      "quotaReset"
+      "quotaReset",
+      "sessions"
     ],
     "cursor": [
       "accounts",
       "machines",
       "quota",
-      "quotaReset"
+      "quotaReset",
+      "sessions"
     ],
     "opencode": [
       "accounts",
       "api",
+      "history",
       "machines",
       "quota",
       "quotaReset",
-      "valuation"
+      "sessions",
+      "valuation",
+      "fiveHourQuota"
     ],
     "kimi": [
       "accounts",
       "api",
+      "history",
       "machines",
       "quota",
       "quotaReset",
-      "valuation"
+      "sessions",
+      "valuation",
+      "fiveHourQuota"
     ],
     "deepseek-harness": [
       "accounts",
       "api",
+      "history",
       "machines",
-      "quota"
+      "quota",
+      "sessions"
     ],
     "codebuddy": [
       "accounts",
       "api",
+      "history",
       "machines",
-      "quota"
+      "quota",
+      "sessions"
     ],
     "pi": [
       "accounts",
       "api",
+      "history",
       "machines",
       "quota",
-      "quotaReset"
+      "quotaReset",
+      "sessions"
     ],
     "omp": [
       "accounts",
       "api",
+      "history",
       "machines",
       "quota",
-      "quotaReset"
+      "quotaReset",
+      "sessions"
     ],
     "chatgpt-work": [
       "quota",
@@ -1399,49 +1446,66 @@
     ],
     "workbuddy": [
       "accounts",
+      "history",
       "machines",
-      "quota"
+      "quota",
+      "sessions"
     ],
     "copilot": [
       "accounts",
+      "history",
       "machines",
       "quota",
-      "quotaReset"
+      "quotaReset",
+      "sessions"
     ],
     "cline": [
       "accounts",
+      "history",
       "machines",
-      "quota"
+      "quota",
+      "sessions"
     ],
     "kilo": [
       "accounts",
+      "history",
       "machines",
-      "quota"
+      "quota",
+      "sessions"
     ],
     "roo": [
       "accounts",
-      "machines"
+      "history",
+      "machines",
+      "sessions"
     ],
     "kiro": [
       "accounts",
+      "history",
       "machines",
       "quota",
-      "quotaReset"
+      "quotaReset",
+      "sessions"
     ],
     "trae": [
       "accounts",
+      "history",
       "machines",
       "quota",
-      "quotaReset"
+      "quotaReset",
+      "sessions"
     ],
     "trae-cn": [
       "accounts",
+      "history",
       "machines",
       "quota",
-      "quotaReset"
+      "quotaReset",
+      "sessions"
     ],
     "custom": [
       "accounts",
+      "history",
       "machines"
     ]
   },
@@ -1546,7 +1610,7 @@
       "monochrome": false
     }
   },
-  "contractHash": "0189d10a11f31d39054643c0c4725567316f9a2f638249e1926e71ccfbef17fd",
+  "contractHash": "b0094c0aa8a59d1fe057d1f3ae23386cd3a9a50fabe46454ad7175ab13fe3226",
   "petFrameDurations": [
     [
       280,

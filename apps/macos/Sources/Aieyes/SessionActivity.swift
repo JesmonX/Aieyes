@@ -17,10 +17,15 @@ enum SessionPhase: String {
 struct LiveSession: Identifiable, Decodable, Equatable {
     var provider = "codex", machine = L("本机"), machineId = "local", sourceId = "", turnId = ""
     var id: String, source: String, phase: SessionPhase, updatedAt: Date
+    /// Working directory path; turn bounds are Unix milliseconds. All optional for older cores.
+    var workspace: String? = nil, turnStartedAt: Double? = nil, turnEndedAt: Double? = nil
+    var usage: SessionUsage? = nil
+    /// Local agent process; absent for SSH sessions, which never focus a local window.
+    var pid: Int32? = nil, processStart: Double? = nil
     init(id: String, source: String, phase: SessionPhase, updatedAt: Date) {
         self.id = id; self.source = source; self.phase = phase; self.updatedAt = updatedAt
     }
-    enum CodingKeys: String, CodingKey { case id, source, phase, updatedAt, provider, machine, machineId, sourceId, turnId }
+    enum CodingKeys: String, CodingKey { case id, source, phase, updatedAt, provider, machine, machineId, sourceId, turnId, workspace, turnStartedAt, turnEndedAt, usage, pid, processStart }
     init(from decoder: Decoder) throws {
         let row = try decoder.container(keyedBy: CodingKeys.self)
         id = try row.decode(String.self, forKey: .id)
@@ -33,6 +38,73 @@ struct LiveSession: Identifiable, Decodable, Equatable {
         let key = try row.decode(String.self, forKey: .phase)
         phase = ["working": .working, "thinking": .thinking, "tool": .tool, "complete": .complete, "interrupted": .interrupted, "unknown": .unknown, "needsInput": .needsInput, "failed": .failed][key] ?? .unknown
         updatedAt = Date(timeIntervalSince1970: try row.decode(Double.self, forKey: .updatedAt))
+        workspace = try row.decodeIfPresent(String.self, forKey: .workspace).flatMap { $0.isEmpty ? nil : $0 }
+        turnStartedAt = try row.decodeIfPresent(Double.self, forKey: .turnStartedAt).flatMap { $0 > 0 ? $0 : nil }
+        turnEndedAt = try row.decodeIfPresent(Double.self, forKey: .turnEndedAt).flatMap { $0 > 0 ? $0 : nil }
+        usage = try? row.decodeIfPresent(SessionUsage.self, forKey: .usage)
+        pid = machineId == "local" ? try row.decodeIfPresent(Int32.self, forKey: .pid) : nil
+        processStart = try row.decodeIfPresent(Double.self, forKey: .processStart)
+    }
+    var focusable: Bool { machineId == "local" && pid != nil }
+    /// "Session 1.2M · Turn 8.4K · 42 tok/s"; unknown parts are omitted, never shown as zero.
+    var usageText: String? {
+        guard let usage else { return nil }
+        let parts = [L("会话 {0}", Format.compact(usage.sessionTokens)), usage.turnTokens.map { L("本轮 {0} Token", Format.compact($0)) },
+                     usage.outputTokensPerSecond.flatMap { $0 > 0 && $0.isFinite ? ($0 < 1 ? "<1 tok/s" : String(format: "%.0f tok/s", $0)) : nil }].compactMap { $0 }
+        return parts.joined(separator: " · ")
+    }
+    /// Last path component of the working directory, shown as the project name.
+    var project: String? { workspace.map { URL(fileURLWithPath: $0).lastPathComponent }.flatMap { $0.isEmpty || $0 == "/" ? nil : $0 } }
+    /// Elapsed time of the current turn, including tool and user waits; frozen once the turn ends.
+    /// Unknown sessions show none, since their turn may have ended unobserved.
+    func turnElapsed(at now: Date) -> TimeInterval? {
+        guard phase != .unknown, let start = turnStartedAt else { return nil }
+        let end = turnEndedAt ?? (phase.active ? now.timeIntervalSince1970 * 1000 : nil)
+        guard let end, end >= start else { return nil }
+        return (end - start) / 1000
+    }
+    static func elapsedText(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded(.down))
+        if total < 3600 { return "\(total / 60)m" + String(format: "%02ds", total % 60) }
+        return "\(total / 3600)h" + String(format: "%02dm", total % 3600 / 60)
+    }
+}
+struct SessionUsage: Decodable, Equatable {
+    var sessionTokens: Double = 0
+    var turnTokens: Double?, turnOutputTokens: Double?, outputTokensPerSecond: Double?
+}
+/// Bring the terminal or IDE that runs a local session to the front, with existing permissions only.
+@MainActor enum SessionFocus {
+    static let engine = EngineClient(configurationOnly: true)
+    struct Target: Decodable { var status: String; var ancestors: [Ancestor]? }
+    struct Ancestor: Decodable { var pid: Int32 }
+    enum Outcome: Equatable { case window(String), application(String), noWindow, exited, failed(String) }
+    /// The nearest ancestor that is a regular (Dock) application owns the session's window.
+    static func application(for ancestors: [Int32], lookup: (Int32) -> NSRunningApplication? = { NSRunningApplication(processIdentifier: $0) }) -> NSRunningApplication? {
+        ancestors.lazy.compactMap(lookup).first { $0.activationPolicy == .regular && !$0.isTerminated }
+    }
+    /// On-screen normal windows of the app; one window means activation reaches exactly that window.
+    static func windowCount(_ pid: Int32) -> Int {
+        let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        return rows.filter { ($0[kCGWindowOwnerPID as String] as? Int32) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 }.count
+    }
+    static func focus(_ session: LiveSession, engine: EngineClient) async -> Outcome {
+        guard let pid = session.pid else { return .noWindow }
+        guard let target: Target = try? await engine.call("sessions.focusTarget", params: ["pid": Int(pid), "processStart": session.processStart ?? 0]) else { return .failed("") }
+        guard target.status == "found" else { return .exited }
+        guard let app = application(for: (target.ancestors ?? []).map(\.pid)) else { return .noWindow }
+        let name = app.localizedName ?? Format.provider(session.provider)
+        guard app.activate() else { return .failed(name) }
+        return windowCount(app.processIdentifier) == 1 ? .window(name) : .application(name)
+    }
+    static func message(_ outcome: Outcome) -> String {
+        switch outcome {
+        case .window(let name): return L("已切换到 {0}", name)
+        case .application(let name): return L("已激活 {0}，未定位到具体窗口", name)
+        case .noWindow: return L("未找到所属窗口（可能运行在 tmux、screen 或后台服务中）")
+        case .exited: return L("会话进程已退出")
+        case .failed(let name): return name.isEmpty ? L("无法读取会话进程") : L("无法切换到 {0}", name)
+        }
     }
 }
 struct SessionSnapshot: Decodable { var sessions: [LiveSession]; var unavailable: Bool; var pet: PetState? = nil; var summary: String? = nil; var phase: String? = nil; var sources: [SessionSourceHealth]? = nil }

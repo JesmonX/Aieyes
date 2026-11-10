@@ -152,6 +152,14 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
    assert(Math.abs(three[0].heading.y-three[1].heading.y)<1,'A three-account group leaves the fourth column free');
    assert(three[0].heading.right<three[1].heading.x,'Three-account heading stays in its own columns');
    assert(three[0].cards.every(c=>Math.abs(c.width-three[1].cards[0].width)<1),'Nested three-column grids retain workspace card widths');
+   // A heading that changes height (fonts, language) moves its cards without resizing them; later groups follow.
+   const placement=()=>page.evaluate(()=>[...document.querySelectorAll('.quota-group-shell')].map(s=>s.style.getPropertyValue('--masonry-row-4')));
+   const before=await placement();
+   await page.evaluate(()=>{document.querySelector('.quota-group-shell .quota-group-heading').style.paddingBottom='40px';});await settle();
+   const after=await placement();
+   assert.notDeepEqual(after,before,'Later groups are re-placed when only a heading grows');
+   await page.evaluate(()=>{document.querySelector('.quota-group-shell .quota-group-heading').style.paddingBottom='';});await settle();
+   assert.deepEqual(await placement(),before,'Placement returns once the heading shrinks back');
    assert.deepEqual(errors,[]);await page.close();
   }
   console.log('Quota card layout: collapsed heights, panel width, partial-group alignment, heading hit areas, resize and masonry expansion passed.');

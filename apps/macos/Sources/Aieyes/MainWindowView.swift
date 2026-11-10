@@ -37,7 +37,8 @@ struct MainWindowView: View {
                 }.padding(.horizontal, 12).padding(.top, 18)
                 List(selection:Binding<String?>(get:{selectedNavigation},set:{ if let value = $0 { choose(value) } })) {
                     Section { ForEach(monitoring,id:\.0) { key,title,icon in navigationRow(title,icon:icon).tag(key) } } header: { sectionHeader(L("监测")) }
-                    Section { ForEach(configuration,id:\.0) { key,title,icon in navigationRow(title,icon:icon).tag("settings:" + key) } } header: { sectionHeader(L("配置")) }
+                    // Monitoring and configuration both have a "servers" key; distinct row ids keep List from reusing one row.
+                    Section { ForEach(configuration.map { ("settings:" + $0.0, $0.1, $0.2) },id:\.0) { key,title,icon in navigationRow(title,icon:icon).tag(key) } } header: { sectionHeader(L("配置")) }
                     navigationRow(L("设置"),icon:"gearshape").tag("settings:general")
                     navigationRow(L("配置向导"),icon:"questionmark.circle").tag("setup")
                 }.listStyle(.sidebar)

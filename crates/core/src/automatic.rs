@@ -1868,6 +1868,7 @@ mod tests {
                     session_id: "session".into(),
                     attribution: "delta".into(),
                     interval_evidence: String::new(),
+                    output_timing: None,
                     agent: String::new(),
                 },
                 &e.store.prices().unwrap(),

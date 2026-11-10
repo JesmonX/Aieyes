@@ -11,10 +11,13 @@
       "capabilities": [
         "accounts",
         "api",
+        "history",
         "machines",
         "quota",
         "quotaReset",
-        "valuation"
+        "sessions",
+        "valuation",
+        "fiveHourQuota"
       ],
       "icon": {
         "asset": "codex",
@@ -32,10 +35,13 @@
       "capabilities": [
         "accounts",
         "api",
+        "history",
         "machines",
         "quota",
         "quotaReset",
-        "valuation"
+        "sessions",
+        "valuation",
+        "fiveHourQuota"
       ],
       "icon": {
         "asset": "claude",
@@ -57,10 +63,13 @@
       "discoverLocal": true,
       "capabilities": [
         "accounts",
+        "history",
         "machines",
         "quota",
         "quotaReset",
-        "valuation"
+        "sessions",
+        "valuation",
+        "fiveHourQuota"
       ],
       "icon": {
         "asset": "antigravity",
@@ -110,10 +119,13 @@
       "capabilities": [
         "accounts",
         "api",
+        "history",
         "machines",
         "quota",
         "quotaReset",
-        "valuation"
+        "sessions",
+        "valuation",
+        "fiveHourQuota"
       ],
       "icon": {
         "asset": "zcode",
@@ -140,9 +152,11 @@
       "capabilities": [
         "accounts",
         "api",
+        "history",
         "machines",
         "quota",
-        "quotaReset"
+        "quotaReset",
+        "sessions"
       ],
       "icon": {
         "asset": "qoder",
@@ -167,9 +181,11 @@
       "capabilities": [
         "accounts",
         "api",
+        "history",
         "machines",
         "quota",
-        "quotaReset"
+        "quotaReset",
+        "sessions"
       ],
       "icon": {
         "asset": "qoder",
@@ -195,9 +211,11 @@
       "capabilities": [
         "accounts",
         "api",
+        "history",
         "machines",
         "quota",
-        "quotaReset"
+        "quotaReset",
+        "sessions"
       ],
       "icon": {
         "asset": "grok",
@@ -222,7 +240,8 @@
         "accounts",
         "machines",
         "quota",
-        "quotaReset"
+        "quotaReset",
+        "sessions"
       ],
       "icon": {
         "asset": "cursor",
@@ -248,10 +267,13 @@
       "capabilities": [
         "accounts",
         "api",
+        "history",
         "machines",
         "quota",
         "quotaReset",
-        "valuation"
+        "sessions",
+        "valuation",
+        "fiveHourQuota"
       ],
       "icon": {
         "asset": "opencode",
@@ -278,10 +300,13 @@
       "capabilities": [
         "accounts",
         "api",
+        "history",
         "machines",
         "quota",
         "quotaReset",
-        "valuation"
+        "sessions",
+        "valuation",
+        "fiveHourQuota"
       ],
       "icon": {
         "asset": "kimi",
@@ -307,8 +332,10 @@
       "capabilities": [
         "accounts",
         "api",
+        "history",
         "machines",
-        "quota"
+        "quota",
+        "sessions"
       ],
       "agent": "deepseek",
       "icon": {
@@ -327,8 +354,10 @@
       "capabilities": [
         "accounts",
         "api",
+        "history",
         "machines",
-        "quota"
+        "quota",
+        "sessions"
       ],
       "icon": {
         "asset": "codebuddy",
@@ -351,9 +380,11 @@
       "capabilities": [
         "accounts",
         "api",
+        "history",
         "machines",
         "quota",
-        "quotaReset"
+        "quotaReset",
+        "sessions"
       ],
       "icon": {
         "asset": "pi",
@@ -376,9 +407,11 @@
       "capabilities": [
         "accounts",
         "api",
+        "history",
         "machines",
         "quota",
-        "quotaReset"
+        "quotaReset",
+        "sessions"
       ],
       "icon": {
         "asset": "omp",
@@ -414,8 +447,10 @@
       "discoverLocal": true,
       "capabilities": [
         "accounts",
+        "history",
         "machines",
-        "quota"
+        "quota",
+        "sessions"
       ],
       "icon": {
         "asset": "workbuddy",
@@ -432,9 +467,11 @@
       "discoverLocal": true,
       "capabilities": [
         "accounts",
+        "history",
         "machines",
         "quota",
-        "quotaReset"
+        "quotaReset",
+        "sessions"
       ],
       "icon": {
         "asset": "copilot",
@@ -451,8 +488,10 @@
       "discoverLocal": true,
       "capabilities": [
         "accounts",
+        "history",
         "machines",
-        "quota"
+        "quota",
+        "sessions"
       ],
       "icon": {
         "asset": "cline",
@@ -469,8 +508,10 @@
       "discoverLocal": true,
       "capabilities": [
         "accounts",
+        "history",
         "machines",
-        "quota"
+        "quota",
+        "sessions"
       ],
       "icon": {
         "asset": "kilo",
@@ -487,7 +528,9 @@
       "discoverLocal": true,
       "capabilities": [
         "accounts",
-        "machines"
+        "history",
+        "machines",
+        "sessions"
       ],
       "icon": {
         "asset": "roo",
@@ -504,9 +547,11 @@
       "discoverLocal": true,
       "capabilities": [
         "accounts",
+        "history",
         "machines",
         "quota",
-        "quotaReset"
+        "quotaReset",
+        "sessions"
       ],
       "icon": {
         "asset": "kiro",
@@ -528,9 +573,11 @@
       },
       "capabilities": [
         "accounts",
+        "history",
         "machines",
         "quota",
-        "quotaReset"
+        "quotaReset",
+        "sessions"
       ],
       "icon": {
         "asset": "trae",
@@ -552,9 +599,11 @@
       },
       "capabilities": [
         "accounts",
+        "history",
         "machines",
         "quota",
-        "quotaReset"
+        "quotaReset",
+        "sessions"
       ],
       "icon": {
         "asset": "trae",
@@ -571,6 +620,7 @@
       "discoverLocal": false,
       "capabilities": [
         "accounts",
+        "history",
         "machines"
       ]
     }
@@ -1442,6 +1492,14 @@
       "updateBehavior": "cancel"
     },
     {
+      "name": "sessions.focusTarget",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
       "name": "settings.get",
       "lane": "configuration",
       "invalidates": [],
@@ -1617,6 +1675,14 @@
     },
     {
       "name": "wakeups.probe",
+      "lane": "wakeups",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
+      "name": "wakeups.suggest",
       "lane": "wakeups",
       "invalidates": [],
       "invalidateOnFailure": false,
@@ -1880,6 +1946,12 @@
     },
     "estimate": {
       "rollingExcludedReason": "optional string; retained history excluded from current summaries"
+    },
+    "sessions.list": {
+      "usage.outputTokensPerSecond": "optional positive number; output tokens / model request seconds including first-token wait; only codex, claude, antigravity, deepseek-harness; all producing requests must be timed; shared request duration counted once"
+    },
+    "wakeups.suggest": {
+      "reason": "optional days | timezone | wakeupRuns | wakeupIdentity; automation exclusion uses source-scoped native session identity, never temporal overlap"
     }
   },
   "sessionSoundTones": [

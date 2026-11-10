@@ -36,6 +36,14 @@ Web `details[data-menu]` 由 `menu.js` 管理，提供 menu/menuitem 语义、�
 
 Agent 页保留前四个常用入口，其余通过带搜索框的“更多 Agent”选择；窄窗口统一使用选择器。管理入口允许增减页面入口；移除暂停采集，保留数据源、机器选择、账户、凭据、历史与任务，重新添加恢复选择。
 
+单行横向选项（面板 Agent 选项、服务器视图）只在有内容被遮挡的一侧渐隐，选中项保持可见；macOS 使用 `EdgeFadingScroller`，Web 使用 `.tab-scroller[data-overflow]`。
+
+服务器页只有一排选项：`全部 · 异常(n) · 已暂停(n) | 各主机`，存为每个窗口一个值（Web `aieyes.server.view.v2.{panel|detail}`，macOS `{panel|detail}.serverView.v2`）。“异常”只算连接失败、部分采集失败和超过 10 秒的采样；等待首次采样不算，暂停的主机只计入“已暂停”。旧的“主机 + 状态”两个值首次读取时迁移：仍存在的主机优先，其次异常或已暂停，最后全部；两个窗口分别迁移。尚无采样的主机卡片只占一行（名称、状态、刷新、监控设置），连接错误可展开查看。
+
+本机会话行可点击（Web `role=button`，Enter/Space 触发），切换到运行它的终端或 IDE；SSH 会话只显示信息。结果提示区分“已切换到具体窗口”“已激活应用，未定位到具体窗口”“未找到所属窗口”“会话进程已退出”“当前桌面不支持”。
+
+“接入与账户”顶部的接入能力一览默认折叠并记住展开状态。列为历史用量、账户额度、API 配置、会话状态、定时唤醒；状态为“已启用”“支持”“不支持”；前两种状态可点击打开对应分区。定时唤醒未接入时，有 5h 窗口的 Agent 显示“不支持”，没有 5h 窗口的显示“无需”。5h 窗口由合约 `fiveHourQuota` 能力及已读取的额度窗口识别；其他能力来自合约 `capabilities` 的 `history`、`sessions`、`quota`、`api` 与 `wakeup` 标记。
+
 ## 颜色、文案与时间
 
 - 强调色文字用 `accent-text`，背景和进度条用 `accent`；实心主按钮用 `accent-ink`。系统默认强调色在 macOS 取 `controlAccentColor`，Web 使用预设默认色。
@@ -64,3 +72,5 @@ Agent 页保留前四个常用入口，其余通过带搜索框的“更多 Agen
 `npm --prefix apps/desktop run lint:css` 检查分层、重复、字号／圆角令牌和未定义变量；`scripts/ci-checks.sh` 同时运行规则反例检查。首次运行共享检查前先执行 `npm ci --prefix apps/desktop --ignore-scripts`。
 
 `npm --prefix apps/desktop run test:webkit` 输出 `.build/ui-webkit/manifest.json` 和 64 张截图。CI 安装 Chromium 与 WebKit 后运行两个通道。截图不代替 WebKitGTK、DWM 或 SwiftUI 的原生验收。
+
+定时唤醒表单按 Agent、账户、运行位置依次选择；账户只显示所选 Agent 的关联账户。切换 Agent 清空上一 Agent 的 CLI、模型及执行档案，保留名称、时刻和提示词；已部署任务需先移除部署才能更换目标。

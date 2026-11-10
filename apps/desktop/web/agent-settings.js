@@ -285,10 +285,29 @@
     more.addEventListener('keydown', event => {if (event.key === 'Escape') {event.preventDefault();event.stopPropagation();more.open = false;more.querySelector('summary').focus();}});
     more.addEventListener('focusout', () => setTimeout(() => {if (!more.contains(document.activeElement)) more.open = false;},0));
   }
+  // Collapsed by default; the disclosure remembers the user's later choice.
+  function capabilityMatrixHTML() {
+    const t = AieyesI18n.t,columns = AieyesUI.capabilityColumns;
+    const names = { history: t("历史用量"), quota: t("账户额度"), api: t("API 配置"), sessions: t("会话状态"), wakeup: t("定时唤醒") };
+    const labels = { ready: t("已启用"), setup: t("支持"), unsupported: t("不支持"), unneeded: t("无需") };
+    const cell = (provider, capability) => {
+      const value = AieyesUI.capabilityState(state.settings, provider, capability, state.dashboard?.quotas),name = (providers[provider] ?? provider) + ' · ' + names[capability] + ' · ' + labels[value];
+      return `<td>${['unsupported','unneeded'].includes(value) ? `<span class="capability-cell" data-capability-state="${value}" title="${e(name)}">${labels[value]}</span>` : `<button type="button" class="capability-cell" data-capability-state="${value}" data-capability="${capability}" data-capability-provider="${e(provider)}" aria-label="${e(name)}">${labels[value]}</button>`}</td>`;
+    };
+    const rows = window.AieyesContract.agentProviders.map((provider) => `<tr data-capability-row="${e(provider)}"><th scope="row">${providerMark(provider)}<span>${e(providers[provider] ?? provider)}</span></th>${columns.map((c) => cell(provider, c)).join('')}</tr>`).join('');
+    return `<details class="settings-disclosure capability-matrix" id="capability-matrix" data-persist-disclosure="settings:capability-matrix" ${disclosureOpen('settings:capability-matrix', false) ? 'open' : ''}><summary><strong>${t("接入能力一览")}</strong></summary><div class="settings-section-body table-scroll"><table><thead><tr><th scope="col">Agent</th>${columns.map((c) => `<th scope="col">${names[c]}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div></details>`;
+  }
+  function bindCapabilityMatrix() {
+    document.querySelectorAll('[data-capability]').forEach((button) => button.onclick = () => {
+      const capability = button.dataset.capability,provider = button.dataset.capabilityProvider;
+      if (capability === 'wakeup') {void openSettings({ category: 'wakeups' });return;}
+      void openSettings({ category: 'integrations', provider, section: { history: 'machines', sessions: 'machines', quota: 'accounts', api: 'api' }[capability] });
+    });
+  }
   function integrationsHTML() {
     state.settingsAgent = AieyesUI.agentProvider(state.settingsAgent);
     const agent = configurations().find((a) => a.provider === state.settingsAgent) ?? configurations()[0];
-    if (!agent || (!entryIds().length && !detailKey)) return selectorHTML(null) + `<div class="empty">${AieyesI18n.t("添加要接入的 Agent")}</div>`;
+    if (!agent || (!entryIds().length && !detailKey)) return capabilityMatrixHTML() + selectorHTML(null) + `<div class="empty">${AieyesI18n.t("添加要接入的 Agent")}</div>`;
     state.settingsAgent = agent.provider;
     let body;
     if (directorySelection) body = agentsHTML();else
@@ -296,7 +315,7 @@
     {
       const section = (key, title, detail, content, opened = false) => `<details class="settings-disclosure" id="agent-section-${key}" data-agent-detail="settings:${agent.provider}:${key}" data-persist-disclosure="settings:${agent.provider}:${key}" ${disclosureOpen('settings:' + agent.provider + ':' + key, opened) ? 'open' : ''}><summary><strong>${title}</strong><small>${e(detail)}</small></summary><div class="settings-section-body">${content}</div></details>`;
       body = `<section class="card agent-integration-header" data-provider="${e(agent.provider)}"><div class="between"><h2>${providerMark(agent.provider)} ${e(providers[agent.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(agent.provider)}" ${state.settingsSaving ? 'disabled' : ''} ${agent.enabled ? 'checked' : ''}>${AieyesI18n.t("启用")}</label></div>${agent.provider === 'codex' && state.chatgptWorkInstalled ? `<p class="muted tiny" data-work-installed>${AieyesI18n.t("本机已安装 ChatGPT Work，会话与用量单独显示，账户和额度与 Codex 共用。")}</p>` : ''}</section>`;
-      if (['pi', 'omp'].includes(agent.provider)) body += helpHTML(AieyesI18n.t("额度"), AieyesI18n.t("额度由当前模型服务商提供；本地 Token 和预估费用不代表可用余额。"));
+      if (['pi', 'omp'].includes(agent.provider)) body += helpHTML(AieyesI18n.t("额度"), AieyesI18n.t("额度由当前模型服务商提供。"));
       if (agent.provider === 'trae') body += helpHTML(AieyesI18n.t("Trae 会话"), AieyesI18n.t("Trae IDE 的对话保存在加密数据库中，不会读取。trae-cli 的会话和 Token 用量来自所添加目录中的 trajectories 文件夹。"));
       // One card holds every section on Windows and Linux alike; each section is a disclosure row inside it.
       body += '<section class="card agent-settings-group">';
@@ -313,7 +332,7 @@
       if (AieyesUI.agentSupports(agent.provider, 'valuation', state.settings)) body += section('valuation', AieyesI18n.t("估值与采样"), '', `<button type="button" data-agent-estimates="${e(agent.provider)}">${AieyesI18n.t("管理估值与采样")}</button>`);
       body += '</section>';
     }
-    return `<div class="settings-layout agent-settings-layout">${selectorHTML(agent)}<div class="settings-subpage" data-agent-section="${e(agent.provider)}">${body}</div></div>`;
+    return `<div class="settings-layout agent-settings-layout">${capabilityMatrixHTML()}${selectorHTML(agent)}<div class="settings-subpage" data-agent-section="${e(agent.provider)}">${body}</div></div>`;
   }
   function directoryLinks(provider, machine) {
     if (machine === 'local' || !state.settings.hosts.some((h) => h.id === machine)) return '';
@@ -562,7 +581,7 @@
     } catch (error) {run(() => Promise.reject(error));}
   }
   function bind() {
-    bindSelector();
+    bindSelector();bindCapabilityMatrix();
     document.querySelectorAll('[data-native-api]').forEach((button) => button.onclick = () => nativeApiEditor(button.dataset.nativeApi));
     bindMachineMenus();
     bindStatusActions();

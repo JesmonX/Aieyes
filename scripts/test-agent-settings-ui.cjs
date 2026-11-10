@@ -194,6 +194,38 @@ await page.locator('[data-agent-enable="claude"]').check();await page.waitForFun
     assert.equal(await page.locator('[data-source-remove]').count(),2);const extra=(await rpc('settings.get')).sources.find(s=>s.path==='~/fixture-secondary');
     await page.locator('[data-source-remove="'+extra.id+'"]').click();await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.getElementById('editor').open);assert.equal(await page.locator('[data-source-remove]').count(),1);
     await page.locator('[data-settings-tab="integrations"]').click();await page.locator('[data-settings-agent=codex]').click();assert.equal(await page.locator('[data-account-edit]').count(),2);
+    // Integration capabilities: collapsed by default, remembered, contract-driven, and each cell opens its section.
+    const matrix=page.locator('#capability-matrix');assert.equal(await matrix.evaluate(el=>el.open),false,'The matrix starts collapsed');
+    await matrix.locator('summary').click();assert.equal(await matrix.evaluate(el=>el.open),true);
+    const cell=(provider,capability)=>matrix.locator(`[data-capability-row="${provider}"] [data-capability-state]`).nth(['history','quota','api','sessions','wakeup'].indexOf(capability));
+    assert.equal(await cell('cursor','history').getAttribute('data-capability-state'),'unsupported','Cursor private history is not a history source');
+    assert.equal(await cell('custom','sessions').getAttribute('data-capability-state'),'unsupported');assert.equal(await cell('antigravity','api').getAttribute('data-capability-state'),'unsupported','Guidance-only APIs are not configurable');
+    assert.equal(await cell('codex','history').getAttribute('data-capability-state'),'ready');
+    assert.equal(await cell('codex','quota').getAttribute('data-capability-state'),'ready');
+    assert.equal(await cell('codex','wakeup').getAttribute('data-capability-state'),'ready');
+    assert.equal(await cell('kimi','history').getAttribute('data-capability-state'),'setup','Supported but not configured');
+    assert.equal(await cell('codex','history').innerText(),'已启用');
+    assert.equal(await cell('kimi','history').innerText(),'支持');
+    for(const provider of ['zcode','kimi','opencode']){
+      assert.equal(await cell(provider,'wakeup').innerText(),'不支持');
+      assert.equal(await cell(provider,'wakeup').evaluate(e=>e.tagName),'SPAN');
+    }
+    for(const provider of ['qoder','kiro','deepseek','custom']){
+      assert.equal(await cell(provider,'wakeup').innerText(),'无需');
+      assert.equal(await cell(provider,'wakeup').getAttribute('data-capability-state'),'unneeded');
+      assert.equal(await cell(provider,'wakeup').evaluate(e=>e.tagName),'SPAN');
+    }
+    assert.deepEqual(await page.evaluate(()=>{
+      const quota={provider:'custom',windows:[{windowMinutes:300}]};
+      return [AieyesUI.capabilityState(state.settings,'custom','wakeup',[quota]),
+              AieyesUI.capabilityState(state.settings,'custom','wakeup',[{...quota,windows:[{windowMinutes:10080}]}]),
+              AieyesUI.capabilityState(state.settings,'kiro','wakeup',[quota])];
+    }),['unsupported','unneeded','unneeded'],'Actual 5h windows determine unsupported wakeups without affecting other providers');
+
+    assert.deepEqual(await page.evaluate(()=>window.AieyesContract.agentProviders.filter(p=>AieyesUI.capabilityState(state.settings,p,'sessions')!=='unsupported')),await page.evaluate(()=>window.AieyesContract.agentProviders.filter(p=>Object.keys(AieyesContract.providerCapabilities).some(k=>AieyesUI.sameAgent(k,p)&&AieyesContract.providerCapabilities[k].includes('sessions')))));
+    await page.evaluate(()=>render());assert.equal(await page.locator('#capability-matrix').evaluate(el=>el.open),true,'The expanded choice is remembered');
+    await cell('kimi','history').click();await page.waitForFunction(()=>state.settingsAgent==='kimi'&&document.getElementById('agent-section-machines')?.open);
+    await page.locator('[data-settings-agent=codex]').click();
     assert.equal(await page.locator('#account-add').count(),0);await page.locator('[data-settings-agent=claude]').click();await page.locator('[data-account-add="claude"]').click();assert.equal(await page.locator('#field-provider').inputValue(),'claude');assert.equal(await page.locator('#field-name').count(),0);for(const checkbox of await page.locator('[name=sourceIds]').all())await checkbox.check();await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.getElementById('editor').open);
     const connected=(await rpc('settings.get')).accounts.find(a=>a.name==='Claude Code 账户');assert.equal(connected.connections.length,2);
     await page.screenshot({path:path.join(out,'accounts.png'),fullPage:true});

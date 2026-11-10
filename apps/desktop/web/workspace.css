@@ -256,6 +256,13 @@ body:not(:has(#panel)) .quota-group[data-single-account=true] > .quotas { grid-t
 .settings-section-body > .card { border:0; padding:0; box-shadow:none; background:transparent; }
 .settings-section-body > :last-child { margin-bottom:0; }
 .settings-disclosure .agent-machines { padding:0; }
+.capability-matrix table th,.capability-matrix table td { padding:4px 8px; text-align:left; white-space:nowrap; }
+.capability-matrix tbody th { display:flex; align-items:center; gap:6px; font-weight:var(--weight-medium); }
+.capability-cell { min-height:var(--hit-target); padding:0 8px; border:0; background:transparent; font:inherit; }
+.capability-cell[data-capability-state=ready] { color:var(--accent-text); }
+.capability-cell[data-capability-state=setup] { color:var(--ink); }
+.capability-cell:is([data-capability-state=unsupported],[data-capability-state=unneeded]) { color:var(--muted); }
+button.capability-cell:hover { text-decoration:underline; }
 #live-sessions { border-color:var(--card-border); background:var(--card-fill); border-radius:var(--radius-card); }
 #live-sessions > summary { flex-wrap:wrap; }
 .session-counts { display:flex; gap:8px; flex-wrap:wrap; font-size:var(--font-caption); color:var(--muted); }

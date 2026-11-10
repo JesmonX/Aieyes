@@ -773,6 +773,103 @@ mod tests {
     }
 
     #[test]
+    fn period_comparison_uses_preceding_natural_days_and_the_same_filters() {
+        let (_root, store, settings) = fixture();
+        let today = Local::now().date_naive();
+        let at = |days_ago: i64| boundary(today - Duration::days(days_ago)) + 60;
+        for (source, id, ago) in [
+            (0, "today", 0),
+            (0, "yesterday", 1),
+            (0, "yesterday-again", 1),
+            (0, "week-before", 9),
+            (1, "other-source", 1),
+        ] {
+            store
+                .put_event(
+                    &event(&settings.sources[source], id, at(ago)),
+                    &[],
+                    &settings,
+                )
+                .unwrap();
+        }
+        let day = |ago: i64| (today - Duration::days(ago)).to_string();
+        let today_filter = Filter {
+            source_id: Some("a".into()),
+            days: Some(1),
+            ..Default::default()
+        };
+        let c = store.dashboard(&today_filter).unwrap().comparison.unwrap();
+        assert!(c.current_open, "Today is still accumulating");
+        assert_eq!(
+            (c.current.start.as_str(), c.current.end.as_str()),
+            (day(0).as_str(), day(0).as_str())
+        );
+        assert_eq!(
+            (c.previous.start.as_str(), c.previous.end.as_str()),
+            (day(1).as_str(), day(1).as_str())
+        );
+        assert_eq!((c.current.record_count, c.previous.record_count), (1, 2));
+        assert_eq!(
+            c.previous.total,
+            2 * c.current.total,
+            "Other sources stay filtered out"
+        );
+        assert!(
+            !c.previous.pricing_complete && c.previous.priced_tokens < c.previous.total,
+            "Unpriced usage is not complete pricing"
+        );
+        let week = store
+            .dashboard(&Filter {
+                days: Some(7),
+                ..today_filter.clone()
+            })
+            .unwrap()
+            .comparison
+            .unwrap();
+        assert_eq!(
+            (week.previous.start.as_str(), week.previous.end.as_str()),
+            (day(13).as_str(), day(7).as_str())
+        );
+        assert_eq!(
+            (week.current.record_count, week.previous.record_count),
+            (3, 1)
+        );
+        let custom = Filter {
+            date_range: Some(DateRange::Custom {
+                start: day(2),
+                end: day(1),
+            }),
+            ..today_filter.clone()
+        };
+        let c = store.dashboard(&custom).unwrap().comparison.unwrap();
+        assert!(!c.current_open, "A range ending yesterday is complete");
+        assert_eq!(
+            (c.previous.start.as_str(), c.previous.end.as_str()),
+            (day(4).as_str(), day(3).as_str())
+        );
+        assert_eq!(
+            (c.previous.record_count, c.previous.total),
+            (0, 0),
+            "No records stays distinguishable"
+        );
+        assert!(c.previous.pricing_complete, "Nothing to price is complete");
+        let all = Filter {
+            date_range: Some(DateRange::All),
+            ..today_filter.clone()
+        };
+        assert!(
+            store.dashboard(&all).unwrap().comparison.is_none(),
+            "All has no previous period"
+        );
+        assert!(
+            store
+                .dashboard_summary(&today_filter)
+                .unwrap()
+                .comparison
+                .is_none()
+        );
+    }
+    #[test]
     fn explicit_ranges_include_both_endpoints_leap_days_and_follow_filters() {
         let (_root, store, settings) = fixture();
         let stamp = |year, month, day| {

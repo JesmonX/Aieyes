@@ -109,6 +109,41 @@ function fixture(){
  assert.equal(await page.locator('[data-ring-detail] .supplement-facts [data-view-analysis]').count(),1);
  assert(await page.locator('[data-ring-detail]').evaluate(e=>e.scrollWidth<=e.clientWidth+1));
  if(surface==='index.html' && width===1120 && style==='tile')await page.screenshot({path:'.local/reflow-qoder-main.png',fullPage:true});
+ // Kiro has an independent ring and reset for every credit bucket.
+ await page.evaluate(()=>{
+   const at=Date.now()/1000;
+   const q={...qoderFixture,provider:'kiro',accountId:'kiro-fixture',name:'Kiro',meters:[
+     {id:'plan',label:'套餐 Credits',unit:'credits',used:24.75,total:2000,remaining:1975.25,resetsAt:at+86400},
+     {id:'bonus',label:'赠送 Credits',unit:'credits',used:25,total:100,remaining:75,resetsAt:at+7*86400},
+     {id:'overage',label:'超额 Credits',unit:'credits',used:12.5,resetsAt:at+2*86400}
+   ]};
+   window.kiroFixture=q;state.dashboard.quotas.push(q);
+   document.querySelector('.quota-rings').outerHTML=AieyesQuotaRings.gridHTML([{account:{id:q.accountId,provider:q.provider},quota:q}]);
+ });
+ const kiroTiles=page.locator('button[data-quota-account="kiro:kiro-fixture"]');
+ assert.equal(await kiroTiles.count(),3);
+ assert.equal(await kiroTiles.locator('.ring[data-kind=single]').count(),2);
+ assert.equal(await kiroTiles.locator('[data-ring-reset]').count(),3,'Every bucket keeps its own reset, including unknown capacity');
+ assert.deepEqual(await kiroTiles.locator('[data-ring-reset]').allTextContents(),['1d','7d','2d']);
+ if(style==='dial'){
+   assert.deepEqual(await kiroTiles.locator('.meter-credit-value .ring-swap-time').allTextContents(),['1975.25','75','—']);
+   await kiroTiles.first().focus();assert(await kiroTiles.first().locator('.ring-swap-pct').isVisible());
+ } else assert.deepEqual(await kiroTiles.locator('.meter-credit-ratio').allTextContents(),['1975.25/2000','75/100','—/—']);
+ assert(await page.locator('.quota-rings').evaluate(e=>e.scrollWidth<=e.clientWidth+1),`Kiro overflow: ${surface} ${width} ${style}`);
+ for(const label of await kiroTiles.locator('.meter-credit-ratio,.ring-center,.tile-times').all())assert(await label.evaluate(e=>e.scrollWidth<=e.clientWidth+1),`Kiro clipped: ${surface} ${width} ${style}`);
+ if(surface==='floating.html'&&width===450){await page.evaluate(async()=>{await Promise.all(document.getAnimations().map(a=>a.finished.catch(()=>{})));});await page.screenshot({path:'.local/kiro-'+style+'-collapsed.png',fullPage:true});}
+ await kiroTiles.nth(1).click();
+ assert.equal(await page.locator('[data-ring-detail] .meter-bar').count(),3);
+ assert.equal(await page.locator('[data-ring-detail] .detail-ring').count(),0);
+ assert.equal(await page.locator('[data-ring-detail] time').count(),3);
+ assert(await page.locator('[data-ring-detail]').evaluate(e=>e.scrollWidth<=e.clientWidth+1));
+ const selected=await kiroTiles.nth(1).getAttribute('data-quota-tile');
+ await page.evaluate(()=>{kiroFixture.meters.reverse();AieyesQuotaRings.replace(kiroFixture);});
+ assert.equal(await page.locator('[aria-expanded=true][data-quota-tile]').getAttribute('data-quota-tile'),selected,'Refreshing or reordering buckets preserves the open ring');
+ if(surface==='floating.html'&&width===450){await page.evaluate(async()=>{await Promise.all(document.getAnimations().map(a=>a.finished.catch(()=>{})));});await page.screenshot({path:'.local/kiro-'+style+'-expanded.png',fullPage:true});}
+ await page.locator('[data-ring-detail] summary').click();assert.equal(await page.locator('[data-ring-detail]').count(),0);
+ assert.equal(await page.evaluate(()=>AieyesQuotaRings.models({...kiroFixture,meters:kiroFixture.meters.slice(0,1)}).length),1);
+ assert.equal(await page.evaluate(()=>AieyesQuotaRings.models({...kiroFixture,meters:[]})[0].ring.kind),'empty');
  assert.deepEqual(errors,[]);await page.close();
  } console.log('Compact supplement: both surfaces and styles at 320/450/1120px; full identity, group names, estimates, close and Qoder balances passed.'); }
  finally {await browser.close();server.close();}

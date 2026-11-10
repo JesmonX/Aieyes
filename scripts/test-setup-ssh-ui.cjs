@@ -31,6 +31,10 @@ const {serveFont}=require('./ui-test-helpers.cjs');
     assert.equal(await page.evaluate(()=>state.page),'agent','configured installations are not interrupted');
     const card=page.locator('[data-quota="codex:a0"]');
     assert.match(await card.locator('.quota-collapsed-summary').innerText(),/余额.*100.*Bank Reset.*2/s);
+    // Without a provider Bank Reset object the summary says nothing instead of "— available".
+    await page.evaluate(()=>{const q=state.dashboard.quotas.find(q=>q.provider+':'+q.accountId==='codex:a0');q.savedBankReset=q.bankReset;delete q.bankReset;render();});
+    assert.doesNotMatch(await card.locator('.quota-collapsed-summary').innerText(),/Bank Reset|—/);
+    await page.evaluate(()=>{const q=state.dashboard.quotas.find(q=>q.provider+':'+q.accountId==='codex:a0');q.bankReset=q.savedBankReset;delete q.savedBankReset;render();});
     assert(await card.locator('.quota-name').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'long account names wrap');
     const before=await card.boundingBox(),columns=await page.locator('.quotas').first().evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length);
     await page.locator('#sidebar-toggle').click();

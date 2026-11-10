@@ -38,6 +38,7 @@ dependencies = [
  "dunce",
  "flate2",
  "image",
+ "jiff",
  "keyring",
  "libc",
  "notify",

@@ -4,7 +4,7 @@ const {chromium}=require('../apps/desktop/node_modules/playwright');
 const {fixture}=require('./workspace-ui-fixture.cjs');
 const {serveFont}=require('./ui-test-helpers.cjs');
 const root=path.resolve(__dirname,'..'),web=path.join(root,'apps/desktop/web'),out=path.join(root,'.local/bilingual-layout');
-const selectors=['nav button','.stat-label > span','.stat-value','.account-switch-entry','.metric-picker button','.panel-tabs button','.resource-strip-heading > strong','.quota-window .between > strong'];
+const selectors=['nav button','.stat-label > span','.stat-value','.account-switch-entry','.metric-picker button','.panel-tabs button','.resource-strip-heading > strong','.server-gpu-metrics .resource-strip-heading > span','.quota-window .between > strong'];
 function measure(selectors){
   const rows=[];
   for(const selector of selectors)document.querySelectorAll(selector).forEach((el,index)=>{

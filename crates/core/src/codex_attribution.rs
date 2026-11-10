@@ -524,6 +524,7 @@ mod tests {
             inheritance: None,
             interval_start: Some(1010),
             interval_evidence: "task-request-v2".into(),
+            output_timing: None,
             agent: String::new(),
         };
         store.put_event(&event, &[], &settings).unwrap();

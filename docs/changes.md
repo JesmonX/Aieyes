@@ -62,6 +62,34 @@
 - 官网（10-22 起，v0.1.54–v0.1.55）：中英文官网、直接下载入口。见 [website.md](website.md)。
 - macOS 原生侧栏与窗口材质选择（10-28，v0.1.61）：Windows 可分别选择主窗口与面板材质。见 [windows-appearance.md](windows-appearance.md)。
 - 提供商图标更新（10-19 起，v0.1.46、v0.1.50）。见 [provider-icons.md](provider-icons.md)。
+- 界面与功能优化第一轮（11-09）。两端同时交付：
+  - 文案：没有 Bank Reset 数据时不再显示“—”；底栏改为“网络：系统代理 · 延迟 N ms”；“N 项额度估值正在积累样本”。
+  - 面板 Agent 选项、服务器选项在被遮挡一侧渐隐；GPU“利用率”标签不再截断，窄卡片改用短标签或换行。
+  - 服务器筛选合并为一排，无采样主机单行显示；规则见 [ui-control-spec.md](ui-control-spec.md)。
+  - macOS 账户额度改为与 Web 相同的瀑布流：分组只占自己账户数的列，后面的分组填入较短的列。Web 端补上分组标题高度变化（字体加载、切换语言）后的重新排布。
+  - 用量分析 KPI 显示与上一个等长自然日周期的对比和所选日期的小折线；计价不完整时仍比较已计价成本，区分“上一周期无记录”与真实为 0。`dashboard` 新增 `comparison`。
+  - “接入与账户”顶部新增接入能力一览，合约新增 `history`、`sessions` 能力，会话监测的 Provider 列表改由合约决定。
+  - 会话行显示项目名（工作目录）、本轮已用时间、本会话与本轮 Token，以及有可靠证据时的输出速度；本机会话可点击切换到所属终端或 IDE。逐 Agent 情况见下表，跳转验收见 [manual-verification.md](manual-verification.md)。
+  - 定时唤醒编辑器按最近 30 个完整自然日推荐唤醒时间，见 [credits-and-wakeups.md](credits-and-wakeups.md#唤醒时间推荐)。
+  - 官网截图重新生成；`scripts/website/render.py` 的侧栏补丁更新为当前 `NavigationSplitView` 结构。
+
+#### 会话 Token 与输出速度（本机已启用的 Agent）
+
+会话 Token 由核心按原生会话 ID 关联已导入的历史，并限定在该会话自己的来源；Claude 子代理映射到导入时使用的父会话 ID。本轮按原生轮次 ID 归属（Codex、DeepSeek Harness），其他 Agent 按本轮开始、结束的毫秒边界归属，只有整秒落在边界内的记录才计入。活跃的本机会话会提前导入：Codex 和 Claude Code 只导入该会话的记录文件，最多每 3 秒一次；其他来源整源增量导入，最多每 10 秒一次；都在独立连接上运行，来源正被导入时跳过，下一次轮询重试。查询使用新增的 `events_session` 表达式索引，在 80 万条记录的副本上单次约 30 ms。
+
+输出速度 = 本轮输出 Token 之和 ÷ 模型请求耗时之和，包含首字等待，不包含工具执行和等待用户。一次请求有多条内容块记录时，合计输出 Token，但请求耗时只计一次。本轮有任何一个产生输出的请求缺少可关联的请求边界，就隐藏速率；保留 Token。不足 1 tok/s 显示 `<1 tok/s`。macOS 和 Web 的悬停说明使用同一口径。
+
+| Agent | 请求计时来源 | 输出速度 |
+|---|---|---|
+| Codex（含 ChatGPT Work） | 本轮开始或上次工具结果到本次模型响应完成；轮次必须匹配，迟到旧轮条目不参与；跨多个请求的累计补录没有速率 | 支持 |
+| Claude Code | `api-request.id` 的时间，与响应的 `requestRef` 精确配对；仅保存标识和时间，不保存请求内容 | 支持 |
+| Antigravity | 带 Token 的原生模型步骤起止时间，保留毫秒精度 | 支持 |
+| DeepSeek Harness | 按同一轮次、同一步骤配对 `step/start` 和 `assistant/message`；SSH/压缩历史投影同步保留计时元数据 | 支持 |
+| OpenCode | 本轮不接入测速，避免消息时段混入工具执行 | 不显示 |
+| Qoder / Qoder CN、其他 Agent | 本轮没有接入可验证的请求计时 | 不显示 |
+| Kiro | 当前会话记录只有 Credits，没有 Token 历史 | 不显示 |
+
+11-10 修正：Codex 计时按轮次隔离；定向导入仅在 worker 成功后确认文件版本，锁占用或失败会节流重试，日志不再写入也可恢复。唤醒执行器在本机/SSH 运行库记录来源和原生会话身份，按身份排除自动用量；与其他任务的时间重叠不会删除人工样本。旧记录或失败调用缺少身份且可能属于所选来源时返回明确的数据不足，不伪造排除。已部署执行器需要更新部署后才会开始写入新身份记录。
 
 ### 跨平台、发布与更新
 
@@ -146,6 +174,15 @@
 
 - Codex 多账户估值无法完整重建未被观测、且未留下请求侧额度差异的外部快速切换，估值不等同于账户账单（10-24）。
 - 暂停设备退出实时覆盖的前提是暂停期间不在这些设备上使用同一账户（10-25）。
+
+### 会话、跳转与唤醒推荐（11-09）
+
+- 输出速度 = 本轮输出 Token ÷ 模型请求耗时（含首字等待，不含工具执行与用户等待）；本轮任一产生输出的请求缺少可配对边界时隐藏速率。11-10 起覆盖 Codex、Claude Code、Antigravity、DeepSeek Harness，OpenCode 及其余 Agent 不显示（见上表）；新增的三类请求计时尚未在真实长会话上端到端核对。
+- Claude Code、Antigravity、DeepSeek Harness、Qoder、OpenCode 的会话 Token 关联未在真实会话上端到端验证；Kiro 没有 Token 历史。
+- 从写入日志到会话 Token 更新的延迟只在测试数据上确认（一次轮询内），未在真实长会话上测量。
+- 会话跳转：macOS 仅在 Ghostty 与 ChatGPT 内置 Codex 上实机确认；Terminal、iTerm2、VS Code、同应用多窗口未验收。Windows 只做了交叉类型检查，Linux X11/Wayland 未实机运行。tmux、screen 及守护进程启动的会话找不到所属窗口。
+- 唤醒推荐的 SSH 目标读取运行记录与时区靠新增的 `runs` 远程操作（远程脚本随每次调用发送，无需重新部署），只在模拟测试中验证，真实 SSH 主机未验收。
+- `cargo test` 中 `process::line_transport_tests::errors_and_timeouts_close_the_stream_without_hanging_on_pipes` 在本机全量运行时超时（清理约 20 秒），未修改的 `HEAD` 同样失败，单独运行通过。`scripts/test-native-bilingual-layout.py` 的 6 项差异（英文“View analysis”按钮高度、重置时间换行）在 `HEAD` 上同样存在。
 
 ### 性能
 

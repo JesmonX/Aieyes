@@ -66,13 +66,25 @@ struct QuotaRingItem: Identifiable, Equatable {
     var kind: QuotaRingKind
     /// Windows of this ring that are not drawn.
     var hidden: [QuotaWindow]
-    var id: String { quota.id + (group.map { "#" + $0 } ?? "") }
-    var title: String { group ?? quota.name }
+    var meter: QuotaMeter? = nil
+    var meterReset: QuotaRingArc? {
+        meter.map { QuotaRingArc(remaining: kind.top?.remaining ?? 0, resetsAt: $0.resetsAt.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }, windowMinutes: nil, unused: false, name: $0.label) }
+    }
+    var id: String { quota.id + (meter.map { "#meter:" + $0.id } ?? group.map { "#" + $0 } ?? "") }
+    var title: String { meter.map { L($0.label) } ?? group ?? quota.name }
 }
 
 /// Same rules as the core's `quota_ring.rs` and the Web UI's `quota-rings.js`.
 enum QuotaRingModel {
     static func items(_ quota: Quota) -> [QuotaRingItem] {
+        if quota.provider == "kiro", !quota.visibleMeters.isEmpty {
+            return quota.visibleMeters.map { meter in
+                var bucket = quota
+                bucket.windows = []; bucket.meters = [meter]
+                let (kind, hidden) = ring([], quota: bucket)
+                return QuotaRingItem(quota: quota, group: nil, kind: kind, hidden: hidden, meter: meter)
+            }
+        }
         guard quota.groupsWindows, !quota.windows.isEmpty else {
             let (kind, hidden) = ring(quota.windows, quota: quota)
             return [QuotaRingItem(quota: quota, group: nil, kind: kind, hidden: hidden)]
@@ -166,6 +178,10 @@ enum QuotaRingModel {
     }
     /// Full text for VoiceOver and tooltips.
     static func accessibility(_ item: QuotaRingItem, now: Date = Date()) -> String {
+        if let meter = item.meter {
+            return [item.quota.name, L(meter.label), item.quota.meterSummary(meter),
+                    meter.resetsAt.map { Format.resetCountdown($0, now: now) } ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
+        }
         if isQoderCredits(item.quota) {
             let rows = ["addOnQuota", "userQuota"].map { id in
                 let meter = item.quota.meters?.first { $0.id == id }

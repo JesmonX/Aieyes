@@ -70,6 +70,11 @@ function fixture(){
      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
      const overflow=await summary.evaluate(el=>[...el.querySelectorAll('.server-gpu,.resource-gauge,.server-network-total,.server-resource-strip')].filter(child=>child.scrollWidth>child.clientWidth+1).map(child=>child.className));
      assert.deepEqual(overflow,[],`${surface} ${width} ${theme} has overflowing resources`);
+     for(const language of ['en','zh-CN']){
+      await page.evaluate(language=>setLanguage(language),language);
+      const clipped=await summary.locator('.server-gpu-metrics .resource-strip-heading > span').evaluateAll(es=>es.filter(e=>e.scrollWidth>e.clientWidth+1||e.getBoundingClientRect().right>e.closest('.server-gpu').getBoundingClientRect().right+1).map(e=>e.textContent));
+      assert.deepEqual(clipped,[],`${surface} ${width} ${theme} ${language}: GPU labels are complete`);
+     }
      await page.waitForFunction(()=>{
        const grid=document.querySelector('.server-gpu-list');
        return grid&&grid.style.getPropertyValue('--balanced-columns');
@@ -123,6 +128,20 @@ function fixture(){
     await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
     assert.deepEqual(await page.evaluate(()=>draftSettings().hosts[0].details),['uptime']);
    }
+   const views=await page.evaluate(()=>[
+     AieyesUI.migrateServerView({selection:'summary-host',filter:'errors'},['summary-host']),
+     AieyesUI.migrateServerView({selection:'gone',filter:'paused'},['summary-host']),
+     AieyesUI.migrateServerView({selection:'gone',filter:'all'},['summary-host']),
+     AieyesUI.migrateServerView({},[]),AieyesUI.serverView('gone',['summary-host']),
+     AieyesUI.serverViewMatches('errors',{enabled:true},'waiting'),AieyesUI.serverViewMatches('errors',{enabled:false},'failed'),AieyesUI.serverViewMatches('errors',{enabled:true},'stale')]);
+   assert.deepEqual(views,['summary-host','paused','all','all','all',false,false,true]);
+   // Former storage migrates once per window: a surviving host wins, otherwise the status filter.
+   const scope=panel?'panel':'detail',other=panel?'detail':'panel';
+   await page.evaluate(({scope,other,panel})=>{localStorage.removeItem('aieyes.server.view.v2.'+scope);localStorage.setItem('aieyes.server.view.v2.'+other,'all');localStorage.setItem('aieyes.server.selection.'+scope,panel?'gone':'summary-host');if(panel)localStorage.setItem('aieyes.panel.view',JSON.stringify({page:'servers',serverFilter:'paused'}));},{scope,other,panel});
+   await page.reload();await page.evaluate(()=>AieyesApp.ready);await page.evaluate(()=>{state.page='servers';render();});
+   const expected=panel?'paused':'summary-host';
+   assert.equal(await page.locator(`[data-server-view="${expected}"]`).getAttribute('aria-pressed'),'true',`${surface} migrates the former filter`);
+   assert.deepEqual(await page.evaluate(({scope,other})=>[localStorage.getItem('aieyes.server.view.v2.'+scope),localStorage.getItem('aieyes.server.view.v2.'+other)],{scope,other}),[expected,'all']);
    assert.deepEqual(errors,[]);await page.close();
   }
   console.log('Server summary: per-GPU memory/utilization, device filters, uptime, counters, missing data, disclosure persistence and narrow light/dark layouts passed on both surfaces');

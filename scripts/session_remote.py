@@ -321,6 +321,8 @@ def observe(provider, kind, home):
         row = dict(kind=kind, at=at, session=session, turn=text(v.get('turn_id') or v.get('turnId') or v.get('prompt_id')), call=text(v.get('tool_use_id') or v.get('agent_id') or v.get('elicitation_id')), tool=text((v.get('toolCall') or {}).get('name') if provider == 'antigravity' else v.get('tool_name')), notification=text(v.get('notification_type')))
         if provider=='claude':row['sessionSource']=text(os.environ.get('CLAUDE_CODE_ENTRYPOINT') or v.get('entrypoint'))
         row['parentSession']=text(v.get('parent_session_id') or v.get('parentSessionId'))
+        # The absolute working directory is the only payload path kept; it names the session's project.
+        if isinstance(v.get('cwd'),str) and len(v['cwd'])<=4096 and os.path.isabs(v['cwd']):row['workspace']=v['cwd']
         if provider in ('claude','codebuddy') and kind not in ('SubagentStart','SubagentStop') and text(v.get('agent_id')):
             row['parentSession']=session
             session=row['session']=session+':'+text(v.get('agent_id'))
@@ -1103,7 +1105,14 @@ def associate_native_processes(provider, sessions, processes):
 def apply_process_evidence(source, result, cursors, processes):
     sessions = []
     for row in result.get('files', []):
-        if row.get('hook'): continue
+        if row.get('hook'):
+            # Hook journals carry the workspace in their header but are never tied to processes.
+            cached = _PROCESS_CONTEXTS.get(row['key'])
+            if cached is None or cached[0] != row.get('identity') or row.get('reset'):
+                cached = (row.get('identity'), _session_context(source['provider'], row['key'], ''))
+                _PROCESS_CONTEXTS[row['key']] = cached
+            if cached[1].get('workspace'): row['workspace'] = cached[1]['workspace']
+            continue
         key = row['key']
         activity = dict(cursors.get(key, {})) if not row.get('reset') else {}
         for event in row.get('events', []):
@@ -1119,6 +1128,7 @@ def apply_process_evidence(source, result, cursors, processes):
             cached = (row.get('identity'), _session_context(source['provider'], key, activity.get('session','')))
             _PROCESS_CONTEXTS[key] = cached
         sessions.append((key, cached[1], activity))
+        if cached[1].get('workspace'): row['workspace'] = cached[1]['workspace']
     evidence = associate_native_processes(source['provider'], sessions, processes)
     for row in result.get('files', []):
         if row['key'] in evidence:

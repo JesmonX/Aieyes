@@ -256,10 +256,27 @@ def crontab(root, remove=False):
         raise ValueError('安装 crontab 失败；需要目标用户的 crontab 权限')
 
 
+def identity_evidence(m, output='', complete=False):
+    ids = set()
+    for line in output.splitlines():
+        try: row = json.loads(line)
+        except (ValueError, TypeError): continue
+        if not isinstance(row, dict): continue
+        provider = m.get('provider')
+        if provider == 'codex': values = [row.get('thread_id')] if row.get('type') == 'thread.started' else []
+        elif provider == 'claude': values = [row.get('session_id')]
+        else:
+            result = row.get('result') if isinstance(row.get('result'), dict) else {}
+            values = [row.get(k) for k in ('cascadeId', 'cascade_id')] + [result.get(k) for k in ('cascadeId', 'cascade_id')]
+        ids.update(v for v in values if isinstance(v, str) and 0 < len(v) <= 512)
+    return dict(sourceId=m.get('sourceId', ''), provider=m.get('provider', ''), configPath=m.get('configPath', ''), sessionIds=sorted(ids), complete=complete or bool(ids))
+
+
 def tick(root, manual=None):
     private_dir(root)
     db = sqlite3.connect(str(root / 'runner.sqlite'), timeout=3)
     db.executescript('CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY,task TEXT,occurrence TEXT UNIQUE,started INTEGER,ended INTEGER,status TEXT,model TEXT,effort TEXT); CREATE TABLE IF NOT EXISTS leases(account TEXT PRIMARY KEY,expires INTEGER); CREATE TABLE IF NOT EXISTS run_diagnostics(run_id INTEGER PRIMARY KEY,stage TEXT,code TEXT,message TEXT);')
+    db.execute('CREATE TABLE IF NOT EXISTS run_identity(run_id INTEGER PRIMARY KEY,payload TEXT NOT NULL)')
     local = datetime.datetime.now()
     slot = local.strftime('%H:%M')
     jobs = []
@@ -279,6 +296,7 @@ def tick(root, manual=None):
                 continue
             acquired = db.execute('INSERT OR IGNORE INTO leases VALUES(?,?)', (m['accountKey'], stamp+150)).rowcount > 0
             row = db.execute('INSERT INTO runs(task,occurrence,started,status,model,effort) VALUES(?,?,?,?,?,?)', (m['id'], occurrence, stamp, 'running' if acquired else 'skipped-overlap', m['model'], m['effort'])).lastrowid
+            if acquired: db.execute('INSERT INTO run_identity VALUES(?,?)', (row, json.dumps(identity_evidence(m))))
         if not acquired:
             continue
         jobs.append((m, row))
@@ -288,6 +306,7 @@ def tick(root, manual=None):
         m, row = job
         status = 'failed'
         stage, detail = 'prepare', None
+        identity = identity_evidence(m)
         try:
             cwd = root / 'work' / m['id']
             private_dir(cwd)
@@ -296,12 +315,14 @@ def tick(root, manual=None):
             stage = 'model-request'
             if m.get('codexProfileId'):
                 stage = 'codex-turn'
+                identity['complete'] = True  # Explicitly ephemeral Codex thread.
                 auth_helper().wakeup(auth_location(m), m['codexProfileId'].split(':', 1)[1], m, cwd)
                 output = '{"type":"turn.completed"}'
             else:
                 if m['provider'] == 'codex' and (pathlib.Path(m['configPath']) / '.aieyes/state/home.json').exists():
                     raise ValueError('旧唤醒任务需绑定账户后重新部署')
                 output = call(m, m['args'], cwd, 120)
+                identity = identity_evidence(m, output)
             rows = []
             for line in output.splitlines():
                 try:
@@ -319,6 +340,8 @@ def tick(root, manual=None):
         db = sqlite3.connect(str(root / 'runner.sqlite'), timeout=3)
         try:
             with db:
+                if stage not in ('model-request', 'codex-turn'): identity['complete'] = True
+                db.execute('INSERT OR REPLACE INTO run_identity VALUES(?,?)', (row, json.dumps(identity)))
                 db.execute('UPDATE runs SET status=?,ended=? WHERE id=?', (status, int(time.time()), row))
                 if detail:
                     db.execute('INSERT OR REPLACE INTO run_diagnostics VALUES(?,?,?,?)', (row, stage, detail[0], detail[1]))
@@ -348,6 +371,49 @@ def history(root, identifier):
     rows = [dict(startedAt=s, endedAt=e, status=st, model=m, effort=ef, stage=stage, errorCode=code, message=message) for s,e,st,m,ef,stage,code,message in db.execute(query, (identifier,))]
     db.close()
     return rows
+
+
+def zone_name():
+    pattern = r'(?:[A-Za-z][A-Za-z0-9_+-]*/)*[A-Za-z][A-Za-z0-9_+-]*'
+    name = os.environ.get('TZ', '').lstrip(':')
+    if name and re.fullmatch(pattern, name) and '/' in name:
+        return name
+    try:
+        target = os.path.realpath('/etc/localtime')
+        if '/zoneinfo/' in target and re.fullmatch(pattern, target.split('/zoneinfo/', 1)[1]):
+            return target.split('/zoneinfo/', 1)[1]
+    except OSError:
+        pass
+    try:
+        value = pathlib.Path('/etc/timezone').read_text().strip()
+        if re.fullmatch(pattern, value):
+            return value
+    except OSError:
+        pass
+    return None
+
+
+def runs(root, since):
+    # Every Aieyes run on this machine since `since` (seconds), with the zone that schedules them.
+    rows, identities = [], []
+    if (root / 'runner.sqlite').exists():
+        db = sqlite3.connect('file:' + str(root / 'runner.sqlite') + '?mode=ro', uri=True)
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='runs'").fetchone():
+            has_identity = db.execute("SELECT 1 FROM sqlite_master WHERE name='run_identity'").fetchone()
+            for run_id, task, started, ended in db.execute("SELECT id,task,started,ended FROM runs WHERE started >= ? AND status != 'skipped-overlap'", (int(since),)):
+                rows.append([started, ended])
+                saved = db.execute('SELECT payload FROM run_identity WHERE run_id=?', (run_id,)).fetchone() if has_identity else None
+                if saved:
+                    identities.append(json.loads(saved[0]))
+                else:
+                    try:
+                        if not re.fullmatch(r'wake-[a-zA-Z0-9-]+', task): raise ValueError()
+                        identities.append(identity_evidence(json.loads((root / 'tasks' / (task + '.json')).read_text())))
+                    except (OSError, ValueError, TypeError): identities.append(identity_evidence({}))
+        db.close()
+    year = time.localtime().tm_year
+    offsets = {time.localtime(time.mktime((year, month, 1, 12, 0, 0, 0, 0, -1))).tm_gmtoff for month in (1, 7)}
+    return {'runs': rows, 'identityRecords': identities, 'zone': zone_name(), 'fixedOffset': offsets.pop() if len(offsets) == 1 else None}
 
 
 def diagnostic(error):
@@ -446,6 +512,8 @@ def manage(request):
     root = pathlib.Path(os.path.expanduser(request['root']))
     if root.parent != base or not re.fullmatch('[a-f0-9]{20}', root.name):
         raise ValueError('部署目录不属于 Aieyes')
+    if action == 'runs':
+        return runs(root, request.get('since', 0))
     identifier = request['id']
     if not re.fullmatch('wake-[a-zA-Z0-9-]{1,59}', identifier):
         raise ValueError('任务 ID 无效')

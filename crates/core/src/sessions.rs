@@ -73,6 +73,9 @@ impl Phase {
         }
     }
 }
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LiveSession {
@@ -97,8 +100,32 @@ pub struct LiveSession {
     pub path: String,
     #[serde(skip)]
     pub parent_path: String,
-    #[serde(skip)]
+    /// Milliseconds; the turn's elapsed time includes waiting for tools and for the user.
+    #[serde(skip_serializing_if = "is_zero")]
     pub turn_started_at: u64,
+    /// Milliseconds of the terminal event; absent while the turn is still running.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_ended_at: Option<u64>,
+    /// Working directory recorded by the agent or its process. Paths only, never content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// Tokens joined from imported history; see `session_usage`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::session_usage::SessionUsage>,
+    /// Local agent process and its start time, for focusing the window that owns it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_start: Option<u64>,
+    /// Native session id that the provider's history import also records.
+    #[serde(skip)]
+    pub native_session: String,
+    /// Native ids of this session and of merged child sessions.
+    #[serde(skip)]
+    pub member_sessions: Vec<String>,
+    /// Transcript files of this session (log evidence), for prompt history import.
+    #[serde(skip)]
+    pub log_paths: Vec<String>,
     /// Settled for at least 90 seconds. It still takes part in deduplication,
     /// so a stale record of the same session cannot outlive the settlement.
     #[serde(skip)]
@@ -267,6 +294,21 @@ impl Snapshot {
             .filter(|s| s.provider == "chatgpt-work")
             .map(|s| s.id.clone())
             .collect();
+        // Hook and log projections of one session merge below; keep whichever recorded the workspace.
+        let workspaces: HashMap<String, String> = self
+            .sessions
+            .iter()
+            .filter_map(|s| s.workspace.clone().map(|w| (s.id.clone(), w)))
+            .collect();
+        let mut transcripts: HashMap<String, Vec<String>> = HashMap::new();
+        for s in &self.sessions {
+            if s.evidence == "log" && !s.path.is_empty() {
+                transcripts
+                    .entry(s.id.clone())
+                    .or_default()
+                    .push(s.path.clone());
+            }
+        }
         let mut unique: HashMap<String, LiveSession> = HashMap::new();
         for mut s in self.sessions.drain(..) {
             if s.provider == "codex" && work.contains(&s.id) {
@@ -374,6 +416,12 @@ impl Snapshot {
                 })
                 .or_insert(s);
         }
+        for session in unique.values_mut() {
+            if session.workspace.is_none() {
+                session.workspace = workspaces.get(&session.id).cloned();
+            }
+            session.log_paths = transcripts.remove(&session.id).unwrap_or_default();
+        }
         let mut roots: HashMap<String, Vec<LiveSession>> = HashMap::new();
         for session in unique.values() {
             let mut root = session;
@@ -403,6 +451,23 @@ impl Snapshot {
             .into_iter()
             .map(|(id, members)| {
                 let mut main = unique[&id].clone();
+                for member in &members {
+                    if !member.native_session.is_empty()
+                        && !main.member_sessions.contains(&member.native_session)
+                    {
+                        main.member_sessions.push(member.native_session.clone());
+                    }
+                    for path in &member.log_paths {
+                        if !main.log_paths.contains(path) {
+                            main.log_paths.push(path.clone());
+                        }
+                    }
+                }
+                if !main.native_session.is_empty()
+                    && !main.member_sessions.contains(&main.native_session)
+                {
+                    main.member_sessions.insert(0, main.native_session.clone());
+                }
                 let active = members
                     .iter()
                     .filter(|s| s.id != id && s.phase.active())
@@ -453,6 +518,8 @@ struct FileBatch {
     alive: Option<bool>,
     database: bool,
     continuation: Value,
+    /// Remote collectors resolve the working directory on the target machine.
+    workspace: Option<String>,
     #[cfg(test)]
     read_bytes: u64,
 }
@@ -742,6 +809,41 @@ impl Reader {
                     cursor.activity.apply(event);
                 }
             }
+            // Hook files have no process candidate above; their header also records the workspace.
+            let workspace = if source.host_id.is_none() {
+                let context = self
+                    .process_contexts
+                    .entry(f.key.clone())
+                    .or_insert_with(|| {
+                        (
+                            f.identity.clone(),
+                            crate::session_processes::context(
+                                &source.provider,
+                                &f.key,
+                                &cursor.activity.session,
+                            ),
+                        )
+                    });
+                if context.0 != f.identity {
+                    *context = (
+                        f.identity.clone(),
+                        crate::session_processes::context(
+                            &source.provider,
+                            &f.key,
+                            &cursor.activity.session,
+                        ),
+                    );
+                }
+                context
+                    .1
+                    .workspace
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned())
+            } else {
+                f.workspace
+                    .clone()
+                    .filter(|path| !path.is_empty() && path.len() <= 4096)
+            };
             cursor.offset = f.offset;
             cursor.size = f.size;
             cursor.modified = f.modified;
@@ -877,7 +979,18 @@ impl Reader {
                 path: f.key.clone(),
                 parent_path: cursor.activity.parent_session_path.clone(),
                 turn_started_at: cursor.activity.turn_started_at(),
+                turn_ended_at: (phase.terminal() && cursor.activity.at > 0)
+                    .then_some(cursor.activity.at),
+                workspace,
+                native_session: session.clone(),
+                pid: (source.host_id.is_none() && cursor.activity.pid > 0 && alive != Some(false))
+                    .then_some(cursor.activity.pid),
+                process_start: (source.host_id.is_none()
+                    && cursor.activity.pid > 0
+                    && alive != Some(false))
+                .then_some(cursor.activity.process_start),
                 expired,
+                ..Default::default()
             });
         }
         // A legacy hook may lack source metadata while its native log has it.
@@ -2140,12 +2253,82 @@ fn collect_remote(
     snapshot.finish();
     Ok(snapshot)
 }
+/// Ancestors of a local agent process, nearest first, for the desktop to find the GUI app or
+/// window that owns it. The start time guards against a reused pid. Never reads arguments.
+pub fn focus_target(pid: u32, process_start: u64) -> serde_json::Value {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut system = System::new();
+    let kind = ProcessRefreshKind::nothing().with_exe(UpdateKind::Always);
+    let mut current = Pid::from_u32(pid);
+    let mut ancestors = Vec::new();
+    for depth in 0..16 {
+        system.refresh_processes_specifics(ProcessesToUpdate::Some(&[current]), true, kind);
+        let Some(process) = system.process(current) else {
+            break;
+        };
+        if depth == 0 && process_start > 0 && process.start_time() != process_start {
+            break;
+        }
+        ancestors.push(json!({"pid":current.as_u32(),"start":process.start_time(),"name":process.name().to_string_lossy(),"exe":process.exe().map(|p| p.to_string_lossy().into_owned())}));
+        // Processes of other users (e.g. the setuid `login` under a terminal) hide their parent from sysinfo.
+        match process
+            .parent()
+            .map(|p| p.as_u32())
+            .or_else(|| parent_pid(current.as_u32()))
+        {
+            Some(parent) if parent > 1 && parent != current.as_u32() => {
+                current = Pid::from_u32(parent)
+            }
+            _ => break,
+        }
+    }
+    if ancestors.is_empty() {
+        return json!({"status":"exited"});
+    }
+    json!({"status":"found","ancestors":ancestors})
+}
+#[cfg(target_os = "macos")]
+fn parent_pid(pid: u32) -> Option<u32> {
+    let mut info: libc::proc_bsdshortinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdshortinfo>() as libc::c_int;
+    // SAFETY: `info` is an output buffer of exactly `size` bytes for PROC_PIDT_SHORTBSDINFO.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDT_SHORTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdshortinfo).cast(),
+            size,
+        )
+    };
+    (written == size).then_some(info.pbsi_ppid)
+}
+#[cfg(not(target_os = "macos"))]
+fn parent_pid(_pid: u32) -> Option<u32> {
+    None
+}
+/// The same process is still running: pid and start time both match.
+pub fn process_matches(pid: u32, start: u64) -> bool {
+    process_alive(pid, start)
+}
 #[derive(Default)]
 pub struct SessionMonitor {
     local: Reader,
     remote: HashMap<String, RemoteWorker>,
+    usage: crate::session_usage::SessionUsageReader,
 }
 impl SessionMonitor {
+    /// `read` plus token totals from imported history; active local sessions are imported promptly.
+    pub fn read_with_usage(
+        &mut self,
+        settings: &Settings,
+        now: SystemTime,
+        store: &crate::store::Store,
+    ) -> Snapshot {
+        let mut snapshot = self.read(settings, now);
+        self.usage.enrich(&mut snapshot, store, settings);
+        snapshot
+    }
     /// Sessions Aieyes started itself, as `internal-session:` kv keys.
     pub fn set_internal(&mut self, keys: HashSet<String>) {
         self.local.internal = keys;
@@ -2159,31 +2342,7 @@ impl SessionMonitor {
             .filter(|s| {
                 s.subscription.is_none()
                     && settings.source_enabled(s)
-                    && matches!(
-                        s.provider.as_str(),
-                        "codex"
-                            | "claude"
-                            | "antigravity"
-                            | "kimi"
-                            | "codebuddy"
-                            | "workbuddy"
-                            | "deepseek-harness"
-                            | "grok"
-                            | "copilot"
-                            | "zcode"
-                            | "opencode"
-                            | "kilo"
-                            | "cline"
-                            | "roo"
-                            | "kiro"
-                            | "qoder"
-                            | "qoder-cn"
-                            | "pi"
-                            | "omp"
-                            | "cursor"
-                            | "trae"
-                            | "trae-cn"
-                    )
+                    && crate::contracts::provider(&s.provider).is_some_and(|p| p.sessions)
             })
             .map(normalized_source)
             .filter(|s| {
@@ -2415,6 +2574,77 @@ mod tests {
         assert_eq!(parse(log.as_bytes()), Some(Phase::Interrupted));
         log += "\n";
         assert_eq!(parse(log.as_bytes()), Some(Phase::Working));
+    }
+    #[test]
+    fn focus_targets_walk_ancestors_and_reject_reused_or_exited_processes() {
+        let pid = std::process::id();
+        let mut system = sysinfo::System::new();
+        system.refresh_processes(
+            sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
+            true,
+        );
+        let start = system
+            .process(sysinfo::Pid::from_u32(pid))
+            .unwrap()
+            .start_time();
+        let found = focus_target(pid, start);
+        assert_eq!(found["status"], "found");
+        let ancestors = found["ancestors"].as_array().unwrap();
+        assert_eq!(ancestors[0]["pid"], pid);
+        assert!(ancestors.len() >= 2, "The test runner has a parent process");
+        assert!(
+            ancestors.iter().all(|a| a.get("cmd").is_none()),
+            "Arguments are never reported"
+        );
+        assert_eq!(
+            focus_target(pid, start + 1)["status"],
+            "exited",
+            "A different start time is a reused pid"
+        );
+        assert_eq!(focus_target(u32::MAX - 7, 0)["status"], "exited");
+        assert!(process_matches(pid, start) && !process_matches(pid, start + 1));
+    }
+    #[test]
+    fn the_session_capability_matches_the_providers_the_monitor_reads() {
+        // Every source of a provider declared with "sessions" reports health; no other provider is read.
+        let temp = tempfile::tempdir().unwrap();
+        let mut sources = vec![];
+        for provider in crate::contracts::PROVIDERS {
+            let path = temp.path().join(provider.id);
+            for state in [path.join(".aieyes"), path.join("cli/.aieyes")] {
+                fs::create_dir_all(&state).unwrap();
+                fs::write(state.join("session-hooks-disabled"), "").unwrap();
+            }
+            sources.push(Source {
+                id: provider.id.into(),
+                name: provider.id.into(),
+                provider: provider.id.into(),
+                path: path.to_string_lossy().into(),
+                ..Source::default()
+            });
+        }
+        let settings = Settings {
+            sources,
+            ..Default::default()
+        };
+        let snapshot = SessionMonitor::default().read(&settings, SystemTime::now());
+        let read: std::collections::BTreeSet<_> = snapshot
+            .sources
+            .iter()
+            .map(|s| s.provider.as_str())
+            .collect();
+        let declared: std::collections::BTreeSet<_> = crate::contracts::PROVIDERS
+            .iter()
+            .filter(|p| p.sessions)
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(read, declared);
+        assert!(
+            declared
+                .iter()
+                .all(|id| crate::contracts::provider(id).unwrap().machines),
+            "Session sources are machine directories"
+        );
     }
     #[test]
     fn source_scope_expiry_deduplication_and_unavailability() {
@@ -3903,6 +4133,58 @@ mod codex_source_tests {
             "Fixture",
             None,
         )
+    }
+    #[test]
+    fn sessions_report_the_workspace_and_turn_bounds_without_content() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("my project");
+        fs::create_dir_all(&project).unwrap();
+        let path = root.path().join("rollout.jsonl");
+        let stamp = |ms: i64| {
+            chrono::DateTime::from_timestamp_millis(ms)
+                .unwrap()
+                .to_rfc3339()
+        };
+        let started = (seconds(SystemTime::now()) as i64 - 30) * 1000;
+        let mut log = json!({"type":"session_meta","timestamp":stamp(started - 1000),"payload":{"id":"session","source":"cli","cwd":project}}).to_string() + "\n";
+        log += &(json!({"type":"event_msg","timestamp":stamp(started),"payload":{"type":"task_started","turn_id":"t1"}}).to_string() + "\n");
+        log += &(json!({"type":"response_item","timestamp":stamp(started + 4000),"payload":{"type":"function_call","name":"shell","call_id":"c","arguments":"PRIVATE_COMMAND","turn_id":"t1"}}).to_string() + "\n");
+        fs::write(&path, &log).unwrap();
+        let source = Source {
+            id: "s".into(),
+            provider: "codex".into(),
+            path: root.path().to_string_lossy().into(),
+            ..Default::default()
+        };
+        let mut reader = Reader::default();
+        let running = poll(&mut reader, &source, &path);
+        let session = &running.sessions[0];
+        assert_eq!(
+            session.workspace.as_deref(),
+            Some(
+                dunce::canonicalize(&project)
+                    .unwrap()
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+        assert_eq!(
+            (session.turn_started_at, session.turn_ended_at),
+            (started as u64, None),
+            "A running turn has no end"
+        );
+        let wire = serde_json::to_value(session).unwrap();
+        assert_eq!(wire["turnStartedAt"], started);
+        assert!(wire.get("turnEndedAt").is_none() && !wire.to_string().contains("PRIVATE_COMMAND"));
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{}", json!({"type":"event_msg","timestamp":stamp(started + 9000),"payload":{"type":"task_complete","turn_id":"t1"}})).unwrap();
+        let done = poll(&mut reader, &source, &path);
+        assert_eq!(
+            done.sessions[0].turn_ended_at,
+            Some(started as u64 + 9000),
+            "The elapsed time stops at the terminal event"
+        );
+        assert_eq!(done.sessions[0].workspace, session.workspace);
     }
     #[test]
     fn creation_sources_filter_lists_counts_summaries_and_pet_but_keep_normal_exec_tools() {

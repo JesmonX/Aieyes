@@ -65,7 +65,8 @@ class HarnessProjection(unittest.TestCase):
             data=[(json.dumps(row)+'\n').encode() for row in rows];plain.write_bytes(b''.join(data));packed.write_bytes(b''.join(compressed(line) for line in data))
             before=packed.read_bytes();one=list(h.project(plain,'history'));two=list(h.project(packed,'history'))
             self.assertEqual(one,two);self.assertNotIn('PRIVATE_',json.dumps(two));self.assertEqual(packed.read_bytes(),before)
-            self.assertEqual(two[1]['data']['usage']['inputTokens'],5621)
+            self.assertEqual(next(r for r in two if r.get('type') == 'assistant/message')['data']['usage']['inputTokens'],5621)
+            self.assertTrue(any(r.get('type') == 'step/start' for r in two), 'History retains request-start timing without content')
             self.assertEqual([r['kind'] for r in h.session(packed,{})['events']],['identity','start','thinking','complete'])
 
     def test_history_wire_is_cached_retried_and_retains_session_header_across_batches(self):

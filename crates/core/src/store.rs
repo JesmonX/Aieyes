@@ -1502,7 +1502,12 @@ impl Store {
             None
         };
         let settings = self.settings()?;
-        let (mut d, pending) = crate::usage_cache::read(self, f, summary)?;
+        let (mut d, mut pending) = crate::usage_cache::read(self, f, summary)?;
+        if !summary {
+            let (comparison, previous) = self.period_comparison(f, &d.summary)?;
+            d.comparison = comparison;
+            pending.extend(previous);
+        }
         self.fill_dashboard_status(&mut d, f, &settings, !summary)?;
         if summary {
             d.days.clear();
@@ -1518,6 +1523,46 @@ impl Store {
         }
         let _ = crate::usage_cache::persist(self, pending);
         Ok(d)
+    }
+    /// Compare the selected local natural days with the same number of days just before them,
+    /// using the same Agent, account, source and model filters. "All" has no previous period.
+    fn period_comparison(
+        &self,
+        f: &Filter,
+        current: &crate::models::Aggregate,
+    ) -> Result<(
+        Option<crate::models::PeriodComparison>,
+        Vec<crate::usage_cache::Pending>,
+    )> {
+        if matches!(f.date_range, Some(crate::models::DateRange::All)) {
+            return Ok((None, vec![]));
+        }
+        let bounds = crate::usage_cache::date_bounds(self, f, false)?;
+        let length = (bounds.end - bounds.start).num_days() + 1;
+        let previous_end = bounds.start - chrono::Duration::days(1);
+        let previous_start = bounds.start - chrono::Duration::days(length);
+        let previous = Filter {
+            date_range: Some(crate::models::DateRange::Custom {
+                start: previous_start.to_string(),
+                end: previous_end.to_string(),
+            }),
+            days: None,
+            estimate_history: None,
+            ..f.clone()
+        };
+        let (d, pending) = crate::usage_cache::read(self, &previous, true)?;
+        Ok((
+            Some(crate::models::PeriodComparison {
+                current: crate::models::PeriodSide::from_summary(bounds.start, bounds.end, current),
+                previous: crate::models::PeriodSide::from_summary(
+                    previous_start,
+                    previous_end,
+                    &d.summary,
+                ),
+                current_open: bounds.end >= chrono::Local::now().date_naive(),
+            }),
+            pending,
+        ))
     }
     pub fn dashboard_status(&self, f: &Filter) -> Result<Value> {
         self.settings()?;

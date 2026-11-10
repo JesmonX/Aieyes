@@ -94,6 +94,17 @@ fn stamp(fields: &[(u64, Wire<'_>)], key: u64) -> Result<i64> {
         .try_into()?)
 }
 
+fn stamp_ms(fields: &[(u64, Wire<'_>)], key: u64) -> Result<u64> {
+    let Some(raw) = data(fields, key) else {
+        return Ok(0);
+    };
+    let f = self::fields(raw)?;
+    number(&f, 1)
+        .checked_mul(1000)
+        .and_then(|ms| ms.checked_add(number(&f, 2) / 1_000_000))
+        .context("Antigravity 时间溢出")
+}
+
 /// Lifecycle timestamps only; never project tool arguments or conversation text.
 pub(crate) fn step_activity_at(raw: &[u8]) -> Option<u64> {
     let fields = fields(raw).ok()?;
@@ -313,9 +324,15 @@ pub fn read_database_detailed(path: &Path) -> Result<DatabaseRead> {
                 inherited: false,
             });
             let id = request.unwrap_or_else(|| format!("step:{index}"));
+            let timing = crate::usage::request_timing(
+                stamp_ms(&f, 1)?,
+                stamp_ms(&f, 8)?.max(stamp_ms(&f, 7)?),
+                "antigravity-request-v1",
+                format!("{session}:{id}"),
+            );
             Ok(Some(
                 json!({"id":id,"sessionId":session,"timestamp":end,"intervalStart":start,
-                "intervalEvidence":"antigravity-step-v1","model":model,"tokens":tokens,"inheritance":inheritance}),
+                "intervalEvidence":"antigravity-step-v1","requestTiming":timing,"model":model,"tokens":tokens,"inheritance":inheritance}),
             ))
         })();
         match event {

@@ -477,7 +477,7 @@ for line in sys.stdin:
         let savesAfterSSH = try calls("hosts.credentials.save")
         precondition(savesAfterSSH == 3 && model.settings.hosts[0].passwordRef == storedHost.passwordRef, "Switching to key login ignores the hidden password field")
         await model.testNetwork()
-        precondition(model.networkTest?.label == "系统 73 ms")
+        precondition(model.networkTest?.label == "系统代理 · 延迟 73 ms")
         model.settingsDraft.proxy.mode = "direct"
         let proxyCommitted = await model.saveSettingsDraft()
         precondition(proxyCommitted && model.networkTest == nil)
@@ -508,7 +508,7 @@ for line in sys.stdin:
         try Data().write(to: root.appendingPathComponent("release-quotaEstimates-start"))
         let started = await sampling.value
         precondition(started && model.estimateBusy.isEmpty && !model.isPinned)
-        precondition(model.runningEstimates.count == 1 && model.samplingSummary.contains("采样中"))
+        precondition(model.runningEstimates.count == 1 && model.samplingSummary.contains("额度估值正在积累样本"))
         model.selectedAccount = "deepseek:fixture"
         precondition(model.runningEstimates.count == 1, "Menu sampling badge must not depend on usage filters")
         let restarting = Task { await model.performEstimate("restart", accountKey: estimate.accountKey, params: ["id": estimate.id]) }

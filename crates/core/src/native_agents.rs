@@ -384,6 +384,20 @@ pub fn parse_dsh(source: &Source, state: &mut ParseState, row: &Value) -> Option
         }
         "session/end-seed" => {
             state.first_inherited_count = false;
+            state.request_starts.clear();
+            None
+        }
+        "step/start" => {
+            if state.first_inherited_count || row["_aieyesInherited"] == true {
+                return None;
+            }
+            if let (Some(turn), Some(step), Some(start)) = (
+                row["data"]["turn"].as_u64(),
+                row["data"]["step"].as_u64(),
+                row["time"].as_u64(),
+            ) {
+                crate::usage::remember_request(state, format!("dsh:{turn}:{step}"), start);
+            }
             None
         }
         "assistant/message" => {
@@ -417,14 +431,30 @@ pub fn parse_dsh(source: &Source, state: &mut ParseState, row: &Value) -> Option
             } else {
                 identity
             };
-            normalized(
+            let mut event = normalized(
                 source,
                 state,
                 identity,
                 millis(&row["time"])?,
                 route["model"].as_str()?,
                 tokens,
-            )
+            )?;
+            if !state.inherited_usage
+                && let (Some(turn), Some(step), Some(end)) = (
+                    data["turn"].as_u64(),
+                    data["step"].as_u64(),
+                    row["time"].as_u64(),
+                )
+                && let Some(start) = state.request_starts.get(&format!("dsh:{turn}:{step}"))
+            {
+                event.output_timing = crate::usage::request_timing(
+                    *start,
+                    end,
+                    "deepseek-harness-request-v1",
+                    format!("{}:{turn}:{step}", state.session_id),
+                );
+            }
+            Some(event)
         }
         _ => None,
     }
@@ -890,4 +920,43 @@ fn codebuddy(source: &Source, state: &mut ParseState, row: &Value) -> Option<Usa
         });
     }
     Some(event)
+}
+
+#[cfg(test)]
+mod request_timing_tests {
+    use super::*;
+    #[test]
+    fn harness_request_clock_matches_both_turn_and_step() {
+        let source = Source {
+            provider: "deepseek-harness".into(),
+            ..Default::default()
+        };
+        let mut state = ParseState {
+            session_id: "s".into(),
+            ..Default::default()
+        };
+        for (step, time) in [(1, 1_700_000_000_000u64), (2, 1_700_000_001_000)] {
+            parse_dsh(
+                &source,
+                &mut state,
+                &json!({"type":"step/start","time":time,"data":{"turn":1,"step":step}}),
+            );
+        }
+        let mut row = json!({"type":"assistant/message","seq":3,"time":1700000002000u64,"data":{"turn":1,"step":1,"message":{"source":{"model":"deepseek-test"}},"usage":{"inputTokens":10,"outputTokens":40}}});
+        assert_eq!(
+            parse_dsh(&source, &mut state, &row)
+                .unwrap()
+                .output_timing
+                .unwrap()
+                .duration_ms,
+            2000
+        );
+        row["data"]["turn"] = json!(2);
+        assert!(
+            parse_dsh(&source, &mut state, &row)
+                .unwrap()
+                .output_timing
+                .is_none()
+        );
+    }
 }

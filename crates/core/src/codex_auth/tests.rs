@@ -653,6 +653,7 @@ for line in sys.stdin:
         let a = auth("one", "team", "SECRET_REFRESH");
         rpc.login_external(&a).unwrap();
         let m = crate::wakeups::Manifest {
+            source_id: "s".into(),
             codex_profile_id: Some("home:fixture".into()),
             version: 1,
             id: "wake".into(),
@@ -753,6 +754,7 @@ fn shared_history_totals_survive_and_profile_quotas_stay_visible() {
         inheritance: None,
         interval_start: None,
         interval_evidence: String::new(),
+        output_timing: None,
         agent: String::new(),
     };
     store.put_event(&event, &[], &settings).unwrap();

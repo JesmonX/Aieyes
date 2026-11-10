@@ -24,6 +24,7 @@ mod passive_window;
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod pet_frames;
 mod phase_colors;
+mod session_focus;
 mod session_sounds;
 mod updates;
 
@@ -395,6 +396,7 @@ fn main() {
         engine_call,
         notifications::notifications_info,
         session_sounds::session_sounds_preview,
+        session_focus::focus_session,
         notifications::notifications_test,
         select_local_path,
         check_local_path,

@@ -53,7 +53,7 @@ function fixture(){
       if(surface==='index.html'){
         await page.evaluate(()=>{state.page='settings';state.settingsTab='general';state.generalTab='network';renderSettings();});
         await page.locator('#field-appMode').selectOption('custom');await page.locator('#field-appHost').fill('127.0.0.1');await page.locator('#field-appPort').fill('7890');
-        await page.locator('#app-proxy-test').click();await page.waitForFunction(()=>document.querySelector('#app-proxy-result').textContent==='代理 73 ms');
+        await page.locator('#app-proxy-test').click();await page.waitForFunction(()=>document.querySelector('#app-proxy-result').textContent==='代理 · 延迟 73 ms');
         const probe=await page.evaluate(()=>feature.calls.find(c=>c.args?.method==='network.test').args.params);assert.equal(probe.proxy.url,'http://127.0.0.1:7890');assert.deepEqual(probe.urls,['https://fixture.invalid/a','https://fixture.invalid/b']);
         await page.evaluate(()=>feature.unstable=true);await page.locator('#app-proxy-test').click();await page.waitForFunction(()=>document.querySelector('#app-proxy-result').textContent==='连接不稳定');
         await page.evaluate(()=>{renderSettings();state.lastQuota=12345;});
@@ -91,7 +91,7 @@ function fixture(){
         await page.evaluate(()=>{runScheduledRefreshes();});assert.equal(await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='quotas.refresh').length),before);
         await page.evaluate(()=>feature.emit('operations:busy',{operationId:'other-window',busy:false}));
       }else{
-        await page.waitForFunction(()=>document.querySelector('#activity').textContent.includes('出站 · 系统 73 ms'));assert(await page.locator('#panel-update .update-badge').isVisible());assert(!await page.locator('#panel-pin').isVisible());
+        await page.waitForFunction(()=>document.querySelector('#activity').textContent.includes('网络：系统代理 · 延迟 73 ms'));assert(await page.locator('#panel-update .update-badge').isVisible());assert(!await page.locator('#panel-pin').isVisible());
         await page.locator('#panel-update').click();await page.waitForFunction(()=>feature.calls.some(c=>c.command==='updates_panel_check'));assert(await page.locator('#panel-update .update-badge').isVisible());
         await page.locator('#panel-more > summary').click();assert(await page.locator('#panel-pin').isVisible());await page.locator('#panel-more > summary').click();
       }

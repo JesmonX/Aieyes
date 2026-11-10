@@ -174,6 +174,42 @@ typealias Host = Aieyes.Host
         precondition(keychainStatus.result == "denied" && keychainStatus.available == false)
         let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
         let dashboard = try JSONDecoder().decode(Dashboard.self, from: data)
+        // The core's default "today" range compares with all of yesterday and is still open.
+        precondition(dashboard.comparison?.currentOpen == true && dashboard.comparison?.current.start == dashboard.comparison?.current.end, "Core comparison decodes")
+        var period = PeriodComparison(current: PeriodSide(start: "2026-11-03", end: "2026-11-09", total: 200, cost: 2, pricedTokens: 200, recordCount: 7), previous: PeriodSide(start: "2026-10-27", end: "2026-11-02", total: 100, cost: 4, pricedTokens: 100, recordCount: 7), currentOpen: true)
+        precondition(PeriodChange.make(period, cost: false)?.text == "较前 7 天 ↑100%" && PeriodChange.make(period, cost: false)?.direction == .up)
+        precondition(PeriodChange.make(period, cost: true)?.text == "较前 7 天 ↓50%" && PeriodChange.make(period, cost: true)?.note == "")
+        for (currentComplete, previousComplete) in [(false, true), (true, false), (false, false)] {
+            period.current.pricingComplete = currentComplete; period.previous.pricingComplete = previousComplete
+            precondition(PeriodChange.make(period, cost: true)?.text == "较前 7 天 ↓50%" && PeriodChange.make(period, cost: false)?.text == "较前 7 天 ↑100%", "Compare available costs even with unmapped models")
+        }
+        period.previous.total = 0
+        precondition(PeriodChange.make(period, cost: false)?.text == "上一周期为 0", "Recorded zero is not missing")
+        period.previous.recordCount = 0
+        precondition(PeriodChange.make(period, cost: false)?.text == "上一周期无记录")
+        precondition(PeriodChange.make(nil, cost: false) == nil, "All has no comparison")
+        let today = PeriodComparison(current: PeriodSide(start: "2026-11-09", end: "2026-11-09", total: 5, recordCount: 1), previous: PeriodSide(start: "2026-11-08", end: "2026-11-08", total: 5, recordCount: 1), currentOpen: true)
+        precondition(PeriodChange.make(today, cost: false)?.text == "较昨日全天 持平")
+        let trend = ["2026-11-02", "2026-11-03", "2026-11-09"].map { key -> Aggregate in var row = Aggregate(); row.key = key; row.total = 1; return row }
+        precondition(PeriodChange.series(trend, period, cost: false).count == 2, "Sparklines use only the selected days")
+        // Integration matrix: contract support first, then configuration.
+        var capabilities = Settings()
+        precondition(capabilities.capabilityState("cursor", "history") == .unsupported, "Cursor private history is not a history source")
+        precondition(capabilities.capabilityState("custom", "sessions") == .unsupported && capabilities.capabilityState("antigravity", "api") == .unsupported)
+        precondition(capabilities.capabilityState("codex", "history") == .setup)
+        precondition(CapabilityMatrix.label(.ready) == "已启用" && CapabilityMatrix.label(.setup) == "支持" && CapabilityMatrix.label(.unneeded) == "无需")
+        for provider in ["zcode", "kimi", "opencode"] { precondition(capabilities.capabilityState(provider, "wakeup") == .unsupported) }
+        for provider in ["qoder", "kiro", "deepseek", "custom"] { precondition(capabilities.capabilityState(provider, "wakeup") == .unneeded) }
+        var customQuota = try JSONDecoder().decode(Quota.self, from: Data(#"{"provider":"custom","sourceId":"custom","accountId":"a","name":"Custom","updatedAt":1,"origin":"live","windows":[{"id":"five","name":"5h","windowMinutes":300,"usedPercent":0}]}"#.utf8))
+        precondition(capabilities.capabilityState("custom", "wakeup", quotas: [customQuota]) == .unsupported)
+        precondition(capabilities.capabilityState("kiro", "wakeup", quotas: [customQuota]) == .unneeded)
+        customQuota.windows[0].windowMinutes = CoreContract.weekMinutes
+        precondition(capabilities.capabilityState("custom", "wakeup", quotas: [customQuota]) == .unneeded)
+
+        var codexSource = AgentSource(); codexSource.provider = "codex"; codexSource.path = "~/.codex"; codexSource.accountId = "a"
+        capabilities.sources = [codexSource]
+        precondition(capabilities.capabilityState("codex", "history") == .ready && capabilities.capabilityState("codex", "sessions") == .ready && capabilities.capabilityState("codex", "wakeup") == .ready)
+        precondition(capabilities.capabilityState("codex", "quota") == .setup && capabilities.capabilityState("kimi", "history") == .setup)
         var labeledDashboard = dashboard
         labeledDashboard.modelDisplayNames = ["qfmodel": "Qwen3.8-Flash", "dfmodel": "DeepSeek-Flash"]
         precondition(labeledDashboard.modelName("qfmodel") == "Qwen3.8-Flash")

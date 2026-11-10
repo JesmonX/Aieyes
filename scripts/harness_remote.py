@@ -117,6 +117,9 @@ async function main(){
   if(v.type==='session/end-seed'){seeded=false;if(mode==='history')await emit({type:v.type});return;}
   const d=v.data&&typeof v.data==='object'?v.data:{};
   if(mode==='history'){
+   if(v.type==='step/start'){
+    await emit({type:v.type,seq:number(v.seq),time:number(v.time),data:{turn:number(d.turn),step:number(d.step)}});return;
+   }
    if(v.type!=='assistant/message')return;
    const source=d.message?.source||{},u=d.usage||{},usage={};
    for(const k of ['inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','reasoningTokens','totalTokens']){const n=number(u[k]);if(n!==undefined)usage[k]=n;}

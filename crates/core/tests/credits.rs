@@ -73,6 +73,7 @@ fn event(store: &Store, q: &QuotaSnapshot, model: &str, category: &str, id: &str
         inheritance: None,
         interval_start: Some(q.updated_at),
         interval_evidence: String::new(),
+        output_timing: None,
         agent: String::new(),
     };
     store

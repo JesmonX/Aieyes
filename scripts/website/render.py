@@ -55,13 +55,12 @@ for source in (ROOT / "apps/macos/Sources/Aieyes").glob("*.swift"):
     if source.name == "MainWindowView.swift":
         # cacheDisplay cannot draw the split view's floating glass sidebar. Lay out the same two columns in
         # an HStack and draw the sidebar with the app's own navigation buttons and group labels.
-        for old, new in [("NavigationSplitView {", "HStack(spacing: 0) {"),
-                         (".navigationSplitViewColumnWidth(min:collapsed ? 62 : 190,ideal:collapsed ? 62 : 214,max:collapsed ? 62 : 260)", ""),
-                         ("} detail: {", "Divider()"), (".navigationSplitViewStyle(.balanced).toolbar(removing:.sidebarToggle)", ""),
-                         ("if collapsed {\n                    ScrollView { VStack(spacing:4) {\n                        ForEach(monitoring",
-                          "if true {\n                    ScrollView { VStack(alignment: .leading, spacing:4) {\n                        groupLabel(L(\"监测\"))\n                        ForEach(monitoring"),
-                         ("Divider()\n                        ForEach(configuration", "groupLabel(L(\"配置\"))\n                        ForEach(configuration"),
-                         ("    private func navigationButton(", "    private func groupLabel(_ text: String) -> some View { Text(text).font(AppFont.caption).foregroundStyle(.secondary).padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 3) }\n    private func navigationButton(")]:
+        for old, new in [("NavigationSplitView(columnVisibility: columnVisibility) {", "HStack(spacing: 0) {"),
+                         (".navigationSplitViewColumnWidth(min: 190, ideal: 214, max: 260)", ""),
+                         (".toolbar(removing: .sidebarToggle)", ""),
+                         ("} detail: {", "Divider()"), ("}.navigationSplitViewStyle(.balanced)", "}"),
+                         # The sidebar list's source-list material is not captured either; draw a plain list.
+                         ("}.listStyle(.sidebar)", "}.listStyle(.plain).scrollContentBackground(.hidden)")]:
             assert text.count(old) == 1, old
             text = text.replace(old, new)
     if source.name == "AieyesApp.swift":

@@ -37,10 +37,22 @@ N 同时取 500 和 1000。余额先做精确十进制相减；至少消耗 5 cr
 
 任务列表先展示，各任务独立读取状态和历史；慢任务不阻塞其他任务编辑，操作成功只清除该操作对应的旧错误。修改账户前置命令后，已部署任务在后台同步并保留启停状态；离线或同步失败的任务显示待同步及重试入口。同步使用已部署版本，保留尚未部署的草稿；待同步任务在启用或立即运行前会先重试同步，失败时继续保持待同步。
 
+### 唤醒时间推荐
+
+编辑器在时刻列表下显示推荐，例如“你通常 09:10 开始使用，建议 06:15 唤醒，5h 窗口约 11:15 重置”。规则：
+
+- 样本是所选来源在目标机器时区下最近 30 个完整自然日（昨天及之前 29 天）的用量记录；今天不计入。共享 Codex 来源按来源整体统计，不按账户档案拆分，界面会说明。
+- 每个本地日期取第一次使用时间，取中位数（偶数个取中间两值平均），减 180 分钟，四舍五入到最近的 15 分钟，正好居中时向后取，跨午夜回绕。少于 5 个活跃日显示“数据不足”。
+- 排除 Aieyes 自己的唤醒：本机与 SSH 执行器在 `runner.sqlite` 的 `run_identity` 表保存来源及原生会话 ID，仅排除所选来源的确证自动会话；不按时间重叠推断。显式临时 Codex 档案调用不产生可导入历史，记录为已知无历史。旧任务记录或失败调用缺少可靠身份且可能涉及所选来源时，显示“唤醒记录缺少会话身份”，不提供可能被自动用量污染的推荐。其他来源的记录不影响所选来源。旧部署需更新后开始积累新身份记录；额度与身份探测不调用模型。
+- 时区按历史日期套用规则：本机用系统时区；SSH 目标由新增的 `runs` 远程操作报告 IANA 名称（`TZ`、`/etc/localtime` 或 `/etc/timezone`），名称无法识别时只接受全年固定偏移。仍无法确定时显示“无法确定目标机器时区”。
+- “采用”只修改草稿：已有相同时刻时不重复；新任务里尚未编辑过的默认 08:00 会被替换，其他情况追加。不保存、不部署。
+
+接口为只读的 `wakeups.suggest {sourceId, codexProfileId?}`，返回 `{typicalStart, suggested, resetAt, days, excludedSessions, timezone, from, to}` 或 `{insufficient, reason: days|timezone|wakeupRuns|wakeupIdentity}`。`codexProfileId` 只用于核验来源与账户绑定。核心依赖 `jiff` 读取时区规则（Unix 用系统 zoneinfo，Windows 用内置数据）。
+
 ## 接口和数据
 
 - `creditEstimates.start/stop/get/list/restart` 共用周额归因和计算机制；dashboard 增加 `creditEstimates`。
-- `wakeups.save/list/probe/deploy/enable/disable/run/status/history/remove/delete`；草稿与部署配置分开保存。
+- `wakeups.save/list/probe/suggest/deploy/enable/disable/run/status/history/remove/delete`；草稿与部署配置分开保存。
 - SQLite 新增 credits 采样表；旧快照和事件兼容。执行历史只保存状态、时刻、模型及 effort，不记录 CLI 输出或凭据。
 
 ## 验证范围

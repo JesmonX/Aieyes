@@ -11,7 +11,10 @@ function historyFixture(){
     const p=args.params??{},r=p.dateRange;rangeQueries.push(structuredClone(p));
     const selected=r?.kind==='all'?days:r?.kind==='custom'?days.filter(d=>d.key>=r.start&&d.key<=r.end):days.slice(-(p.days??1));
     const summary={tokens:{input:selected.length,output:0,cacheRead:0,cacheWrite:0},total:selected.length,cost:selected.length*0.01,pricedTokens:selected.length,events:selected.length};
-    return {generatedAt:Date.now()/1000,summary,quotas:[],sources:[],pricingGaps:[],models:[{...summary,key:'fixture/model'}],modelOptions:['fixture/model'],trendDays:selected,dayModels:selected.map(d=>({day:d.key,model:'fixture/model',usage:d})),heatmap:selected};
+    const side=(rows,start,end)=>({start,end,total:rows.length,cost:rows.length*0.01,pricedTokens:rows.length,recordCount:rows.length,pricingComplete:true});
+    const first=days.indexOf(selected[0]),previous=days.slice(Math.max(0,first-selected.length),first);
+    const comparison=r?.kind==='all'||!selected.length?undefined:{current:side(selected,selected[0].key,selected.at(-1).key),previous:side(previous,previous[0]?.key??'2022-12-25',previous.at(-1)?.key??'2022-12-31'),currentOpen:false};
+    return {generatedAt:Date.now()/1000,summary,quotas:[],sources:[],pricingGaps:[],models:[{...summary,key:'fixture/model'}],modelOptions:['fixture/model'],trendDays:selected,dayModels:selected.map(d=>({day:d.key,model:'fixture/model',usage:d})),heatmap:selected,comparison};
   };
 }
 (async()=>{
@@ -47,6 +50,23 @@ function historyFixture(){
     assert.equal(await page.locator('#days').inputValue(),'custom');assert.equal(await page.locator('#range-start').inputValue(),'2024-02-28');
     await page.locator('#days').selectOption('7');await page.waitForFunction(()=>state.appliedFilters.days===7&&!state.appliedFilters.dateRange&&!state.dashboardPending);
     assert.equal(await page.locator('#range-start').count(),0);assert.equal(await page.evaluate(()=>rangeQueries.at(-1).dateRange),null);
-    assert.deepEqual(errors,[]);console.log('Date ranges: all/custom/shortcuts, inclusive leap-day controls, invalid input, persistence, lazy years and daily pagination passed');
+    // Previous-period comparison: the same number of natural days just before the selection.
+    assert.match(await page.locator('[data-period-change=tokens]').textContent(),/较前 7 天 持平/);
+    assert.equal(await page.locator('.stat .sparkline polyline').first().evaluate(el=>el.getAttribute('points').split(' ').length),7,'The sparkline uses only the selected days');
+    const kpi=async(metric,comparison)=>{await page.evaluate(([metric,comparison])=>{Object.assign(state.dashboard.comparison,comparison);renderAnalysis();},[metric,comparison]);return page.locator(`[data-period-change=${metric}]`).textContent();};
+    const base=await page.evaluate(()=>structuredClone(state.dashboard.comparison));
+    assert.match(await kpi('tokens',{previous:{...base.previous,total:3}}),/较前 7 天 ↑133%/);
+    assert.equal(await page.locator('[data-period-change=tokens]').getAttribute('data-direction'),'up');
+    assert.match(await kpi('tokens',{previous:{...base.previous,total:0,recordCount:2}}),/^上一周期为 0$/,'Zero recorded usage is not a missing period');
+    assert.match(await kpi('tokens',{previous:{...base.previous,total:0,recordCount:0}}),/上一周期无记录/);
+    for (const [currentComplete,previousComplete] of [[false,true],[true,false],[false,false]]) {
+      assert.match(await kpi('cost',{current:{...base.current,pricingComplete:currentComplete},previous:{...base.previous,cost:base.current.cost*2,pricingComplete:previousComplete}}),/^较前 7 天 ↓50%$/,'Compare available costs even when either period has unmapped models');
+    }
+    assert.match(await page.locator('.stat .stat-value').nth(1).textContent(),/\$/,'Incomplete pricing still shows the priced cost');
+    assert.match(await kpi('tokens',{current:{...base.current,start:base.current.end},previous:{...base.previous,start:base.previous.end,total:7},currentOpen:true}),/^较昨日全天 持平$/);
+    assert.equal(await page.locator('.stat .sparkline').count(),0,'One selected day draws no sparkline');
+    await page.locator('#days').selectOption('all');await page.waitForFunction(()=>state.appliedFilters.dateRange?.kind==='all'&&!state.dashboardPending);
+    assert.equal(await page.locator('[data-period-change]').count(),0,'All has no previous period');
+    assert.deepEqual(errors,[]);console.log('Date ranges: all/custom/shortcuts, inclusive leap-day controls, invalid input, persistence, lazy years, daily pagination and previous-period KPIs passed');
   }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exit(1);});

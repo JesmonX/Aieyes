@@ -769,7 +769,7 @@ struct AccountFlowResult {
     var samplingSummary: String {
         let active = runningEstimates.filter { $0.status == "active" }.count
         let pending = runningEstimates.count - active
-        return [(active > 0 ? L("{0} 项采样中" , active) : nil), (pending > 0 ? L("{0} 项待确认" , pending) : nil)].compactMap { $0 }.joined(separator: " · ")
+        return [(active > 0 ? L("{0} 项额度估值正在积累样本" , active) : nil), (pending > 0 ? L("{0} 项待确认" , pending) : nil)].compactMap { $0 }.joined(separator: " · ")
     }
     @Published var panelWidth: CGFloat = 450
     @Published var panelHeight: CGFloat = 720
@@ -1352,7 +1352,7 @@ struct AccountFlowResult {
             let result: PriceReferenceResult = try await engine.call("prices.reference", params: params)
             acceptConfiguration(result.settings)
             await reload()
-            settingsMessage = L("已智能引用 {0} 个模型；{1} 个未匹配；{2} 个已有价格或映射。仅供估值，历史成本可点“保存并重算”更新。" , result.matched, result.unmatched.count, result.skipped)
+            settingsMessage = L("已智能引用 {0} 个模型；{1} 个未匹配；{2} 个已有价格或映射。历史成本可点“保存并重算”更新。" , result.matched, result.unmatched.count, result.skipped)
         } catch { settingsMessage = error.localizedDescription }
     }
     func savePrice(_ price: ModelPrice) async -> Bool {

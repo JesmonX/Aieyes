@@ -156,3 +156,29 @@ struct WakeStatus: Decodable { var installed: Bool, enabled: Bool, timezone: Str
         for reader in taskEngines.values { reader.stop() }
     }
 }
+
+/// A wakeup time three hours before the usual start of work, or why there is none.
+struct WakeSuggestion: Decodable, Equatable {
+    var suggested: String?, typicalStart: String?, resetAt: String?, timezone: String?
+    var days: Int?, insufficient: Bool?, reason: String?
+    static func text(_ value: WakeSuggestion?, loading: Bool, shared: Bool) -> String {
+        if loading { return L("正在根据最近 30 天用量计算推荐时间…") }
+        guard let value else { return "" }
+        if value.insufficient == true {
+            switch value.reason {
+            case "days": return L("数据不足：最近 30 个完整自然日只有 {0} 个活跃日", value.days ?? 0)
+            case "timezone": return L("无法确定目标机器时区，暂不推荐")
+            case "wakeupIdentity": return L("唤醒记录缺少会话身份，无法排除自动用量，暂不推荐")
+            case "wakeupRuns": return L("无法读取目标机器的唤醒记录，暂不推荐")
+            default: return L("暂无推荐")
+            }
+        }
+        return L("你通常 {0} 开始使用，建议 {1} 唤醒，5h 窗口约 {2} 重置（{3} 时区，{4} 个活跃日，按所选来源整体统计{5}）", value.typicalStart ?? "—", value.suggested ?? "—", value.resetAt ?? "—", value.timezone ?? "—", value.days ?? 0, shared ? L("；共享 Codex 来源不按账户档案拆分") : "")
+    }
+    /// Draft-only change: never duplicates a time; replaces only an untouched default 08:00.
+    static func apply(_ time: String, to times: [String], edited: Bool) -> [String] {
+        if times.contains(time) { return times }
+        if !edited && times == ["08:00"] { return [time] }
+        return times + [time]
+    }
+}

@@ -20,6 +20,42 @@ from script_loader import load_script
 wake = load_script('wake', 'remote_wakeup.py')
 
 class WakeTests(unittest.TestCase):
+    def test_runs_report_every_aieyes_run_since_a_time_and_the_zone(self):
+        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {'HOME': home, 'TZ': 'Europe/Berlin'}):
+            root = pathlib.Path(home) / '.local/share/aieyes-wakeups' / ('a' * 20)
+            request = {'action': 'runs', 'root': str(root), 'since': 100}
+            self.assertEqual(wake.manage(request)['runs'], [], 'No runner database yet')
+            root.mkdir(parents=True)
+            with closing(sqlite3.connect(root / 'runner.sqlite')) as db:
+                db.execute('CREATE TABLE runs(id INTEGER PRIMARY KEY,task TEXT,occurrence TEXT UNIQUE,started INTEGER,ended INTEGER,status TEXT,model TEXT,effort TEXT)')
+                db.executemany('INSERT INTO runs(task,occurrence,started,ended,status) VALUES(?,?,?,?,?)', [('wake-a','1',50,60,'success'),('wake-a','2',150,170,'success'),('wake-b','3',200,None,'running'),('wake-b','4',300,None,'skipped-overlap')])
+                db.commit()
+            result = wake.manage(request)
+            self.assertEqual(result['runs'], [[150, 170], [200, None]], 'All tasks, since the time, without overlap skips')
+            self.assertEqual(result['zone'], 'Europe/Berlin')
+            self.assertIsNone(result['fixedOffset'], 'A zone with daylight saving time has no fixed offset')
+            with self.assertRaises(ValueError):
+                wake.manage(dict(request, root=str(pathlib.Path(home) / 'elsewhere')))
+    def test_run_identity_is_source_scoped_and_contains_no_model_content(self):
+        manifest = dict(sourceId='claude-source', provider='claude', configPath='/fixture')
+        identity = wake.identity_evidence(manifest, '{"session_id":"native-session","result":"PRIVATE"}')
+        self.assertEqual(identity['sessionIds'], ['native-session'])
+        self.assertTrue(identity['complete'])
+        self.assertNotIn('PRIVATE', json.dumps(identity))
+        antigravity = dict(sourceId='agy-source', provider='antigravity', configPath='/fixture')
+        identity = wake.identity_evidence(antigravity, '{"session_id":"foreign"}\n{"result":{"cascadeId":"native"}}')
+        self.assertEqual(identity['sessionIds'], ['native'], 'Only native cascade IDs prove Antigravity ownership')
+        self.assertFalse(wake.identity_evidence(manifest)['complete'])
+        self.assertTrue(wake.identity_evidence(manifest, complete=True)['complete'])
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            with closing(sqlite3.connect(root / 'runner.sqlite')) as db:
+                db.executescript("CREATE TABLE runs(id INTEGER PRIMARY KEY,task TEXT,started INTEGER,ended INTEGER,status TEXT); CREATE TABLE run_identity(run_id INTEGER PRIMARY KEY,payload TEXT)")
+                db.execute("INSERT INTO runs VALUES(1,'wake-test',100,200,'success')")
+                db.execute('INSERT INTO run_identity VALUES(1,?)', (json.dumps(identity),))
+                db.commit()
+            self.assertEqual(wake.runs(root, 0)['identityRecords'], [identity])
+
     def test_next_run_uses_real_full_minutes(self):
         start = datetime.datetime.fromisoformat('2026-01-15T07:59:40+00:00').timestamp()
         with patch.object(wake.time, 'localtime', time.gmtime):

@@ -54,6 +54,8 @@ pub struct Provider {
     pub agent_id: &'static str,
     /// Per-machine history sources ("machines" capability); balance-only ids have none.
     pub machines: bool,
+    /// Live session status ("sessions" capability), read by the session monitor.
+    pub sessions: bool,
 }
 '''
 rust += '#[rustfmt::skip]\npub const METHODS: &[Method] = &[\n'
@@ -66,6 +68,7 @@ for p in providers:
     fields += ', ' + ', '.join(f'{k}: {str(p[v]).lower()}' for k, v in [('requires_path','requiresPath'),('wakeup','wakeup'),('discover_local','discoverLocal')])
     fields += f', agent_id: {q(p.get("agent", p["id"]))}'
     fields += f', machines: {str("machines" in p.get("capabilities", [])).lower()}'
+    fields += f', sessions: {str("sessions" in p.get("capabilities", [])).lower()}'
     rust += f'    Provider {{ {fields} }},\n'
 rust += '];\n'
 for name, values in [('PROVIDER_IDS',[p['id'] for p in providers]),('EXCLUDED_FS_TYPES',table['filesystems']['excludedTypes']),('EXCLUDED_FS_PATHS',table['filesystems']['excludedPaths'])]:

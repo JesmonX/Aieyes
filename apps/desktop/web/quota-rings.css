@@ -81,6 +81,12 @@ button.quota-tile:is(:hover,:focus-visible) .ring-swap-time { display:none; }
 .ring-center .provider-mark { --provider-mark-size:calc(var(--ring-size,48px) / 2); }
 .tile-times { display:grid; gap:3px; min-width:0; font-size:var(--font-entry); line-height:18px; font-weight:var(--weight-medium); }
 .tile-time { display:flex; align-items:center; white-space:nowrap; min-width:0; }
+.tile-time.meter-credit-ratio { display:block; white-space:normal; overflow-wrap:anywhere; }
+.meter-reset { color:var(--muted); }
+.meter-credit-value { max-width:100%; overflow-wrap:anywhere; }
+.meter-credit-value .ring-swap-time { max-width:100%; }
+.quota-tile[data-provider=kiro] .tile-body { grid-template-columns:auto minmax(0,1fr); }
+.quota-tile[data-provider=kiro] .tile-extras:empty { display:none; }
 .tile-amount { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 .tile-sub { color:var(--faint); font-size:var(--font-caption); font-weight:var(--weight-regular); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .quota-tile[data-style=tile] .tile-extras { display:grid; justify-items:end; gap:3px; min-width:0; overflow:hidden; white-space:nowrap; color:var(--faint); font-size:var(--font-caption); line-height:18px; }

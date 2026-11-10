@@ -189,7 +189,7 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
       await page.locator('#quota-close').click();
 
       await page.locator('[data-page=servers]').click(); await page.waitForFunction(() => !state.serverBusy);
-      await page.locator('[data-server-filter=errors]').click();
+      await page.locator('[data-server-view=errors]').click();
       assert.equal(await page.locator('.server-card').count(), 0);
       assert.equal(await page.locator('#add-first-host').count(), 0);
       await page.locator('#clear-server-filter').click();

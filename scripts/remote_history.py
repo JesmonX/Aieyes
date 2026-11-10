@@ -118,6 +118,10 @@ def _agy_fields(data):
 def _agy_message(fields, number):
     return _agy_fields(fields.get(number, [b''])[0])
 
+def _agy_stamp_ms(fields, number):
+    value = _agy_message(fields, number)
+    return value.get(1, [0])[0] * 1000 + value.get(2, [0])[0] // 1000000
+
 def _agy_text(fields, number):
     value = fields.get(number, [b''])[0]
     return value.decode('utf-8') if isinstance(value, bytes) else ''
@@ -196,8 +200,10 @@ def _agy_iter(path):
                     yield {'issue': dict(step=index, code='unknownModel', message='模型身份未知；已保留 Token，暂不计价')}
                 request = _agy_text(usage, 7) or _agy_text(usage, 11)
                 identity = request or 'step:' + str(index)
+                duration_ms = max(_agy_stamp_ms(row, 8), _agy_stamp_ms(row, 7)) - _agy_stamp_ms(row, 1)
+                timing = dict(durationMs=duration_ms, evidence='antigravity-request-v1', requestId=f'{session}:{identity}') if duration_ms > 0 else None
                 yield {'event': dict(id=identity, sessionId=session, timestamp=end, intervalStart=start,
-                                   intervalEvidence='antigravity-step-v1', model=model, tokens=tokens,
+                                   intervalEvidence='antigravity-step-v1', requestTiming=timing, model=model, tokens=tokens,
                                    inheritance=dict(origin=f'request:{request}:{start}:{end}',inherited=False) if request else None)}
             except (ValueError, TypeError, IndexError, OverflowError) as error:
                 yield {'issue': dict(step=index, code='invalidRecord', message=str(error))}

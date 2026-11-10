@@ -579,6 +579,7 @@ pub(crate) fn reconcile(
                     inheritance: None,
                     interval_start: Some(created_at),
                     interval_evidence: "qoder-state-v1".into(),
+                    output_timing: None,
                     agent: String::new(),
                 };
                 report.changed += u64::from(put_residual(store, &event, prices, settings)?);

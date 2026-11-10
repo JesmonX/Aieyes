@@ -35,7 +35,7 @@ function fixture(){
   assert.equal(await card.locator('.quota-email').getAttribute('title'),'a.very.long.account.name.for.layout.verification@example.test');
   const pref=await page.evaluate(()=>JSON.parse(localStorage.getItem('aieyes.panel.accounts.v2')));assert.deepEqual(pref.providers.antigravity.keys,['antigravity:legacy-shared']);assert(!pref.providers.agy);
   assert.equal(await card.locator('.quota-disclosure').evaluate(el=>el.open),false);
-  for(const group of ['Geminis','C&Gs','Future Models'])assert.equal(await card.locator('.agy-group').filter({hasText:group}).isVisible(),true,`Folded card retains ${group}`);
+  for(const group of ['Gemini Models','Claude and GPT Models','Future Models','Gemini 4 Argon'])assert.equal(await card.locator('.agy-group').filter({hasText:group}).isVisible(),true,`Folded card retains ${group}`);
   if(panel){assert.equal(await page.evaluate(()=>state.accountKey),'','Panel clears legacy account filters');assert.equal(await page.evaluate(()=>state.provider),'antigravity');assert.equal(await card.locator('details').evaluate(e=>e.open),false);await card.locator('.quota-title').click();}
   if(!await card.locator('.quota-disclosure').evaluate(el=>el.open))await card.locator('.quota-title').click();
   assert(await card.evaluate(el=>Math.abs(el.getBoundingClientRect().width-el.closest('.quota-group').getBoundingClientRect().width)<1),'Expanded AGY card fills its single-account provider group');

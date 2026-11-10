@@ -34,6 +34,8 @@ pub struct Provider {
     pub agent_id: &'static str,
     /// Per-machine history sources ("machines" capability); balance-only ids have none.
     pub machines: bool,
+    /// Live session status ("sessions" capability), read by the session monitor.
+    pub sessions: bool,
 }
 #[rustfmt::skip]
 pub const METHODS: &[Method] = &[
@@ -131,6 +133,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "sessions.hooks.repair", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sessions.hooks.status", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sessions.list", lane: Lane::Main, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "sessions.focusTarget", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "settings.get", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "settings.patch", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "settings.save", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
@@ -150,6 +153,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "wakeups.history", lane: Lane::Wakeups, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "wakeups.list", lane: Lane::Wakeups, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "wakeups.probe", lane: Lane::Wakeups, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "wakeups.suggest", lane: Lane::Wakeups, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "wakeups.remove", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "wakeups.run", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "wakeups.save", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
@@ -170,31 +174,31 @@ pub const METHODS: &[Method] = &[
 ];
 #[rustfmt::skip]
 pub const PROVIDERS: &[Provider] = &[
-    Provider { id: "codex", name: "Codex", default_path: "~/.codex", binary: "codex", requires_path: true, wakeup: true, discover_local: true, agent_id: "codex", machines: true },
-    Provider { id: "claude", name: "Claude Code", default_path: "~/.claude", binary: "claude", requires_path: true, wakeup: true, discover_local: true, agent_id: "claude", machines: true },
-    Provider { id: "antigravity", name: "Antigravity", default_path: "~/.gemini/antigravity-cli", binary: "agy", requires_path: false, wakeup: true, discover_local: true, agent_id: "antigravity", machines: true },
-    Provider { id: "deepseek", name: "DeepSeek", default_path: "", binary: "", requires_path: false, wakeup: false, discover_local: false, agent_id: "deepseek", machines: false },
-    Provider { id: "zcode", name: "ZCode", default_path: "~/.zcode", binary: "zcode", requires_path: false, wakeup: false, discover_local: true, agent_id: "zcode", machines: true },
-    Provider { id: "qoder", name: "Qoder", default_path: "~/.qoder", binary: "qodercli", requires_path: false, wakeup: false, discover_local: true, agent_id: "qoder", machines: true },
-    Provider { id: "qoder-cn", name: "Qoder CN", default_path: "~/.qoder-cn", binary: "qoderclicn", requires_path: false, wakeup: false, discover_local: true, agent_id: "qoder-cn", machines: true },
-    Provider { id: "grok", name: "Grok", default_path: "~/.grok", binary: "grok", requires_path: false, wakeup: false, discover_local: true, agent_id: "grok", machines: true },
-    Provider { id: "cursor", name: "Cursor", default_path: "~/.cursor", binary: "agent", requires_path: false, wakeup: false, discover_local: true, agent_id: "cursor", machines: true },
-    Provider { id: "opencode", name: "OpenCode", default_path: "~/.local/share/opencode", binary: "", requires_path: false, wakeup: false, discover_local: true, agent_id: "opencode", machines: true },
-    Provider { id: "kimi", name: "Kimi Code", default_path: "~/.kimi-code", binary: "kimi", requires_path: false, wakeup: false, discover_local: true, agent_id: "kimi", machines: true },
-    Provider { id: "deepseek-harness", name: "DeepSeek", default_path: "~/.dsh", binary: "dsh", requires_path: true, wakeup: false, discover_local: true, agent_id: "deepseek", machines: true },
-    Provider { id: "codebuddy", name: "CodeBuddy", default_path: "~/.codebuddy", binary: "codebuddy", requires_path: true, wakeup: false, discover_local: true, agent_id: "codebuddy", machines: true },
-    Provider { id: "pi", name: "Pi", default_path: "~/.pi/agent", binary: "pi", requires_path: true, wakeup: false, discover_local: true, agent_id: "pi", machines: true },
-    Provider { id: "omp", name: "Oh My Pi", default_path: "~/.omp/agent", binary: "omp", requires_path: true, wakeup: false, discover_local: true, agent_id: "omp", machines: true },
-    Provider { id: "chatgpt-work", name: "ChatGPT Work", default_path: "~/.codex", binary: "", requires_path: false, wakeup: false, discover_local: false, agent_id: "codex", machines: false },
-    Provider { id: "workbuddy", name: "WorkBuddy", default_path: "~/.workbuddy", binary: "", requires_path: false, wakeup: false, discover_local: true, agent_id: "workbuddy", machines: true },
-    Provider { id: "copilot", name: "GitHub Copilot", default_path: "~/.copilot", binary: "copilot", requires_path: false, wakeup: false, discover_local: true, agent_id: "copilot", machines: true },
-    Provider { id: "cline", name: "Cline", default_path: "~/.cline/data", binary: "cline", requires_path: false, wakeup: false, discover_local: true, agent_id: "cline", machines: true },
-    Provider { id: "kilo", name: "Kilo Code", default_path: "~/.local/share/kilo", binary: "kilo", requires_path: false, wakeup: false, discover_local: true, agent_id: "kilo", machines: true },
-    Provider { id: "roo", name: "Roo Code", default_path: "~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline", binary: "", requires_path: false, wakeup: false, discover_local: true, agent_id: "roo", machines: true },
-    Provider { id: "kiro", name: "Kiro", default_path: "~/.kiro", binary: "kiro-cli", requires_path: false, wakeup: false, discover_local: true, agent_id: "kiro", machines: true },
-    Provider { id: "trae", name: "Trae", default_path: "~/Library/Application Support/Trae", binary: "trae-cli", requires_path: false, wakeup: false, discover_local: true, agent_id: "trae", machines: true },
-    Provider { id: "trae-cn", name: "Trae CN", default_path: "~/Library/Application Support/Trae CN", binary: "", requires_path: false, wakeup: false, discover_local: true, agent_id: "trae-cn", machines: true },
-    Provider { id: "custom", name: "自定义", default_path: "~/.aieyes", binary: "", requires_path: true, wakeup: false, discover_local: false, agent_id: "custom", machines: true },
+    Provider { id: "codex", name: "Codex", default_path: "~/.codex", binary: "codex", requires_path: true, wakeup: true, discover_local: true, agent_id: "codex", machines: true, sessions: true },
+    Provider { id: "claude", name: "Claude Code", default_path: "~/.claude", binary: "claude", requires_path: true, wakeup: true, discover_local: true, agent_id: "claude", machines: true, sessions: true },
+    Provider { id: "antigravity", name: "Antigravity", default_path: "~/.gemini/antigravity-cli", binary: "agy", requires_path: false, wakeup: true, discover_local: true, agent_id: "antigravity", machines: true, sessions: true },
+    Provider { id: "deepseek", name: "DeepSeek", default_path: "", binary: "", requires_path: false, wakeup: false, discover_local: false, agent_id: "deepseek", machines: false, sessions: false },
+    Provider { id: "zcode", name: "ZCode", default_path: "~/.zcode", binary: "zcode", requires_path: false, wakeup: false, discover_local: true, agent_id: "zcode", machines: true, sessions: true },
+    Provider { id: "qoder", name: "Qoder", default_path: "~/.qoder", binary: "qodercli", requires_path: false, wakeup: false, discover_local: true, agent_id: "qoder", machines: true, sessions: true },
+    Provider { id: "qoder-cn", name: "Qoder CN", default_path: "~/.qoder-cn", binary: "qoderclicn", requires_path: false, wakeup: false, discover_local: true, agent_id: "qoder-cn", machines: true, sessions: true },
+    Provider { id: "grok", name: "Grok", default_path: "~/.grok", binary: "grok", requires_path: false, wakeup: false, discover_local: true, agent_id: "grok", machines: true, sessions: true },
+    Provider { id: "cursor", name: "Cursor", default_path: "~/.cursor", binary: "agent", requires_path: false, wakeup: false, discover_local: true, agent_id: "cursor", machines: true, sessions: true },
+    Provider { id: "opencode", name: "OpenCode", default_path: "~/.local/share/opencode", binary: "", requires_path: false, wakeup: false, discover_local: true, agent_id: "opencode", machines: true, sessions: true },
+    Provider { id: "kimi", name: "Kimi Code", default_path: "~/.kimi-code", binary: "kimi", requires_path: false, wakeup: false, discover_local: true, agent_id: "kimi", machines: true, sessions: true },
+    Provider { id: "deepseek-harness", name: "DeepSeek", default_path: "~/.dsh", binary: "dsh", requires_path: true, wakeup: false, discover_local: true, agent_id: "deepseek", machines: true, sessions: true },
+    Provider { id: "codebuddy", name: "CodeBuddy", default_path: "~/.codebuddy", binary: "codebuddy", requires_path: true, wakeup: false, discover_local: true, agent_id: "codebuddy", machines: true, sessions: true },
+    Provider { id: "pi", name: "Pi", default_path: "~/.pi/agent", binary: "pi", requires_path: true, wakeup: false, discover_local: true, agent_id: "pi", machines: true, sessions: true },
+    Provider { id: "omp", name: "Oh My Pi", default_path: "~/.omp/agent", binary: "omp", requires_path: true, wakeup: false, discover_local: true, agent_id: "omp", machines: true, sessions: true },
+    Provider { id: "chatgpt-work", name: "ChatGPT Work", default_path: "~/.codex", binary: "", requires_path: false, wakeup: false, discover_local: false, agent_id: "codex", machines: false, sessions: false },
+    Provider { id: "workbuddy", name: "WorkBuddy", default_path: "~/.workbuddy", binary: "", requires_path: false, wakeup: false, discover_local: true, agent_id: "workbuddy", machines: true, sessions: true },
+    Provider { id: "copilot", name: "GitHub Copilot", default_path: "~/.copilot", binary: "copilot", requires_path: false, wakeup: false, discover_local: true, agent_id: "copilot", machines: true, sessions: true },
+    Provider { id: "cline", name: "Cline", default_path: "~/.cline/data", binary: "cline", requires_path: false, wakeup: false, discover_local: true, agent_id: "cline", machines: true, sessions: true },
+    Provider { id: "kilo", name: "Kilo Code", default_path: "~/.local/share/kilo", binary: "kilo", requires_path: false, wakeup: false, discover_local: true, agent_id: "kilo", machines: true, sessions: true },
+    Provider { id: "roo", name: "Roo Code", default_path: "~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline", binary: "", requires_path: false, wakeup: false, discover_local: true, agent_id: "roo", machines: true, sessions: true },
+    Provider { id: "kiro", name: "Kiro", default_path: "~/.kiro", binary: "kiro-cli", requires_path: false, wakeup: false, discover_local: true, agent_id: "kiro", machines: true, sessions: true },
+    Provider { id: "trae", name: "Trae", default_path: "~/Library/Application Support/Trae", binary: "trae-cli", requires_path: false, wakeup: false, discover_local: true, agent_id: "trae", machines: true, sessions: true },
+    Provider { id: "trae-cn", name: "Trae CN", default_path: "~/Library/Application Support/Trae CN", binary: "", requires_path: false, wakeup: false, discover_local: true, agent_id: "trae-cn", machines: true, sessions: true },
+    Provider { id: "custom", name: "自定义", default_path: "~/.aieyes", binary: "", requires_path: true, wakeup: false, discover_local: false, agent_id: "custom", machines: true, sessions: false },
 ];
 #[rustfmt::skip]
 pub const PROVIDER_IDS: &[&str] = &["codex", "claude", "antigravity", "deepseek", "zcode", "qoder", "qoder-cn", "grok", "cursor", "opencode", "kimi", "deepseek-harness", "codebuddy", "pi", "omp", "chatgpt-work", "workbuddy", "copilot", "cline", "kilo", "roo", "kiro", "trae", "trae-cn", "custom"];
@@ -225,7 +229,7 @@ pub const SESSION_SOUND_TONES: &[(&str, &str, &str)] = &[
     ("droplet", "水滴", "droplet"),
     ("pulse", "电子", "pulse"),
 ];
-pub const CONTRACT_HASH: &str = "0189d10a11f31d39054643c0c4725567316f9a2f638249e1926e71ccfbef17fd";
+pub const CONTRACT_HASH: &str = "b0094c0aa8a59d1fe057d1f3ae23386cd3a9a50fabe46454ad7175ab13fe3226";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

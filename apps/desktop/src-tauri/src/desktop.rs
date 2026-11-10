@@ -769,7 +769,9 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                 .map(|s| s.session_sounds)
                 .unwrap_or_default();
             let snapshot = match store.settings() {
-                Ok(settings) => monitor.read(&settings, std::time::SystemTime::now()),
+                Ok(settings) => {
+                    monitor.read_with_usage(&settings, std::time::SystemTime::now(), &store)
+                }
                 Err(_) => Snapshot {
                     unavailable: true,
                     ..Snapshot::default()

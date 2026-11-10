@@ -8,6 +8,8 @@ anyhow = "1.0.104"
 base64 = "0.22.1"
 toml = "1.1.4"
 chrono = { version = "0.4.45", features = ["serde"] }
+# IANA rules for wakeup suggestions on the target machine: system zoneinfo, bundled on Windows.
+jiff = { version = "0.2.35", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls", "socks"] }
 ring = "0.17"
 rusqlite = { version = "0.37.0", features = ["bundled"] }

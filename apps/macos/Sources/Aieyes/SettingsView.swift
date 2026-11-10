@@ -248,7 +248,7 @@ struct SettingsView: View {
             HStack {
                 Text(L("USD / 百万 Token")).font(AppFont.secondary).foregroundStyle(.secondary)
                 Spacer()
-                HelpNote(title: L("智能引用与重算"), text: L("智能引用按 ID、名称和版本匹配，未知供应商优先官方价格；无版本可匹配 latest，未标注 batch 不引用 batch，仅供估值。“保存并重算”更新历史成本。"))
+                HelpNote(title: L("智能引用与重算"), text: L("智能引用按 ID、名称和版本匹配，未知供应商优先官方价格；无版本可匹配 latest，未标注 batch 不引用 batch。“保存并重算”更新历史成本。"))
                 Button(model.repricing ? L("重算中…") : L("保存并重算")) { Task { await model.saveAndReprice() } }.disabled(model.settingsSaving || model.repricing).accessibilityIdentifier("save-and-reprice")
             }
             if !unresolvedPricingGaps.isEmpty {

@@ -15,9 +15,10 @@ function fixture(){
   if(method==='sources.scan'||method==='prices.list')return [];if(method==='quotas.refresh')return [q];
   if(method==='creditEstimates.start'){f.records=[{id:'credit-test',kind:'credits',accountKey:'codex:a',windowId:'credits',windowName:'Credits',sourceIds:['s'],sourceNames:['本机'],status:'active',reason:'',startedAt:now-60,checkpointAt:now,consumedPercent:0,consumedCredits:10,cost:2,totalTokens:100,pricedTokens:100,valuePer500:100,valuePer1000:200,calculationNote:'手动采样估值',prices:[]}];return f.records[0];}
   if(method==='creditEstimates.stop'){f.records[0].status='completed';return f.records[0];}
-  if(method==='accounts.targets')return [{accountKey:'codex:a',accountName:'订阅账户',provider:'codex',sourceId:'s',sourceName:'本机订阅',machineId:'local',machineName:'本机',path:'/fixture',profileId:null,canWake:true}];
+  if(method==='accounts.targets')return f.targets??[{accountKey:'codex:a',accountName:'订阅账户',provider:'codex',sourceId:'s',sourceName:'本机订阅',machineId:'local',machineName:'本机',path:'/fixture',profileId:null,canWake:true}];
   if(method==='codexAuth.reconcile')return {settings,issues:[]};
   if(method==='wakeups.list')return structuredClone(f.tasks);
+  if(method==='wakeups.suggest')return f.suggestion??{typicalStart:'09:10',suggested:'06:15',resetAt:'11:15',days:12,timezone:'Asia/Shanghai',excludedSessions:1};
   if(method==='wakeups.probe')return {models:[{id:'cheap-model',efforts:['low','medium'],referenceCost:0.00015}],recommendedModel:'cheap-model',efforts:['low','medium'],timezone:'CST +0800',message:'按 1000 输入 + 100 输出 Token 推荐'};
   if(method==='wakeups.save'){let r={task:{...params.task,id:params.task.id||'wake-test'},deployment:null};const i=f.tasks.findIndex(r=>r.task.id===params.task.id);if(i>=0){r.deployment=f.tasks[i].deployment;f.tasks[i]=r;}else f.tasks.push(r);return r;}
   if(method==='wakeups.deploy'){f.tasks[0].deployment={task:f.tasks[0].task,deployedAt:now,enabled:true,state:'deployed',timezone:'CST +0800',target:'本机',changed:false};return f.tasks[0];}
@@ -115,7 +116,44 @@ function fixture(){
    assert.equal(await page.evaluate(()=>testFeature.calls.some(c=>c.method==='creditEstimates.start')),false,'Recreating the panel does not start another sample');
   }
   if(surface==='index.html'){
-   await page.evaluate(()=>{state.page='settings';state.settingsTab='wakeups';renderSettings();});await page.locator('#wake-add:not([disabled])').waitFor();await page.locator('#wake-add').click();await page.locator('#wake-probe').click();await page.waitForFunction(()=>document.querySelector('#wake-model')?.value==='cheap-model');assert.equal(await page.locator('#wake-effort').inputValue(),'low');await page.locator('#wake-add-time').click();
+   await page.evaluate(async()=>{
+     testFeature.targets=await api('accounts.targets',{includeUnavailable:true});
+     state.settings.sources.push({id:'claude-source',provider:'claude',accountId:'c',name:'Claude source',path:'/claude',enabled:true});
+     state.settings.accounts.push({id:'c',provider:'claude',name:'Claude account',quotaEnabled:true});
+     testFeature.targets.push({accountKey:'claude:c',accountName:'Claude account',provider:'claude',sourceId:'claude-source',machineId:'local',machineName:'本机',path:'/claude',profileId:null,canWake:true});
+     state.page='settings';state.settingsTab='wakeups';renderSettings();
+   });await page.locator('#wake-add:not([disabled])').waitFor();await page.locator('#wake-add').click();
+   assert(await page.evaluate(()=>Boolean(document.querySelector('#wake-agent').compareDocumentPosition(document.querySelector('#wake-account'))&Node.DOCUMENT_POSITION_FOLLOWING)),'Agent is chosen before account');
+   assert.equal(await page.locator('#wake-agent').inputValue(),'codex');
+   assert.deepEqual(await page.locator('#wake-account option').evaluateAll(es=>es.map(e=>e.value)),['codex:a']);
+   await page.locator('#field-name').fill('Agent-first draft');
+   await page.locator('#editor summary').filter({hasText:'执行选项'}).click();
+   await page.locator('#field-binary').fill('/custom/codex');await page.locator('#wake-model').fill('previous-model');
+   await page.locator('#wake-agent').selectOption('claude');
+   assert.deepEqual(await page.locator('#wake-account option').evaluateAll(es=>es.map(e=>e.value)),['claude:c']);
+   assert.equal(await page.locator('#wake-source').inputValue(),'claude-source');
+   assert.equal(await page.locator('#wake-model').inputValue(),'');assert.equal(await page.locator('#field-binary').inputValue(),'');
+   assert.equal(await page.locator('#field-name').inputValue(),'Agent-first draft','Agent changes preserve other draft fields');
+   await page.locator('#wake-agent').selectOption('antigravity');
+   assert(await page.locator('#wake-account').isDisabled());assert(await page.locator('#wake-probe').isDisabled());
+   assert.equal(await page.locator('#wake-source').inputValue(),'');
+   await page.locator('#wake-agent').selectOption('codex');
+   assert.equal(await page.locator('#wake-account').inputValue(),'codex:a');assert.equal(await page.locator('#wake-source').inputValue(),'s');
+   await page.locator('#editor summary').filter({hasText:'执行选项'}).click();
+
+   // Suggestion: the untouched default of a new task is replaced; the same time is never added twice; nothing is saved.
+   await page.locator('#wake-apply-suggestion:not([hidden])').waitFor();
+   assert.match(await page.locator('#wake-suggestion').textContent(),/通常 09:10 开始使用，建议 06:15 唤醒，5h 窗口约 11:15 重置.*12 个活跃日，按所选来源整体统计/);
+   await page.locator('#wake-apply-suggestion').click();assert.equal(await page.locator('#field-times').inputValue(),'06:15');
+   await page.locator('#wake-apply-suggestion').click();assert.equal(await page.locator('#field-times').inputValue(),'06:15','The same time is not repeated');
+   assert.equal(await page.evaluate(()=>testFeature.calls.filter(c=>c.method==='wakeups.save').length),0,'Applying only edits the draft');
+   await page.locator('[data-wake-time="0"][data-time-part="hour"]').selectOption('08');await page.locator('[data-wake-time="0"][data-time-part="minute"]').selectOption('00');
+   await page.locator('#wake-apply-suggestion').click();assert.equal(await page.locator('#field-times').inputValue(),'08:00,06:15','A chosen 08:00 is kept and the suggestion is added');
+   await page.locator('[data-remove-time="1"]').click();
+   await page.evaluate(()=>{testFeature.suggestion={insufficient:true,reason:'days',days:3};});await page.locator('#wake-source').dispatchEvent('change');
+   await page.waitForFunction(()=>/只有 3 个活跃日/.test(document.querySelector('#wake-suggestion').textContent));assert(await page.locator('#wake-apply-suggestion').isHidden());
+   await page.evaluate(()=>{delete testFeature.suggestion;});
+   await page.locator('#wake-probe').click();await page.waitForFunction(()=>document.querySelector('#wake-model')?.value==='cheap-model');assert.equal(await page.locator('#wake-effort').inputValue(),'low');await page.locator('#wake-add-time').click();
    // Adding a time focuses its field; removing one moves focus to the neighbouring remove button, then to Add.
    assert(await page.evaluate(()=>document.activeElement===AieyesSingleSelect.visible(document.querySelector('[data-wake-time="1"][data-time-part="hour"]'))),'A new time focuses its hour picker');
    await page.locator('#wake-add-time').click();await page.locator('[data-remove-time="2"]').click();

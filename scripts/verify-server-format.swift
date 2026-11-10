@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 @testable import Aieyes
 typealias Host = Aieyes.Host
 
@@ -51,6 +52,32 @@ typealias Host = Aieyes.Host
             let restoredMemory = try decoder.decode(MemoryMetric.self, from: JSONEncoder().encode(memory))
             precondition(restoredMemory.used == expected)
         }
+        // One server view: awaiting a first sample is not an issue; paused hosts only count as paused.
+        let now = 1_000.0
+        var live = Host(); live.id = "a"
+        var paused = Host(); paused.id = "p"; paused.enabled = false
+        let fresh = MetricSample(timestamp: now - 2, uptime: nil, load: [], errors: [:])
+        precondition(!ServerView.issue(live, nil, now: now))
+        precondition(!ServerView.issue(live, HostResult(id: "a", name: "", sample: nil, error: nil), now: now))
+        precondition(ServerView.issue(live, HostResult(id: "a", name: "", sample: nil, error: "refused"), now: now))
+        precondition(!ServerView.issue(live, HostResult(id: "a", name: "", sample: fresh, error: nil), now: now))
+        precondition(ServerView.issue(live, HostResult(id: "a", name: "", sample: MetricSample(timestamp: now - 11, uptime: nil, load: [], errors: [:]), error: nil), now: now))
+        precondition(ServerView.issue(live, HostResult(id: "a", name: "", sample: MetricSample(timestamp: now, uptime: nil, load: [], errors: ["gpu": "x"]), error: nil), now: now))
+        precondition(!ServerView.issue(paused, HostResult(id: "p", name: "", sample: nil, error: "refused"), now: now))
+        precondition(ServerView.matches("paused", host: paused, result: nil, now: now) && !ServerView.matches("paused", host: live, result: nil, now: now))
+        precondition(ServerView.matches("a", host: live, result: nil, now: now) && !ServerView.matches("a", host: paused, result: nil, now: now))
+        precondition(ServerView.migrate(selection: "a", filter: "errors", hostIDs: ["a"]) == "a")
+        precondition(ServerView.migrate(selection: "gone", filter: "paused", hostIDs: ["a"]) == "paused")
+        precondition(ServerView.migrate(selection: "gone", filter: "all", hostIDs: ["a"]) == "all")
+        precondition(ServerView.migrate(selection: "all", filter: "errors", hostIDs: []) == "errors")
+        precondition(ServerView.resolve("gone", hostIDs: ["a"]) == "all" && ServerView.resolve("errors", hostIDs: []) == "errors")
+        precondition(NativePanelKey.scoped(.panelServerView, .detailServerView, compact: true) != NativePanelKey.scoped(.panelServerView, .detailServerView, compact: false), "Each window migrates separately")
+        // Chip rows fade only the edge that hides content.
+        typealias Scroller = EdgeFadingScroller<EmptyView, String>
+        precondition(Scroller.overflow(offset: 0, contentWidth: 300, viewport: 400) == (false, false))
+        precondition(Scroller.overflow(offset: 0, contentWidth: 600, viewport: 400) == (false, true))
+        precondition(Scroller.overflow(offset: -200, contentWidth: 600, viewport: 400) == (true, false))
+        precondition(Scroller.overflow(offset: -100, contentWidth: 600, viewport: 400) == (true, true))
         print("Native server uptime, capacities, missing readings, device filters and legacy configuration passed")
     }
 }

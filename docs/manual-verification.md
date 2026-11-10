@@ -88,3 +88,25 @@ Tauri 宿主测试先运行 `node scripts/prepare-wakeup.cjs --debug`，再运�
 剩余人工项汇总见[实现摘要与尚存问题](changes.md#尚存问题)。Windows 新增 `powershell -File scripts/test-windows-preferences.ps1 -Binary <开发包 exe>`，需要普通权限交互会话、Node 和 Playwright；临时小时制及透明度在 finally 恢复。macOS GUI 中运行 `sh scripts/test-native-navigation.sh`，验证真实 List 选择、标题、页面保留与折叠栏。
 
 Linux 先在隔离桌面会话中设置 `AIEYES_DATA_DIR=<绝对临时目录>`，再从相同环境启动 `WebKitWebDriver --port=4445`。运行 `python3 scripts/test-linux-native.py --binary <实际 Tauri 二进制> --data-dir <同一临时目录> --backend wayland --output <证据目录>`；X11 使用 `--backend x11`。脚本仅清理二进制路径与数据目录同时匹配的测试进程。
+
+## 2026-11-09 会话跳转：真实桌面验收
+
+点击本机会话会切换到运行它的终端或 IDE，这一步只能在真实桌面上确认。先取 Agent 进程的祖先链，再交给验证器激活（会改变前台应用）：
+
+```sh
+target/debug/aieyes-core --data-dir "$(mktemp -d)" --call sessions.focusTarget '{"pid":<Agent pid>}'
+sh -c '. scripts/native-verifiers.sh && build_native_app && build_native_verifier session-focus'
+.build/verify-session-focus <祖先 pid，近的在前>
+```
+
+macOS 规则：沿祖先链取第一个普通（有 Dock 图标）应用并激活；它在屏幕上只有一个普通窗口时报告“已切换到具体窗口”，多个窗口时报告“已激活应用，未定位到具体窗口”。不申请辅助功能等新权限。终端下的 `login` 属于 root，sysinfo 读不到其父进程，核心改用 `proc_pidinfo` 读取。
+
+| 场景 | 结果（2026-11-09，Intel macOS） |
+|---|---|
+| Ghostty 中的 shell（zsh → login → ghostty） | 已激活 Ghostty，单窗口，确认前台 |
+| ChatGPT 内置 Codex CLI（codex → ChatGPT） | 已激活 ChatGPT，单窗口，确认前台 |
+| Codex app-server 守护进程（无 GUI 祖先） | 无普通应用，界面显示“未找到所属窗口” |
+| pid 被复用（起始时间不同） | 核心返回已退出；Rust 测试覆盖 |
+| Terminal、iTerm2、VS Code、同应用多窗口 | 本机未安装或未运行，**未验收** |
+| Windows（`EnumWindows` + `SetForegroundWindow`，以实际前台窗口判断成功） | 仅交叉类型检查，**未在 Windows 实机验收** |
+| Linux X11（`wmctrl -lp` / `wmctrl -ia`）与 Wayland（报告不支持） | **未在 Linux 实机验收** |

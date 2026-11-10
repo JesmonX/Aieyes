@@ -1,6 +1,8 @@
 //! Opt-in deployments. Saved drafts and installed configurations are deliberately separate.
+mod identity;
 pub mod runner;
 mod scheduler;
+mod suggest;
 use crate::{
     Engine,
     models::*,
@@ -58,6 +60,8 @@ impl Default for Task {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
+    #[serde(default)]
+    pub source_id: String,
     #[serde(default)]
     pub codex_profile_id: Option<String>,
     pub version: u32,
@@ -449,6 +453,7 @@ fn manifest(task: &Task, source: &Source, settings: &Settings) -> Result<Manifes
         _ => anyhow::bail!("不支持的 CLI"),
     };
     Ok(Manifest {
+        source_id: source.id.clone(),
         codex_profile_id: task.codex_profile_id.clone(),
         version: if task.codex_profile_id.is_some() {
             2
@@ -682,6 +687,9 @@ impl Engine {
                 .unwrap_or(Value::Null);
             info["models"] = json!(rows);
             return Ok(info);
+        }
+        if action == "suggest" {
+            return self.wakeup_suggest(&settings, &p);
         }
         let id = p["id"].as_str().context("缺少任务 ID")?;
         let mut r = self.store.wakeup(id)?;

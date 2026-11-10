@@ -27,7 +27,7 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
  // Linux renders Integrations and account settings with the same grouped cards as Windows.
  const linux=await browser.newPage({viewport:{width:1120,height:850},reducedMotion:'reduce'});await linux.addInitScript(fixture,{platform:'linux'});await linux.goto(`http://127.0.0.1:${server.address().port}`);await linux.evaluate(()=>AieyesApp.ready);
  await linux.locator('[data-settings-tab=integrations]').click();
- const grouped=await linux.evaluate(()=>{const group=document.querySelector('#content .agent-settings-group'),rows=[...document.querySelectorAll('#content .settings-disclosure')];return {group:!!group,rows:rows.length,inside:rows.every(row=>group?.contains(row)),cards:rows.filter(row=>row.classList.contains('card')).length,padding:group&&getComputedStyle(group).paddingLeft};});
+ const grouped=await linux.evaluate(()=>{const group=document.querySelector('#content .agent-settings-group'),rows=[...document.querySelectorAll('#content .settings-subpage .settings-disclosure')];return {group:!!group,rows:rows.length,inside:rows.every(row=>group?.contains(row)),cards:rows.filter(row=>row.classList.contains('card')).length,padding:group&&getComputedStyle(group).paddingLeft};});
  assert.deepEqual(grouped,{group:true,rows:grouped.rows,inside:true,cards:0,padding:'16px'},'Linux groups every integration section in one card');
  assert(grouped.rows>=3,'Linux shows the integration sections');
  await linux.locator('[data-account-edit]').first().click();

@@ -159,6 +159,9 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
     let mut lock = rusqlite::Connection::open(root.join("runner.sqlite"))?;
     lock.busy_timeout(Duration::from_secs(3))?;
     lock.execute_batch("CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY,task TEXT,occurrence TEXT UNIQUE,started INTEGER,ended INTEGER,status TEXT,model TEXT,effort TEXT); CREATE TABLE IF NOT EXISTS leases(account TEXT PRIMARY KEY,expires INTEGER); CREATE TABLE IF NOT EXISTS run_diagnostics(run_id INTEGER PRIMARY KEY,stage TEXT,code TEXT,message TEXT);")?;
+    lock.execute_batch(
+        "CREATE TABLE IF NOT EXISTS run_identity(run_id INTEGER PRIMARY KEY,payload TEXT NOT NULL)",
+    )?;
     let local = Local::now();
     let slot = format!("{:02}:{:02}", local.hour(), local.minute());
     let mut jobs = Vec::new();
@@ -198,6 +201,15 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
         )? > 0;
         tx.execute("INSERT INTO runs(task,occurrence,started,status,model,effort) VALUES(?1,?2,?3,?4,?5,?6)", rusqlite::params![m.id, occurrence, stamp, if acquired { "running" } else { "skipped-overlap" }, m.model, m.effort])?;
         let row = tx.last_insert_rowid();
+        if acquired {
+            tx.execute(
+                "INSERT INTO run_identity VALUES(?1,?2)",
+                rusqlite::params![
+                    row,
+                    serde_json::to_string(&super::identity::Evidence::manifest(&m))?
+                ],
+            )?;
+        }
         tx.commit()?;
         if !acquired {
             continue;
@@ -213,6 +225,7 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
                 scope.spawn(move || -> Result<()> {
                     let cwd = root.join("work").join(&m.id);
                     let mut stage = "prepare";
+                    let mut identity = super::identity::Evidence::manifest(&m);
                     let result = private_dir(&cwd)
                         .and_then(|_| {
                             stage = "authentication";
@@ -230,6 +243,8 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
                                     shell: m.shell.clone(),
                                 };
                                 stage = "codex-turn";
+                                // Managed-profile wakeups use an explicitly ephemeral thread.
+                                identity.complete = true;
                                 crate::codex_auth::local::wakeup(&loc, profile, &m, &cwd)?;
                                 Ok(b"{\"type\":\"turn.completed\"}".to_vec())
                             } else {
@@ -239,7 +254,12 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
                                         .exists(),
                                     "旧唤醒任务需绑定账户后重新部署"
                                 );
-                                invoke(&m, &m.args, &cwd, 120)
+                                stage = "model-request";
+                                let bytes = invoke(&m, &m.args, &cwd, 120)?;
+                                identity.session_ids =
+                                    super::identity::sessions(&m.provider, &bytes);
+                                identity.complete = !identity.session_ids.is_empty();
+                                Ok(bytes)
                             }
                         })
                         .and_then(|bytes| {
@@ -254,6 +274,13 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
                     };
                     let db = rusqlite::Connection::open(root.join("runner.sqlite"))?;
                     db.busy_timeout(Duration::from_secs(3))?;
+                    if !matches!(stage, "model-request" | "codex-turn") {
+                        identity.complete = true;
+                    }
+                    db.execute(
+                        "INSERT OR REPLACE INTO run_identity VALUES(?1,?2)",
+                        rusqlite::params![row, serde_json::to_string(&identity)?],
+                    )?;
                     db.execute(
                         "UPDATE runs SET status=?1,ended=?2 WHERE id=?3",
                         rusqlite::params![status, now(), row],

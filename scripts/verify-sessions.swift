@@ -6,6 +6,21 @@ import Combine
     static func event(_ type: String) -> String { "{\"type\":\"event_msg\",\"payload\":{\"type\":\"\(type)\"}}\n" }
     static func item(_ type: String) -> String { "{\"type\":\"response_item\",\"payload\":{\"type\":\"\(type)\"}}\n" }
     @MainActor static func main() async throws {
+        // Optional workspace and turn bounds decode; older payloads without them still decode.
+        let decoded = try JSONDecoder().decode([LiveSession].self, from: Data(#"[{"id":"a","source":"s","phase":"working","updatedAt":100,"workspace":"/work/aieyes","turnStartedAt":100000},{"id":"b","source":"s","phase":"complete","updatedAt":100,"turnStartedAt":100000,"turnEndedAt":112000},{"id":"c","source":"s","phase":"unknown","updatedAt":100,"turnStartedAt":100000},{"id":"d","source":"s","phase":"working","updatedAt":100}]"#.utf8))
+        precondition(decoded[0].project == "aieyes" && decoded[0].turnElapsed(at: Date(timeIntervalSince1970: 175)) == 75)
+        precondition(decoded[1].turnElapsed(at: Date(timeIntervalSince1970: 999)) == 12, "Finished turns stop counting")
+        precondition(decoded[2].turnElapsed(at: Date(timeIntervalSince1970: 999)) == nil && decoded[3].turnElapsed(at: Date()) == nil && decoded[3].project == nil)
+        precondition(LiveSession.elapsedText(75) == "1m15s" && LiveSession.elapsedText(3725) == "1h02m")
+        let joined = try JSONDecoder().decode([LiveSession].self, from: Data(#"[{"id":"u","source":"s","phase":"working","updatedAt":1,"usage":{"sessionTokens":1234567,"turnTokens":8400,"outputTokensPerSecond":41.6}},{"id":"v","source":"s","phase":"working","updatedAt":1,"usage":{"sessionTokens":900}}]"#.utf8))
+        precondition(joined[0].usageText == "会话 1.23M · 本轮 8.4K Token · 42 tok/s", joined[0].usageText ?? "")
+        precondition(joined[1].usageText == "会话 900" && decoded[0].usageText == nil, "Unknown parts are omitted")
+        var slow = joined[0]
+        slow.usage?.outputTokensPerSecond = 0.4
+        precondition(slow.usageText?.hasSuffix("<1 tok/s") == true)
+        slow.usage?.outputTokensPerSecond = 0
+        precondition(slow.usageText?.contains("tok/s") == false)
+
         var played: [String] = []
         var choices: [(String, Float)] = []
         let soundService = SessionSoundService(player: { kind, tone, volume in played.append(kind); choices.append((tone, volume)) })
@@ -57,6 +72,7 @@ import Combine
         try Data(start.utf8).write(to: file)
         // Exercise the production Rust monitor via a persistent, isolated RPC lane.
         setenv("AIEYES_DATA_DIR", root.appendingPathComponent("store").path, 1)
+        setenv("AIEYES_AUTO_SCAN", "off", 1)
         let engine = EngineClient(configurationOnly: true)
         defer { engine.stop() }
         var settings = Settings()
@@ -66,22 +82,32 @@ import Combine
             let params = try JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as! [String: Any]
             let _: Acknowledgement = try await engine.call("settings.save", params: params)
         }
+        // Session observers publish asynchronously; wait for the requested fixture state.
+        func awaitSnapshot(line: UInt = #line, _ matches: (SessionSnapshot) -> Bool) async throws -> SessionSnapshot {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while ContinuousClock.now < deadline {
+                let snapshot: SessionSnapshot = try await engine.call("sessions.list")
+                if matches(snapshot) { return snapshot }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            throw NSError(domain: "VerifySessions", code: 1, userInfo: [NSLocalizedDescriptionKey: "Session fixture did not reach its expected state at line \(line)"])
+        }
         try await save(settings.sources)
-        let fresh: SessionSnapshot = try await engine.call("sessions.list")
+        let fresh = try await awaitSnapshot { $0.sessions.count == 1 && $0.sessions.first?.phase == .working }
         precondition(fresh.sessions.count == 1 && fresh.sessions[0].phase == .working)
         try Data((start + event("task_complete")).utf8).write(to: file)
-        let completed: SessionSnapshot = try await engine.call("sessions.list")
+        let completed = try await awaitSnapshot { $0.sessions.first?.phase == .complete }
         precondition(completed.sessions.first?.phase == .complete)
         try await save([AgentSource(id: "source", name: "Disabled", path: file.path, enabled: false)])
-        let disabled: SessionSnapshot = try await engine.call("sessions.list")
+        let disabled = try await awaitSnapshot { $0.sessions.isEmpty }
         precondition(disabled.sessions.isEmpty)
         try await save([AgentSource(id: "missing", name: "Missing", path: root.appendingPathComponent("missing.jsonl").path)])
-        let missing: SessionSnapshot = try await engine.call("sessions.list")
+        let missing = try await awaitSnapshot { $0.unavailable && $0.sessions.isEmpty && $0.sources?.first?.error != nil }
         precondition(missing.unavailable && missing.sessions.isEmpty)
         precondition(missing.sources?.first?.sourceId == "missing" && missing.sources?.first?.error != nil)
         try Data(start.utf8).write(to: file)
         try await save([AgentSource(id: "source", name: "Test", path: file.path), settings.sources[0]])
-        let partial: SessionSnapshot = try await engine.call("sessions.list")
+        let partial = try await awaitSnapshot { $0.unavailable && $0.sessions.first?.phase == .working }
         precondition(partial.unavailable && partial.sessions.first?.phase == .working)
         precondition(partial.sources?.filter { $0.state != "healthy" }.count == 1)
         let parentFile = root.appendingPathComponent("parent.jsonl")
@@ -92,11 +118,11 @@ import Combine
         try Data(parentStart.utf8).write(to: parentFile)
         try Data((childStart + childWait).utf8).write(to: childFile)
         try await save([AgentSource(id: "parent-source", name: "Parent", path: parentFile.path), AgentSource(id: "child-source", name: "Child", path: childFile.path)])
-        let childWaiting: SessionSnapshot = try await engine.call("sessions.list")
+        let childWaiting = try await awaitSnapshot { $0.sessions.count == 1 && $0.sessions.first?.sourceId == "parent-source" && $0.sessions.first?.phase == .needsInput }
         precondition(childWaiting.sessions.count == 1 && childWaiting.sessions.first?.sourceId == "parent-source")
         precondition(childWaiting.sessions.first?.phase == .needsInput && childWaiting.pet?.behavior == "attention")
         try Data((childStart + childWait + event("error")).utf8).write(to: childFile)
-        let childFailed: SessionSnapshot = try await engine.call("sessions.list")
+        let childFailed = try await awaitSnapshot { $0.sessions.count == 1 && $0.sessions.first?.phase == .working && $0.pet?.behavior == "running" }
         precondition(childFailed.sessions.count == 1 && childFailed.sessions.first?.phase == .working)
         precondition(childFailed.pet?.behavior == "running", "A failed child must not fail its running parent")
         print("Native session decoding and real-core lifecycle, completion, disabled and per-source failure RPC checks passed")

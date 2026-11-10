@@ -5,7 +5,7 @@ use serde_json::Value;
 pub const PARSER_VERSION: u32 = 6;
 pub fn parser_version(provider: &str) -> u32 {
     if provider == "codex" {
-        return 10;
+        return 11;
     }
     if provider == "codebuddy" {
         return 11;
@@ -20,12 +20,15 @@ pub fn parser_version(provider: &str) -> u32 {
         return 11;
     }
     if provider == "deepseek-harness" {
-        return 9;
+        return 10;
     }
     if matches!(provider, "pi" | "omp") {
         return 8;
     }
     if provider == "claude" {
+        return 8;
+    }
+    if provider == "antigravity" {
         return 7;
     }
     if provider == "workbuddy" {
@@ -98,6 +101,7 @@ fn event(
         interval_start: None,
         interval_evidence: String::new(),
         agent: codex_agent(state),
+        output_timing: None,
     }
 }
 
@@ -129,16 +133,91 @@ pub fn parse(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usage
     }
 }
 
+pub(crate) fn millis(value: &Value) -> Option<u64> {
+    if let Some(n) = value.as_u64() {
+        return if n > 10_000_000_000 {
+            Some(n)
+        } else {
+            n.checked_mul(1000)
+        };
+    }
+    chrono::DateTime::parse_from_rfc3339(value.as_str()?)
+        .ok()
+        .and_then(|t| u64::try_from(t.timestamp_millis()).ok())
+}
+pub(crate) fn remember_request(state: &mut ParseState, key: String, start: u64) {
+    state.request_starts.entry(key).or_insert(start);
+    while state.request_starts.len() > 256 {
+        let oldest = state
+            .request_starts
+            .iter()
+            .min_by_key(|(_, time)| *time)
+            .map(|(k, _)| k.clone());
+        if let Some(key) = oldest {
+            state.request_starts.remove(&key);
+        }
+    }
+}
+pub(crate) fn request_timing(
+    start: u64,
+    end: u64,
+    evidence: &str,
+    request_id: String,
+) -> Option<OutputTiming> {
+    let duration_ms = end.checked_sub(start).filter(|n| *n > 0)?;
+    Some(OutputTiming {
+        duration_ms,
+        evidence: evidence.into(),
+        request_id,
+    })
+}
+
 fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<UsageEvent> {
     let payload = &v["payload"];
     match v["type"].as_str()? {
         "event_msg" if payload["type"] == "task_started" => {
             state.task_started_at = timestamp(&v["timestamp"]);
             state.turn_id = payload["turn_id"].as_str().unwrap_or("").into();
+            state.request_start_ms = millis(&v["timestamp"]);
+            state.request_end_ms = None;
+            None
+        }
+        "event_msg" if payload["type"] == "item_completed" => {
+            // Late completions keep their original turn; never feed the current request clock.
+            if payload["turn_id"].as_str() != Some(state.turn_id.as_str())
+                || state.turn_id.is_empty()
+            {
+                return None;
+            }
+            if matches!(
+                payload["item"]["type"].as_str(),
+                Some("Reasoning" | "AgentMessage")
+            ) && let Some(end) = payload["completed_at_ms"].as_u64()
+            {
+                state.request_end_ms = Some(state.request_end_ms.unwrap_or(0).max(end));
+            }
+            None
+        }
+        "response_item" => {
+            let kind = payload["type"].as_str().unwrap_or("");
+            if kind.ends_with("_output") {
+                // A tool result is the next request's input, after tool/approval waits have ended.
+                if state.request_end_ms.is_none() {
+                    state.request_start_ms = millis(&v["timestamp"]);
+                }
+            } else if (kind == "reasoning"
+                || kind.ends_with("_call")
+                || (kind == "message" && payload["role"] == "assistant"))
+                && let Some(end) = millis(&v["timestamp"])
+            {
+                state.request_end_ms = Some(state.request_end_ms.unwrap_or(0).max(end));
+            }
             None
         }
         "event_msg" if payload["type"] == "task_complete" || payload["type"] == "turn_aborted" => {
             state.task_started_at = None;
+            state.request_start_ms = None;
+            state.request_end_ms = None;
             None
         }
         "session_meta" => {
@@ -271,6 +350,20 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
             if request_complete {
                 parsed.billing.evidence = "codex-request-v4".into();
             }
+            // Request/response bounds include first-token wait. Catch-up deltas and clocks
+            // without an explicit current-turn/tool-result start remain unknown.
+            let start = state.request_start_ms.take();
+            let end = state.request_end_ms.take();
+            if request_complete {
+                parsed.output_timing = start.zip(end).and_then(|(start, end)| {
+                    request_timing(
+                        start,
+                        end,
+                        "codex-request-v1",
+                        format!("{}:{}:{start}", state.session_id, state.turn_id),
+                    )
+                });
+            }
             if request_complete
                 && limits["plan_type"]
                     .as_str()
@@ -302,6 +395,12 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
 }
 
 fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<UsageEvent> {
+    if source.provider == "claude" && v["type"] == "api-request" {
+        if let (Some(id), Some(start)) = (v["id"].as_str(), millis(&v["timestamp"])) {
+            remember_request(state, format!("claude:{id}"), start);
+        }
+        return None;
+    }
     if v["type"] != "assistant" || v["isApiErrorMessage"] == true {
         return None;
     }
@@ -388,6 +487,17 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
         identity,
         "event",
     );
+    if source.provider == "claude"
+        && let (Some(id), Some(end)) = (v["requestRef"].as_str(), millis(&v["timestamp"]))
+        && let Some(start) = state.request_starts.get(&format!("claude:{id}"))
+    {
+        parsed.output_timing = request_timing(
+            *start,
+            end,
+            "claude-request-v1",
+            format!("{}:{id}", state.session_id),
+        );
+    }
     parsed.native_credits = native_credits;
     // Native response IDs survive history copies; the original timestamp disambiguates
     // clients that reuse short response IDs across independent requests.
@@ -440,6 +550,11 @@ pub(crate) fn parse_normalized(
         && let Some(version @ (2 | 3)) = v["clineTaskUsageVersion"].as_u64()
     {
         parsed.usage_version = version as u32;
+    }
+    if source.provider == "antigravity" && v["intervalEvidence"] == "antigravity-step-v1" {
+        parsed.output_timing = serde_json::from_value::<OutputTiming>(v["requestTiming"].clone())
+            .ok()
+            .filter(|t| t.duration_ms > 0 && t.evidence == "antigravity-request-v1");
     }
     parsed.interval_start = timestamp(&v["intervalStart"]);
     parsed.interval_evidence = v["intervalEvidence"].as_str().unwrap_or("").into();
@@ -562,6 +677,105 @@ mod tests {
     }
     fn line(input: u64, cache: u64, output: u64) -> Value {
         json!({"type":"event_msg","timestamp":"2026-10-03T01:00:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":input,"cached_input_tokens":cache,"output_tokens":output},"last_token_usage":{"input_tokens":input,"cached_input_tokens":cache,"output_tokens":output}}}})
+    }
+    fn request_stamp(ms: i64) -> String {
+        chrono::DateTime::from_timestamp_millis(1_700_000_000_000 + ms)
+            .unwrap()
+            .to_rfc3339()
+    }
+    #[test]
+    fn codex_request_clocks_ignore_old_turns_and_exclude_tool_waits() {
+        let mut state = ParseState {
+            session_id: "s".into(),
+            model: "gpt-test".into(),
+            ..Default::default()
+        };
+        let start = |turn: &str, ms| json!({"type":"event_msg","timestamp":request_stamp(ms),"payload":{"type":"task_started","turn_id":turn}});
+        let item = |turn: &str, end| json!({"type":"event_msg","timestamp":request_stamp(end),"payload":{"type":"item_completed","turn_id":turn,"item":{"id":"i","type":"AgentMessage"},"completed_at_ms":1_700_000_000_000i64+end}});
+        let count = |total, ms| json!({"type":"event_msg","timestamp":request_stamp(ms),"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":total,"output_tokens":total},"last_token_usage":{"input_tokens":50,"output_tokens":50}}}});
+        parse(&source(), &mut state, &start("old", 0));
+        parse(&source(), &mut state, &start("new", 30_000));
+        parse(&source(), &mut state, &item("old", 29_000));
+        parse(&source(), &mut state, &item("new", 34_000));
+        // Even an old-turn completion arriving after the new response cannot inflate its clock.
+        parse(&source(), &mut state, &item("old", 39_000));
+        let event = parse(&source(), &mut state, &count(50, 40_000)).unwrap();
+        assert_eq!(event.output_timing.unwrap().duration_ms, 4_000);
+        // The last result of the tool is the next request boundary, not the previous token count.
+        parse(
+            &source(),
+            &mut state,
+            &json!({"type":"response_item","timestamp":request_stamp(50_000),"payload":{"type":"function_call_output"}}),
+        );
+        parse(
+            &source(),
+            &mut state,
+            &json!({"type":"response_item","timestamp":request_stamp(55_000),"payload":{"type":"function_call","arguments":"PRIVATE"}}),
+        );
+        let event = parse(&source(), &mut state, &count(100, 60_000)).unwrap();
+        assert_eq!(event.output_timing.unwrap().duration_ms, 5_000);
+        // Unbounded/catch-up counters cannot be presented as a measured request.
+        assert!(
+            parse(&source(), &mut state, &count(200, 70_000))
+                .unwrap()
+                .output_timing
+                .is_none()
+        );
+    }
+    #[test]
+    fn claude_requests_match_native_references_not_nearby_records() {
+        let source = Source {
+            provider: "claude".into(),
+            ..source()
+        };
+        let mut state = ParseState::default();
+        parse(
+            &source,
+            &mut state,
+            &json!({"type":"api-request","id":"request-a","timestamp":request_stamp(0),"params":{"messages":"PRIVATE"}}),
+        );
+        parse(
+            &source,
+            &mut state,
+            &json!({"type":"api-request","id":"other-request","timestamp":request_stamp(1_000)}),
+        );
+        let mut response = json!({"type":"assistant","timestamp":request_stamp(2_000),"sessionId":"s","requestRef":"request-a","message":{"id":"answer","model":"claude-test","usage":{"input_tokens":10,"output_tokens":40}}});
+        let event = parse(&source, &mut state, &response).unwrap();
+        assert_eq!(event.output_timing.as_ref().unwrap().duration_ms, 2_000);
+        assert!(!serde_json::to_string(&state).unwrap().contains("PRIVATE"));
+        response["requestRef"] = json!("missing");
+        assert!(
+            parse(&source, &mut state, &response)
+                .unwrap()
+                .output_timing
+                .is_none()
+        );
+    }
+    #[test]
+    fn antigravity_normalized_requests_keep_native_step_timing_only_for_that_provider() {
+        let row = json!({"id":"request","sessionId":"s","timestamp":1700000002,"model":"gemini-test","tokens":{"input":10,"output":40},"intervalEvidence":"antigravity-step-v1","requestTiming":{"durationMs":2000,"evidence":"antigravity-request-v1","requestId":"s:request"}});
+        let agent = Source {
+            provider: "antigravity".into(),
+            ..source()
+        };
+        assert_eq!(
+            parse(&agent, &mut ParseState::default(), &row)
+                .unwrap()
+                .output_timing
+                .unwrap()
+                .duration_ms,
+            2000
+        );
+        let other = Source {
+            provider: "opencode".into(),
+            ..source()
+        };
+        assert!(
+            parse(&other, &mut ParseState::default(), &row)
+                .unwrap()
+                .output_timing
+                .is_none()
+        );
     }
     #[test]
     fn cumulative_usage_and_duplicates() {

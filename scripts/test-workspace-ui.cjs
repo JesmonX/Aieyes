@@ -145,7 +145,7 @@ const {serveFont}=require('./ui-test-helpers.cjs');
     assert.deepEqual(await page.evaluate(()=>[state.provider,state.days]),['deepseek',7],'A bridge context can change only its explicit fields');
     await page.locator('[data-settings-tab=integrations]').click();
     assert.equal(await page.locator('.settings-tabs').count(),0,'one sidebar owns navigation');
-    assert.equal(await page.locator('.settings-disclosure').count(),4);
+    assert.equal(await page.locator('.settings-subpage .settings-disclosure').count(),4);assert.equal(await page.locator('#capability-matrix:not([open])').count(),1,'The capability matrix starts collapsed');
     assert.equal(await page.locator('.settings-disclosure[open]').count(),1);
     await page.locator('#agent-section-machines > summary').click();
     await openGeneralPage(page, 'notifications');
@@ -228,6 +228,34 @@ const {serveFont}=require('./ui-test-helpers.cjs');
     assert.equal(await page.locator('[data-persist-disclosure="quota-group:codex"] > summary').evaluate(el=>el===document.activeElement),true,'Background refresh preserves group focus');
     await page.evaluate(()=>renderLiveSessions({sessions:[{id:'wait',provider:'codex',machine:'本机',phase:'needsInput',updatedAt:Date.now()/1000}],sources:[]}));
     assert.equal(await page.locator('#live-sessions').isVisible(),true);assert.match(await page.locator('#live-sessions summary').textContent(),/等待输入 1/);
+    // Project and turn time: running turns tick, finished turns freeze, unknown turns fall back to the update time.
+    await page.evaluate(()=>{document.querySelector('#live-sessions').open=true;const now=Date.now();renderLiveSessions({sessions:[
+      {id:'run',provider:'codex',machine:'本机',phase:'working',updatedAt:now/1000,workspace:'/work/aieyes',turnStartedAt:now-75000},
+      {id:'done',provider:'claude',machine:'本机',phase:'complete',updatedAt:now/1000,workspace:'/work/site/',turnStartedAt:now-200000,turnEndedAt:now-188000},
+      {id:'lost',provider:'codex',machine:'本机',phase:'unknown',updatedAt:now/1000,turnStartedAt:now-9000}],sources:[]});});
+    const detail=id=>page.locator(`.live-row:has([data-turn-ticking="${id}"]) .session-detail, .live-row .session-detail`).filter({hasText:id==='run'?'aieyes':id==='done'?'site':'最后更新'}).first().textContent();
+    assert.match(await detail('run'),/^aieyes · 本轮 1m1[5-6]s$/);assert.match(await detail('done'),/^site · 本轮 0m12s$/);assert.match(await detail('lost'),/^最后更新 /);
+    await page.waitForTimeout(2100);await page.evaluate(()=>AieyesSessions.tick());
+    assert.match(await page.locator('[data-turn-ticking="run"]').textContent(),/1m1[7-9]s/,'A running turn keeps counting');
+    assert.match(await page.locator('.session-detail',{hasText:'site'}).textContent(),/0m12s/,'A finished turn stays frozen');
+    assert.equal(await page.locator('[data-turn-ticking]').count(),1,'Only the running turn ticks');
+    assert.equal(await page.evaluate(()=>AieyesSessions.elapsedText(3725)),'1h02m');
+    // Joined tokens: missing turn tokens and missing output speed are omitted, not shown as zero.
+    assert.equal(await page.evaluate(()=>AieyesSessions.usageText({usage:{sessionTokens:1234567,turnTokens:8400,outputTokensPerSecond:41.6}})),'会话 1.23M · 本轮 8.4K Token · 42 tok/s');
+    assert.equal(await page.evaluate(()=>AieyesSessions.usageText({usage:{sessionTokens:900}})),'会话 900');
+    assert.match(await page.evaluate(()=>AieyesSessions.usageText({usage:{sessionTokens:1,outputTokensPerSecond:0.4}})),/<1 tok\/s$/);
+    assert.doesNotMatch(await page.evaluate(()=>AieyesSessions.usageText({usage:{sessionTokens:1,outputTokensPerSecond:0}})),/tok\/s/);
+    await page.evaluate(()=>{const now=Date.now();renderLiveSessions({sessions:[{id:'u',provider:'codex',machine:'本机',phase:'working',updatedAt:now/1000,turnStartedAt:now-1000,usage:{sessionTokens:2000,turnTokens:300}}],sources:[]});});
+    assert.equal(await page.locator('.session-usage').textContent(),'会话 2.0K · 本轮 300 Token');
+    assert.match(await page.locator('.session-usage').getAttribute('title'),/含首字等待/);
+    // Local rows with a process focus their window; SSH rows are information only.
+    await page.evaluate(()=>{window.focusCalls=[];const invoke=__TAURI__.core.invoke;__TAURI__.core.invoke=async(command,args)=>command==='focus_session'?(focusCalls.push(args),{outcome:'application',name:'Terminal'}):invoke(command,args);
+      const now=Date.now();renderLiveSessions({sessions:[{id:'local',provider:'codex',machine:'本机',machineId:'local',phase:'working',updatedAt:now/1000,pid:4321,processStart:99},{id:'ssh',provider:'codex',machine:'GPU',machineId:'h1',phase:'working',updatedAt:now/1000,pid:77}],sources:[]});});
+    assert.equal(await page.locator('[data-focus-session]').count(),1,'SSH sessions are not clickable');
+    await page.locator('[data-focus-session="local"]').focus();await page.keyboard.press('Enter');
+    await page.waitForFunction(()=>focusCalls.length===1);
+    assert.deepEqual(await page.evaluate(()=>focusCalls[0]),{pid:4321,processStart:99});
+    await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('已激活 Terminal，未定位到具体窗口'));
     await page.evaluate(()=>renderLiveSessions({sessions:[],sources:[{sourceId:'trae-ide',provider:'trae',machineId:'local',state:'healthy',processRunning:true},{sourceId:'cn-ide',provider:'trae-cn',machineId:'local',state:'healthy',processRunning:false}]}));
     assert.equal(await page.locator('#live-sessions').isVisible(),true);
     assert.equal(await page.locator('#session-summary').textContent(),'IDE 运行状态');
