@@ -33,7 +33,9 @@ class WakeTests(unittest.TestCase):
             result = wake.manage(request)
             self.assertEqual(result['runs'], [[150, 170], [200, None]], 'All tasks, since the time, without overlap skips')
             self.assertEqual(result['zone'], 'Europe/Berlin')
-            self.assertIsNone(result['fixedOffset'], 'A zone with daylight saving time has no fixed offset')
+            if sys.platform != 'win32':
+                # Windows ignores TZ in localtime; the probe runs on the Linux host.
+                self.assertIsNone(result['fixedOffset'], 'A zone with daylight saving time has no fixed offset')
             with self.assertRaises(ValueError):
                 wake.manage(dict(request, root=str(pathlib.Path(home) / 'elsewhere')))
     def test_run_identity_is_source_scoped_and_contains_no_model_content(self):
