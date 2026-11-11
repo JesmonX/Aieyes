@@ -820,6 +820,13 @@ def collect_kiro(path, cursors):
             raise ValueError('Kiro session metadata exceeds 16 MiB')
         value = json.loads(file.read_text())
         v3 = file.name == 'session.json'
+        # IDE metadata can exist before the first prompt; exclude empty drafts.
+        if v3 and value.get('status') is None:
+            try:
+                if (file.parent / 'messages.jsonl').stat().st_size == 0:
+                    continue
+            except FileNotFoundError:
+                continue
         session = text(value.get('session_id') or value.get('id') or (file.parent.name if v3 else file.stem))
         cursor = cursors.get(str(file), {})
         classification = (cursor.get('continuation') or {}).get('classification', 'unknown')

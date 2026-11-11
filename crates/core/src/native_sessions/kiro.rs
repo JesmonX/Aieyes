@@ -314,6 +314,17 @@ pub(crate) fn read(dir: &Path, now: u64, verdicts: &mut HashMap<String, bool>) -
         if skip {
             continue;
         }
+        // The IDE creates metadata before the first prompt. Without either a
+        // status or messages, this is an empty draft, not an unknown activity.
+        if v3
+            && v["status"].is_null()
+            && match std::fs::metadata(path.with_file_name("messages.jsonl")) {
+                Ok(meta) => meta.is_file() && meta.len() == 0,
+                Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+            }
+        {
+            continue;
+        }
         let (kind, parent) = if v3 {
             let parent = if v["createdReason"] == "subagent" {
                 v["parentSessionId"].as_str().unwrap_or("")
@@ -451,6 +462,50 @@ mod tests {
             before,
             "a lock change re-reads the sessions"
         );
+    }
+
+    #[test]
+    fn empty_ide_drafts_are_hidden_until_messages_or_status_appear() {
+        let temp = tempfile::tempdir().unwrap();
+        let sessions = temp.path().join("sessions");
+        let path = |id: &str| sessions.join(format!("workspace/sess_{id}/session.json"));
+        for id in ["missing", "empty", "messages", "active", "future"] {
+            write(&path(id), json!({"id":id,"title":"New Session"}));
+        }
+        write(&path("empty"), json!({"id":"empty","status":null}));
+        std::fs::write(path("empty").with_file_name("messages.jsonl"), "").unwrap();
+        std::fs::write(path("messages").with_file_name("messages.jsonl"), "{}\n").unwrap();
+        write(
+            &path("active"),
+            json!({"id":"active","status":"in_progress"}),
+        );
+        write(
+            &path("future"),
+            json!({"id":"future","status":"new_status"}),
+        );
+
+        let mut verdicts = HashMap::new();
+        let now = crate::models::now() as u64;
+        let mut rows: Vec<_> = read(&sessions, now, &mut verdicts)
+            .into_iter()
+            .map(|r| (r.0, r.2))
+            .collect();
+        rows.sort();
+        assert_eq!(
+            rows,
+            [
+                ("active".into(), "start".into()),
+                ("future".into(), "unknown".into()),
+                ("messages".into(), "unknown".into())
+            ]
+        );
+
+        std::fs::write(path("missing").with_file_name("messages.jsonl"), "{}\n").unwrap();
+        write(
+            &path("empty"),
+            json!({"id":"empty","status":"waiting_on_user"}),
+        );
+        assert_eq!(read(&sessions, now, &mut verdicts).len(), 5);
     }
 
     #[test]

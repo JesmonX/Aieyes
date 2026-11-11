@@ -6,6 +6,29 @@ ROOT=pathlib.Path(__file__).resolve().parents[1]
 m = load_script('sessions', 'session_remote.py')
 m.SCRIPT=(ROOT/'scripts/session_remote.py').read_text()
 class ObserverTests(unittest.TestCase):
+    def test_kiro_empty_ide_drafts_reappear_with_messages_or_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            def session(name, **metadata):
+                path = root / 'sessions/workspace' / ('sess_' + name) / 'session.json'
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(dict(id=name, title='New Session', **metadata)))
+                return path
+            missing = session('missing')
+            empty = session('empty', status=None)
+            empty.with_name('messages.jsonl').write_text('')
+            session('messages').with_name('messages.jsonl').write_text('{}\n')
+            session('active', status='in_progress')
+            session('future', status='new_status')
+            rows, overflow = m.collect_kiro(root, {})
+            self.assertEqual(overflow, 0)
+            self.assertEqual({r['identity']: r['events'][-1]['kind'] for r in rows},
+                             dict(messages='unknown', active='start', future='unknown'))
+            missing.with_name('messages.jsonl').write_text('{}\n')
+            session('empty', status='waiting_on_user')
+            rows, _ = m.collect_kiro(root, {})
+            self.assertEqual(len(rows), 5)
+
     def test_kiro_cli_and_ide_metadata_keep_parent_and_headless_classification(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
