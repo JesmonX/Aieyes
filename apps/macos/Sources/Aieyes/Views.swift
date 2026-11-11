@@ -959,13 +959,23 @@ struct UsageChart: View, Equatable {
         }.font(AppFont.secondary)
     }
     private func legendButton(_ name: String) -> some View {
-        let title = modelNames[name] ?? name
+        UsageModelLegendButton(name: name, title: modelNames[name] ?? name,
+                              color: Palette.model(name, preset: chartPalette, contrast: chartContrast), hidden: $hidden)
+    }
+    private func move(_ offset: Int) { guard !days.isEmpty else { return }; let index = selected.flatMap { key in days.firstIndex { $0.key == key } } ?? 0; selected = days[min(days.count - 1, max(0, index + offset))].key }
+}
+
+/// Each retained ForEach item observes the live selection instead of capturing a rendered value.
+private struct UsageModelLegendButton: View {
+    let name: String, title: String, color: Color
+    @Binding var hidden: Set<String>
+    var body: some View {
         let isHidden = hidden.contains(name)
         return Button {
-            if isHidden { hidden.remove(name) } else { hidden.insert(name) }
+            if hidden.contains(name) { hidden.remove(name) } else { hidden.insert(name) }
         } label: {
             HStack(spacing: 6) {
-                Circle().fill(Palette.model(name, preset: chartPalette, contrast: chartContrast))
+                Circle().fill(color)
                     .frame(width: DesignTokens.chartLegendDot, height: DesignTokens.chartLegendDot)
                 Text(title)
             }.font(AppFont.secondary).opacity(isHidden ? 0.4 : 1).contentShape(Rectangle())
@@ -974,7 +984,6 @@ struct UsageChart: View, Equatable {
             .accessibilityLabel((isHidden ? L("显示模型 ") : L("隐藏模型 ")) + title)
             .accessibilityAddTraits(isHidden ? [] : .isSelected)
     }
-    private func move(_ offset: Int) { guard !days.isEmpty else { return }; let index = selected.flatMap { key in days.firstIndex { $0.key == key } } ?? 0; selected = days[min(days.count - 1, max(0, index + offset))].key }
 }
 
 struct DailyUsage: View, Equatable {
