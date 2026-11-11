@@ -15,7 +15,7 @@ const websiteProviders=rows=>rows.filter(p=>p.icon&&p.id!=='custom'&&!websiteAda
 const previewHash=createHash('sha256');
 for(const language of ['en','zh-CN'])for(const platform of ['macos','windows'])for(const feature of ['overview','analytics','servers','panel'])previewHash.update(fs.readFileSync(path.join(source,'public/screenshots',language,`${platform}-${feature}.webp`)));
 const previewVersion=previewHash.digest('hex').slice(0,12);
-const screenshot=(c,feature,platform='macos')=>`/screenshots/${c.lang}/${platform}-${feature}.webp?v=${previewVersion}`;
+const screenshot=(c,feature,platform='windows')=>`/screenshots/${c.lang}/${platform}-${feature}.webp?v=${previewVersion}`;
 const version=file=>createHash('sha256').update(fs.readFileSync(path.join(source,'public',file))).digest('hex').slice(0,12);
 // og.cjs renders one 1200 × 630 sharing image per language.
 const sharing=c=>{const file=c.lang==='en'?'og.jpg':'og-zh-CN.jpg';return `${origin}/${file}?v=${version(file)}`;};
@@ -33,7 +33,7 @@ const svg=name=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stro
 function pet(c,state='idle',extra='') { return `<span class="animated-pet pet-${state} ${extra}" role="img" aria-label="${c.lang==='en'?'Yuexinmiao desktop pet':'月薪喵桌宠'}"></span>`; }
 function previewImage(c,id,label,{mobile=null}={}){
   const [width,height]=SHOT_SIZE[id];
-  const img=`<img data-preview="${id}" src="${screenshot(c,id)}" alt="${label} — macOS" width="${width}" height="${height}" loading="lazy" decoding="async">`;
+  const img=`<img data-preview="${id}" src="${screenshot(c,id)}" alt="${label} — Windows" width="${width}" height="${height}" loading="lazy" decoding="async">`;
   if(!mobile)return img;
   const [mobileWidth,mobileHeight]=SHOT_SIZE[mobile];
   return `<picture class="shot-${id} mobile-${mobile}"><source media="(max-width:700px)" data-preview="${mobile}" srcset="${screenshot(c,mobile)}" width="${mobileWidth}" height="${mobileHeight}">${img}</picture>`;
@@ -46,20 +46,21 @@ function art(c,f) {
 }
 // Feature 01 shows the panel on wide screens and the overview on phones.
 function shot(c,feature,{image=feature.id,mobile=null}={}){const title=escape(feature.title).replaceAll('\n',' ');return `<button class="shot shot-${image}" type="button" data-zoom aria-label="${escape(c.enlarge)}: ${title}">${previewImage(c,image,title,{mobile})}<span class="zoom-hint">${svg('plus')}</span></button>`;}
-// What site.js needs to run the stage in one language: native states and hotspots, tour copy, messages.
+// What site.js needs to run the stage in one language: native states, tour copy, messages, and the
+// Windows screenshot of each window's first view.
 function stageData(c){
   const data=demo.forLanguage(c.lang);
   for(const surface of Object.values(data.surfaces))for(const stop of surface.stops){
     if(!c.tour[stop.id])throw new Error(`${c.lang}: missing tour copy for ${stop.id}`);
     [stop.title,stop.text]=c.tour[stop.id];
   }
-  return {...data,text:{native:c.sceneNote,live:c.stage.live,loading:c.stage.loading,failed:c.stage.failed,frame:c.stage.frame}};
+  return {...data,poster:{main:[screenshot(c,'overview'),...SHOT_SIZE.overview],panel:[screenshot(c,'panel'),...SHOT_SIZE.panel]},text:{native:c.stage.native,live:c.stage.live,loading:c.stage.loading,failed:c.stage.failed,frame:c.stage.frame}};
 }
-// The hero is the product itself: the first native state as an image, which site.js turns into the
-// interactive stage. Without scripts it stays a picture; phones get the portrait panel.
+// The hero is the product itself: the Windows screenshot of the first view, which site.js turns into
+// the live stage. Without scripts it stays a picture; phones get the portrait panel.
 function stage(c){
-  const data=stages[c.lang],{main,panel}=data.surfaces,first=main.states[main.initial],stop=main.stops.find(s=>s.id===first.stop),count=n=>String(n).padStart(2,'0');
-  return `<div class="showcase" id="showcase" data-stage="/demo/stage.${c.lang}.json?v=${stageVersion[c.lang]}"><div class="preview-toolbar"><div class="surface-switch" role="group" aria-label="${c.stage.surface}"><button type="button" data-surface-tab="main" aria-pressed="true">${c.stage.main}</button><button type="button" data-surface-tab="panel" aria-pressed="false">${c.stage.panel}</button></div><div class="platform-switch" role="group" aria-label="${c.switchPlatform}"><button type="button" data-platform="macos" aria-pressed="true">macOS</button><button type="button" data-platform="windows" aria-pressed="false">Windows</button></div></div><div class="hero-stage" data-surface="main"><div class="stage-window"><div class="stage-bar" aria-hidden="true"><i></i><i></i><i></i><span class="stage-title">${escape(first.title)} — Aieyes</span></div><div class="stage-screen"><picture><source media="(max-width:700px)" srcset="${demo.image(c.lang,panel.initial)}" width="${panel.width}" height="${panel.height}"><img class="stage-image" src="${demo.image(c.lang,main.initial)}" alt="${escape(c.scene)} — macOS" width="${main.width}" height="${main.height}" fetchpriority="high" decoding="async"></picture><div class="stage-spots"></div><p class="stage-status" role="status" hidden></p></div></div></div><div class="tour"><button type="button" class="tour-step" data-tour-step="-1" aria-label="${c.stage.prev}">${svg('previous')}</button><p class="tour-title" aria-live="polite"><span class="tour-count">${count(main.stops.indexOf(stop)+1)} / ${count(main.stops.length)}</span><strong>${escape(stop.title)}</strong></p><button type="button" class="tour-step" data-tour-step="1" aria-label="${c.stage.next}">${svg('next')}</button><p class="tour-text">${escape(stop.text)}</p></div><div class="showcase-footer"><div class="stage-tag"><span class="status-dot"></span><span class="stage-note">${c.sceneNote}</span></div><div class="hero-pet">${pet(c,'working')}<span>${c.lang==='en'?'A little company, while you work.':'工作时，也有一点陪伴。'}</span></div></div></div>`;
+  const data=stages[c.lang],{main}=data.surfaces,[wide,tall]=[data.poster.main,data.poster.panel],first=main.states[main.initial],stop=main.stops.find(s=>s.id===first.stop),count=n=>String(n).padStart(2,'0');
+  return `<div class="showcase" id="showcase" data-stage="/demo/stage.${c.lang}.json?v=${stageVersion[c.lang]}"><div class="preview-toolbar"><div class="surface-switch" role="group" aria-label="${c.stage.surface}"><button type="button" data-surface-tab="main" aria-pressed="true">${c.stage.main}</button><button type="button" data-surface-tab="panel" aria-pressed="false">${c.stage.panel}</button></div><div class="platform-switch" role="group" aria-label="${c.switchPlatform}"><button type="button" data-platform="windows" aria-pressed="true">Windows</button><button type="button" data-platform="macos" aria-pressed="false">macOS</button></div></div><div class="hero-stage" data-surface="main" data-mode="live"><div class="stage-window"><div class="stage-bar" aria-hidden="true"><i></i><i></i><i></i><span class="stage-title">${escape(first.title)} — Aieyes</span></div><div class="stage-screen"><picture><source media="(max-width:700px)" srcset="${tall[0]}" width="${tall[1]}" height="${tall[2]}"><img class="stage-image" src="${wide[0]}" alt="${escape(c.scene)} — Windows" width="${wide[1]}" height="${wide[2]}" fetchpriority="high" decoding="async"></picture><p class="stage-status" role="status" hidden></p></div></div></div><div class="tour"><button type="button" class="tour-step" data-tour-step="-1" aria-label="${c.stage.prev}">${svg('previous')}</button><p class="tour-title" aria-live="polite"><span class="tour-count">${count(main.stops.indexOf(stop)+1)} / ${count(main.stops.length)}</span><strong>${escape(stop.title)}</strong></p><button type="button" class="tour-step" data-tour-step="1" aria-label="${c.stage.next}">${svg('next')}</button><p class="tour-text">${escape(stop.text)}</p></div><div class="showcase-footer"><div class="stage-tag"><span class="status-dot"></span><span class="stage-note">${c.stage.live}</span></div><div class="hero-pet">${pet(c,'working')}<span>${c.lang==='en'?'A little company, while you work.':'工作时，也有一点陪伴。'}</span></div></div></div>`;
 }
 function page(c){
   const canonical=origin+(c.lang==='en'?'/':zhPage);

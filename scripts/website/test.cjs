@@ -61,12 +61,13 @@ async function checkMobile(browser,origin,errors,failed){
         await page.locator('[data-feature-tab="wakeups"]').focus();
         await page.keyboard.press('Home');await checkSelectedTab();
         await page.keyboard.press('End');await checkSelectedTab();
-        await page.locator('button[data-platform=windows]').tap();
         assert.equal(await page.locator('button[data-platform=windows]').getAttribute('aria-pressed'),'true');
         await page.waitForFunction(()=>document.querySelector('.stage-frame:not([hidden])')&&document.querySelector('.stage-status').hidden,null,{timeout:30000});
         assert.equal(await page.locator('.hero-stage').getAttribute('data-mode'),'live');
         await checkLayout();
         await page.locator('[data-tour-step="1"]').tap();await checkLayout();
+        await page.locator('button[data-platform=macos]').tap();
+        assert.equal(await page.locator('.hero-stage').getAttribute('data-mode'),'native');await checkLayout();
         await page.locator('[data-feature-tab="overview"]').tap();
         await page.waitForFunction(()=>{const image=document.querySelector('#overview .shot img');return image.complete&&image.naturalWidth>0;});
         await page.locator('#overview .shot').tap();
@@ -131,19 +132,17 @@ async function checkFontsAndAnimation(browser,origin){
     fs.writeFileSync(path.join(qa,`animation-${process.env.AIEYES_WEBSITE_BROWSER||'chromium'}.json`),JSON.stringify({fonts,frames},null,2));
   }finally{await page.close();}
 }
-// The stage: native macOS states joined by click targets, and the live frontend for Windows.
+// The stage: the live frontend for Windows, shown first, and native macOS captures of the same places.
 async function checkStage(browser,origin,errors,failed){
   for(const [language,url] of [['en','/'],['zh-CN','/zh-CN/index.html']]){
     const data=JSON.parse(fs.readFileSync(path.join(site,`demo/stage.${language}.json`),'utf8'));
     const main=data.surfaces.main,panel=data.surfaces.panel;
-    // Every state has its picture, and every target leads to a state that exists.
-    for(const [surface,group] of Object.entries(data.surfaces))for(const [name,state] of Object.entries(group.states)){
+    // Every state has its picture, and none carries click targets: macOS is a capture.
+    for(const group of Object.values(data.surfaces))for(const [name,state] of Object.entries(group.states)){
       assert(fs.statSync(path.join(site,'demo/macos',language,name+'.webp')).size>1000,`${language}: ${name}.webp`);
-      for(const [x,y,w,h,to,label,other] of state.spots){
-        assert(data.surfaces[other??surface].states[to],`${language} ${name}: ${label} leads to ${to}`);
-        assert(label&&x>=0&&y>=0&&w>0&&h>0&&x+w<=group.width&&y+h<=group.height,`${language} ${name}: ${label} is inside the window`);
-      }
+      assert.equal(state.spots,undefined,`${language} ${name}: no click targets`);
     }
+    for(const [src] of Object.values(data.poster))assert(fs.statSync(path.join(site,new URL(src,origin).pathname)).size>1000,src);
     if(language==='en')assert(!/[㐀-鿿]/.test(JSON.stringify(data)),'the English stage has no Chinese text');
     const context=await browser.newContext({viewport:{width:1440,height:1100},reducedMotion:'reduce'});
     try{
@@ -151,61 +150,63 @@ async function checkStage(browser,origin,errors,failed){
       page.on('pageerror',error=>errors.push(String(error)));page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});
       page.on('response',response=>{if(response.status()>=400)failed.push(response.url());});
       await page.goto(origin+url);await page.waitForSelector('.showcase.is-live');
-      const view=()=>page.evaluate(()=>({mode:document.querySelector('.hero-stage').dataset.mode,surface:document.querySelector('.hero-stage').dataset.surface,image:new URL(document.querySelector('.stage-image').src).pathname,count:document.querySelector('.tour-count').textContent,stop:document.querySelector('.tour-title strong').textContent,spots:document.querySelectorAll('.stage-spot').length}));
+      const view=()=>page.evaluate(()=>({mode:document.querySelector('.hero-stage').dataset.mode,surface:document.querySelector('.hero-stage').dataset.surface,image:new URL(document.querySelector('.stage-image').src).pathname,count:document.querySelector('.tour-count').textContent,stop:document.querySelector('.tour-title strong').textContent,note:document.querySelector('.stage-note').textContent,frames:document.querySelectorAll('.stage-frame:not([hidden])').length}));
+      const title=id=>main.stops.find(stop=>stop.id===id).title;
+      const live=()=>page.waitForFunction(()=>document.querySelector('.stage-frame.is-ready:not([hidden])')&&document.querySelector('.stage-status').hidden&&document.querySelector('.stage-image').hidden,null,{timeout:30000});
+      const reaches=check=>page.waitForFunction(check,null,{timeout:30000});
       const shows=async(surface,name,step)=>{
         const group=data.surfaces[surface],state=group.states[name],index=group.stops.findIndex(stop=>stop.id===state.stop);
-        await page.waitForFunction(pathname=>new URL(document.querySelector('.stage-image').src).pathname===pathname,`/demo/macos/${language}/${name}.webp`);
-        assert.deepEqual(await view(),{mode:'native',surface,image:`/demo/macos/${language}/${name}.webp`,count:`${String(index+1).padStart(2,'0')} / ${String(group.stops.length).padStart(2,'0')}`,stop:group.stops[index].title,spots:state.spots.length},`${label}: ${step}`);
+        await page.waitForFunction(pathname=>new URL(document.querySelector('.stage-image').src).pathname===pathname&&!document.querySelector('.stage-image').hidden,`/demo/macos/${language}/${name}.webp`);
+        assert.deepEqual(await view(),{mode:'native',surface,image:`/demo/macos/${language}/${name}.webp`,count:`${String(index+1).padStart(2,'0')} / ${String(group.stops.length).padStart(2,'0')}`,stop:group.stops[index].title,note:data.text.native,frames:0},`${label}: ${step}`);
       };
-      const spot=(surface,from,to)=>data.surfaces[surface].states[from].spots.find(item=>item[4]===to)[5];
-      const press=(surface,from,to)=>page.locator(`.stage-spot[aria-label="${spot(surface,from,to)}"]`).first().click();
-      await shows('main',main.initial,'first view');
-      await page.locator('#showcase').screenshot({path:path.join(qa,`${language}-stage-macos.png`)});
-      // Click targets: sidebar, a settings sub-page, folding a card, the session list.
-      await press('main','overview','analytics');await shows('main','analytics','sidebar');
-      assert.equal(await page.locator('.stage-spot[aria-current=true]').count(),1);
-      await press('main','analytics','settings');await shows('main','settings','settings');
-      await press('main','settings','settings-desktop');await shows('main','settings-desktop','settings sub-page');
-      await press('main','settings-desktop','overview');await press('main','overview','overview-collapsed');await shows('main','overview-collapsed','folded card');
-      await press('main','overview-collapsed','overview');await press('main','overview','overview-sessions');await shows('main','overview-sessions','session list');
-      // The tour: buttons and arrow keys, wrapping at both ends.
-      await page.locator('[data-tour-step="1"]').click();await shows('main',main.stops[2].state,'next');
-      await page.keyboard.press('ArrowLeft');await page.keyboard.press('ArrowLeft');await shows('main',main.stops[0].state,'arrow keys');
-      await page.locator('[data-tour-step="-1"]').click();await shows('main',main.stops.at(-1).state,'wraps');
-      // The panel, and its buttons that open the main window.
-      await page.locator('[data-surface-tab=panel]').click();await shows('panel',panel.initial,'panel');
-      assert.equal(await page.locator('[data-surface-tab=panel]').getAttribute('aria-pressed'),'true');
-      await page.locator('#showcase').screenshot({path:path.join(qa,`${language}-stage-panel.png`)});
-      await press('panel','panel','panel-servers');await shows('panel','panel-servers','panel tab');
-      await page.locator('[data-surface-tab=main]').click();await page.locator('[data-surface-tab=panel]').click();await shows('panel','panel-servers','each window keeps its place');
-      await press('panel','panel-servers','panel');
-      const opened=panel.states.panel.spots.find(item=>item[6]==='main'&&item[4]==='settings');
-      await page.locator(`.stage-spot[aria-label="${opened[5]}"]`).click();await shows('main','settings','panel opens the main window');
-      // Windows: the frontend itself, in a frame, following the same tour.
-      await page.locator('button[data-platform=windows]').click();
-      await page.waitForFunction(()=>document.querySelector('.stage-frame:not([hidden])')&&document.querySelector('.stage-status').hidden,null,{timeout:30000});
+      // Windows comes first: the frontend itself, in a frame.
+      assert.deepEqual(await page.locator('.platform-switch button').evaluateAll(buttons=>buttons.map(button=>[button.dataset.platform,button.getAttribute('aria-pressed')])),[['windows','true'],['macos','false']],`${label}: Windows is the default`);
+      assert.equal(await page.locator('html').getAttribute('data-platform'),'windows');
+      await live();
       const frame=page.frameLocator('.stage-frame:not([hidden])'),inside=()=>page.locator('.stage-frame:not([hidden])').evaluate(element=>element.contentWindow.AieyesDemo.view());
-      assert.equal((await view()).mode,'live');assert.equal(await page.locator('.stage-spot').count(),0);
+      assert.deepEqual(await view(),{mode:'live',surface:'main',image:new URL(data.poster.main[0],origin).pathname,count:`01 / ${String(main.stops.length).padStart(2,'0')}`,stop:main.stops[0].title,note:data.text.live,frames:1},`${label}: first view`);
+      assert.equal(await page.locator('.stage-spot').count(),0);
       assert.equal(await frame.locator('html').getAttribute('lang'),language);
-      await page.waitForFunction(()=>document.querySelector('.stage-frame:not([hidden])').contentWindow.AieyesDemo.view().page==='settings');
-      await page.locator('[data-tour-step="1"]').click();
-      await page.waitForFunction(()=>document.querySelector('.stage-frame:not([hidden])').contentWindow.AieyesDemo.view().page==='setup');
+      assert.equal((await inside()).page,'agent');
+      await page.locator('#showcase').screenshot({path:path.join(qa,`${language}-stage-windows.png`)});
+      // The tour: buttons and arrow keys, wrapping at both ends.
+      await page.locator('[data-tour-step="1"]').click();await page.locator('[data-tour-step="1"]').click();
+      await reaches(()=>document.querySelector('.stage-frame:not([hidden])').contentWindow.AieyesDemo.view().page==='analysis');
+      assert.equal((await view()).stop,title('analytics'));
+      await page.keyboard.press('ArrowLeft');await page.keyboard.press('ArrowLeft');
+      await reaches(()=>document.querySelector('.stage-frame:not([hidden])').contentWindow.AieyesDemo.view().page==='agent');
+      assert.equal((await view()).stop,main.stops[0].title);
+      await page.locator('[data-tour-step="-1"]').click();
+      await reaches(()=>document.querySelector('.stage-frame:not([hidden])').contentWindow.AieyesDemo.view().page==='setup');
       assert.equal((await view()).stop,main.stops.at(-1).title);
       // Moving inside the frame moves the tour.
       await frame.locator('aside nav button[data-page="analysis"]').click();
-      await page.waitForFunction(title=>document.querySelector('.tour-title strong').textContent===title,main.stops.find(stop=>stop.id==='analytics').title);
+      await page.waitForFunction(title=>document.querySelector('.tour-title strong').textContent===title,title('analytics'));
       assert.equal((await inside()).page,'analysis');
-      await page.locator('#showcase').screenshot({path:path.join(qa,`${language}-stage-windows.png`)});
       // The frame has the window's real size and is scaled to fit the stage.
       const fitted=await page.evaluate(()=>{const frame=document.querySelector('.stage-frame:not([hidden])').getBoundingClientRect(),screen=document.querySelector('.stage-screen').getBoundingClientRect();return Math.abs(frame.width-screen.width)<2&&Math.abs(frame.height-screen.height)<2;});
       assert(fitted,`${label}: the live window fills the stage`);
       await page.locator('[data-surface-tab=panel]').click();
-      await page.waitForFunction(()=>document.querySelector('.stage-frame:not([hidden])')?.contentWindow.AieyesDemo?.panel&&document.querySelector('.stage-status').hidden,null,{timeout:30000});
+      await reaches(()=>document.querySelector('.stage-frame.is-ready:not([hidden])')?.contentWindow.AieyesDemo?.panel&&document.querySelector('.stage-status').hidden);
+      assert.equal(await page.locator('[data-surface-tab=panel]').getAttribute('aria-pressed'),'true');
       await page.locator('#showcase').screenshot({path:path.join(qa,`${language}-stage-windows-panel.png`)});
-      // Back on macOS the picture is the place the visitor reached on Windows.
+      // macOS: a capture of the place the visitor reached on Windows, with nothing to click in it.
       await page.locator('[data-surface-tab=main]').click();await page.locator('button[data-platform=macos]').click();await shows('main','analytics','platforms share one place');
+      assert.equal(await page.locator('.stage-screen button').count(),0,`${label}: the capture has no click targets`);
+      await page.locator('#showcase').screenshot({path:path.join(qa,`${language}-stage-macos.png`)});
+      await page.locator('[data-tour-step="1"]').click();await shows('main',main.stops[3].state,'the tour steps through captures');
+      await page.locator('[data-surface-tab=panel]').click();await shows('panel',panel.initial,'panel capture');
+      await page.locator('#showcase').screenshot({path:path.join(qa,`${language}-stage-panel.png`)});
+      await page.locator('[data-surface-tab=main]').click();await shows('main',main.stops[3].state,'each window keeps its place');
+      // The choice lasts for the visit, and Windows picks up where macOS left.
+      await page.reload();await page.waitForSelector('.showcase.is-live');
+      assert.equal(await page.locator('button[data-platform=macos]').getAttribute('aria-pressed'),'true');await shows('main',main.initial,'macOS is remembered');
+      await page.locator('[data-tour-step="1"]').click();await page.locator('[data-tour-step="1"]').click();await shows('main','analytics','tour on macOS');
+      await page.locator('button[data-platform=windows]').click();await live();
+      await reaches(()=>document.querySelector('.stage-frame:not([hidden])').contentWindow.AieyesDemo.view().page==='analysis');
+      assert.equal((await view()).mode,'live');
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
-      console.log(`Stage passed: ${language}, click targets, tour, panel, live Windows frame.`);
+      console.log(`Stage passed: ${language}, live Windows frame first, tour, panel, macOS captures.`);
     }finally{await context.close();}
   }
 }
@@ -215,7 +216,7 @@ async function checkNoScript(browser,origin){
     await page.goto(origin+url);assert.equal(await page.locator('.package-button').count(),6);
     assert(await page.locator('.hero-actions a[href="#download"]').isVisible());
     const preview=new URL(await page.locator('.stage-image').getAttribute('src'),origin);
-    assert.equal(preview.pathname,`/demo/macos/${language}/overview.webp`);
+    assert.equal(preview.pathname,`/screenshots/${language}/windows-overview.webp`);
     assert(fs.statSync(path.join(site,preview.pathname)).size>1000);
     assert.equal(await page.locator('.stage-spot').count(),0);
     assert.match(preview.searchParams.get('v'),/^[a-f0-9]{12}$/);
@@ -282,6 +283,9 @@ for(const name of ['README.md','README.zh-CN.md','docs/development.md']){
       assert.equal(await page.locator('.animated-pet').first().evaluate(el=>getComputedStyle(el).animationName),'none');
 
       const previewVersion=new URL(await page.locator('.feature img[data-preview]').first().getAttribute('src'),origin).searchParams.get('v');
+      assert(await page.locator('.feature img[data-preview]').evaluateAll(images=>images.every(image=>image.src.includes('/windows-')&&image.alt.endsWith(' — Windows'))));
+      await page.locator('button[data-platform=macos]').click();
+      assert(await page.locator('.feature img[data-preview]').evaluateAll(images=>images.every(image=>image.src.includes('/macos-')&&image.alt.endsWith(' — macOS'))));
       await page.locator('button[data-platform=windows]').click();
       assert.match(previewVersion,/^[a-f0-9]{12}$/);
       assert(await page.locator('img[data-preview]').evaluateAll((images,version)=>images.every(image=>new URL(image.src).searchParams.get('v')===version),previewVersion));
@@ -308,13 +312,13 @@ for(const name of ['README.md','README.zh-CN.md','docs/development.md']){
     await page.goto(origin+'/#accounts');await page.locator('[data-language]').click();assert.equal(new URL(page.url()).pathname,'/zh-CN/index.html');assert.equal(new URL(page.url()).hash,'#accounts');
     await page.locator('[data-feature-tab="servers"]').click();
     await page.locator('#servers').screenshot({path:path.join(qa,'server-section.png')});
-    await page.goto(origin+'/');await page.locator('button[data-platform=macos]').click();await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:path.join(qa,'hero-final.png')});
+    await page.goto(origin+'/');await page.waitForFunction(()=>document.querySelector('.stage-frame.is-ready:not([hidden])'),null,{timeout:30000});await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:path.join(qa,'hero-final.png')});
     await checkStage(browser,origin,errors,failed);
     await checkFontsAndAnimation(browser,origin);
     await checkNoScript(browser,origin);
     await checkMobile(browser,origin,errors,failed);
     assert.deepEqual(errors,[]);assert.deepEqual(failed,[]);
-    console.log('Passed: bilingual content, assets, links, the interactive stage on both platforms, six feature galleries, platform switching, zoom/focus/Escape, navigation, FAQ, mobile/tablet layout, language anchors.');
+    console.log('Passed: bilingual content, assets, links, the live stage with its macOS captures, six feature galleries, platform switching, zoom/focus/Escape, navigation, FAQ, mobile/tablet layout, language anchors.');
     console.log('Visual review:',qa);
   }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

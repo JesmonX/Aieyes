@@ -20,7 +20,7 @@ parser.add_argument("--language", choices=["all", "en", "zh-CN"], default="all")
 parser.add_argument("--prepare", action="store_true")
 parser.add_argument("--capture", action="store_true")
 parser.add_argument("--audit-layout", action="store_true")
-parser.add_argument("--demo", action="store_true", help="render the click-through states of the website demo only")
+parser.add_argument("--demo", action="store_true", help="render the states of the website demo only")
 args = parser.parse_args()
 languages = ["en", "zh-CN"] if args.language == "all" else [args.language]
 ROOT = Path(__file__).resolve().parents[2]
@@ -68,7 +68,7 @@ for source in (ROOT / "apps/macos/Sources/Aieyes").glob("*.swift"):
                          ("}.listStyle(.sidebar)", "}.listStyle(.plain).scrollContentBackground(.hidden)")]:
             assert text.count(old) == 1, old
             text = text.replace(old, new)
-        # Rows of the plain list expose no accessibility frames; the demo hotspots use each label's own layout frame.
+        # Rows of the plain list expose no accessibility frames; the capture dump records each label's own layout frame.
         row = "Label { Text(title).lineLimit(1) } icon: { Image(systemName: icon) }\n            .accessibilityLabel(title)"
         assert text.count(row) == 1
         text = text.replace(row, row + "\n            .background(GeometryReader { geometry in Color.clear.onChange(of: geometry.frame(in: .global), initial: true) { _, frame in websiteSidebarRows[title] = frame } })")
@@ -205,17 +205,13 @@ for source in (ROOT / "apps/macos/Sources/Aieyes").glob("*.swift"):
 if "--prepare" in sys.argv:
     print(SOURCE); sys.exit(0)
 
-# Website demo: one native capture per reachable state, and the controls that lead from one to another.
+# Website demo: one native capture per place the tour or the live Windows frontend can reach.
 def demo_state(name, page, surface="main", tab="integrations", general="appearance", agent="codex", sessions=False, card=True):
     return dict(name=name, surface=surface, page=page, tab=tab, general=general, agent=agent, sessions=sessions, card=card)
 
 
-# Titles are spelled as in the application source; English comes from the product catalog.
-DEMO_SIDEBAR = {"总览": "overview", "用量分析": "analytics", "服务器": "servers", "接入与账户": "accounts", "机器与采集": "machines",
-                "模型价格": "prices", "定时唤醒": "wakeups", "设置": "settings", "配置向导": "setup"}
-DEMO_GENERAL = {"外观": "appearance", "桌宠与会话": "desktop", "网络代理": "network", "刷新与历史": "refresh", "通知": "notifications",
-                "高级": "advanced", "更新与关于": "updates"}
-DEMO_AGENTS = {"Codex": "codex", "Claude Code": "claude", "Antigravity": "antigravity"}
+DEMO_GENERAL = ["appearance", "desktop", "network", "refresh", "notifications", "advanced", "updates"]
+DEMO_AGENTS = ["codex", "claude", "antigravity"]
 general_state = lambda key: "settings" if key == "appearance" else "settings-" + key
 agent_state = lambda key: "accounts" if key == "codex" else "accounts-" + key
 DEMO_STATES = [
@@ -225,35 +221,26 @@ DEMO_STATES = [
     demo_state("overview-sessions-collapsed", "agent", sessions=True, card=False),
     demo_state("analytics", "analysis"),
     demo_state("servers", "servers"),
-    *[demo_state(agent_state(key), "settings", agent=key) for key in DEMO_AGENTS.values()],
+    *[demo_state(agent_state(key), "settings", agent=key) for key in DEMO_AGENTS],
     demo_state("machines", "settings", tab="servers"),
     demo_state("prices", "settings", tab="prices"),
     demo_state("wakeups", "settings", tab="wakeups"),
-    *[demo_state(general_state(key), "settings", tab="general", general=key) for key in DEMO_GENERAL.values()],
+    *[demo_state(general_state(key), "settings", tab="general", general=key) for key in DEMO_GENERAL],
     demo_state("setup", "setup"),
     demo_state("panel", "agent", surface="panel", sessions=True),
     demo_state("panel-quotas", "agent", surface="panel"),
     demo_state("panel-servers", "servers", surface="panel", sessions=True),
 ]
-# The session list and the Codex quota card open and close independently of each other.
-DEMO_SESSIONS = {"overview": "overview-sessions", "overview-sessions": "overview", "overview-collapsed": "overview-sessions-collapsed",
-                 "overview-sessions-collapsed": "overview-collapsed", "panel": "panel-quotas", "panel-quotas": "panel"}
-DEMO_CARD = {"overview": "overview-collapsed", "overview-collapsed": "overview", "overview-sessions": "overview-sessions-collapsed",
-             "overview-sessions-collapsed": "overview-sessions"}
-# Panel controls that bring up the main window.
-DEMO_PANEL_OPENS = {"打开详情": "overview", "设置": "settings"}
 DEMO_INITIAL = {"main": "overview", "panel": "panel"}
 
 
 def write_demo_manifest():
-    catalog = json.loads((ROOT / "locales/en.json").read_text(encoding="utf-8"))
-    word = lambda text, language: text if language == "zh-CN" else catalog[text]
     manifest = {surface: dict(width=size[0], height=size[1], initial=DEMO_INITIAL[surface], states={}) for surface, size in DEMO_SIZE.items()}
     for state in DEMO_STATES:
         name, surface = state["name"], state["surface"]
         width, height = DEMO_SIZE[surface]
         # `view` is where the state sits in the application, in the native application's own terms.
-        entry = dict(view={key: state[key] for key in ("page", "tab", "general", "agent", "sessions", "card")}, title={}, hotspots={})
+        entry = dict(view={key: state[key] for key in ("page", "tab", "general", "agent", "sessions", "card")}, title={})
         for language in ("en", "zh-CN"):
             dump = OUT / language / "demo" / (name + ".json")
             if not dump.exists():
@@ -263,83 +250,18 @@ def write_demo_manifest():
                 raise SystemExit(f"{dump}: unexpected capture size")
             if not (ROOT / "apps/website/public/demo/macos" / language / (name + ".webp")).exists():
                 raise SystemExit(f"Missing encoded image for {language} {name}")
-            elements = [e for e in data["elements"] if e["frameAvailable"] and e["width"] > 0 and e["height"] > 0]
-            scrolls = [e for e in elements if e["role"] == "AXScrollArea"]
-            spots = []
-
-            def spot(x, y, w, h, target, label, clip=None, opens=None):
-                left, top, right, bottom = max(0, x), max(0, y), min(width, x + w), min(height, y + h)
-                if clip:
-                    left, top, right, bottom = max(left, clip["x"]), max(top, clip["y"]), min(right, clip["x"] + clip["width"]), min(bottom, clip["y"] + clip["height"])
-                # A control scrolled mostly out of view is not offered.
-                if right - left < 12 or bottom - top < min(h, 14):
-                    return False
-                spots.append(dict(x=round(left), y=round(top), w=round(right - left), h=round(bottom - top), to=target, label=label, **({"surface": opens} if opens else {})))
-                return True
-
-            def element_spot(element, target, label, opens=None):
-                parents = [s for s in scrolls if element["path"].startswith(s["path"] + ".")]
-                return spot(element["x"], element["y"], element["width"], element["height"], target, label, max(parents, key=lambda s: len(s["path"])) if parents else None, opens)
-
-            def buttons(label):
-                return [e for e in elements if e["role"] == "AXButton" and e["label"] == label]
-
             if surface == "main":
                 title = data["title"]
                 if not title.endswith(" — Aieyes"):
                     raise SystemExit(f"{dump}: window title was not set")
                 entry["title"][language] = title[:-len(" — Aieyes")]
-                outline = next(e for e in elements if e["role"] == "AXOutline")
-                rows = {row["title"]: row for row in data["sidebar"]}
-                for source, target in DEMO_SIDEBAR.items():
-                    row = rows.get(word(source, language))
-                    # The label's measured frame, widened to the list row it sits in.
-                    if not row or not spot(outline["x"] + 8, row["y"] - 4, outline["width"] - 16, row["height"] + 8, target, word(source, language)):
-                        raise SystemExit(f"{dump}: sidebar row {source} is missing")
-                for element in buttons(word("查看分析", language)):
-                    element_spot(element, "analytics", element["label"])
-                if state["page"] == "agent" and not any(s["to"] == "analytics" and s["x"] > outline["width"] for s in spots):
-                    raise SystemExit(f"{dump}: no analysis button")
-                if state["page"] == "settings" and state["tab"] == "general":
-                    for source, key in DEMO_GENERAL.items():
-                        chip = buttons(word(source, language))
-                        if len(chip) != 1 or not element_spot(chip[0], general_state(key), chip[0]["label"]):
-                            raise SystemExit(f"{dump}: settings page {source} is missing")
-                if state["page"] == "settings" and state["tab"] == "integrations":
-                    for label, key in DEMO_AGENTS.items():
-                        chip = buttons(label)
-                        if len(chip) != 1 or not element_spot(chip[0], agent_state(key), label):
-                            raise SystemExit(f"{dump}: agent {label} is missing")
             else:
-                tabs = [e for e in elements if e["role"] == "AXRadioButton"][:2]
+                # The panel has no title bar; its selected tab names it.
+                tabs = [e for e in data["elements"] if e["role"] == "AXRadioButton" and e["frameAvailable"] and e["width"] > 0 and e["height"] > 0][:2]
                 if len(tabs) != 2:
                     raise SystemExit(f"{dump}: panel tabs are missing")
                 entry["title"][language] = tabs[0 if state["page"] == "agent" else 1]["label"]
-                for tab, target in zip(tabs, ("panel", "panel-servers")):
-                    element_spot(tab, target, tab["label"])
-                for source, target in DEMO_PANEL_OPENS.items():
-                    button = buttons(word(source, language))
-                    if len(button) != 1 or not element_spot(button[0], target, button[0]["label"], "main"):
-                        raise SystemExit(f"{dump}: panel control {source} is missing")
-            if name in DEMO_SESSIONS:
-                disclosure = next((e for e in elements if e["role"] == "AXDisclosureTriangle"), None)
-                if not disclosure or not element_spot(disclosure, DEMO_SESSIONS[name], disclosure["label"].split(", ")[1 if ", " in disclosure["label"] else 0]):
-                    raise SystemExit(f"{dump}: session disclosure is missing")
-            if name in DEMO_CARD:
-                toggles = [word("折叠额度", language), word("展开额度", language)]
-                # Accessibility labels lower-case the action inside an English sentence.
-                ends = lambda element, text: element["label"].lower().endswith(text.lower())
-                card = next((e for e in elements if e["role"] == "AXButton" and any(ends(e, t) for t in toggles)), None)
-                if not card or not element_spot(card, DEMO_CARD[name], next(t for t in toggles if ends(card, t))):
-                    raise SystemExit(f"{dump}: Codex quota card header is missing")
-            entry["hotspots"][language] = spots
         manifest[surface]["states"][name] = entry
-    for surface, group in manifest.items():
-        for name, entry in group["states"].items():
-            for language, spots in entry["hotspots"].items():
-                for item in spots:
-                    if item["to"] not in manifest[item.get("surface", surface)]["states"]:
-                        raise SystemExit(f"{surface}/{name} ({language}): hotspot leads to unknown state {item['to']}")
     target = ROOT / "apps/website/demo/macos.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

@@ -25,14 +25,14 @@ export const en = {
   "switchPlatform": "Preview platform",
   "enlarge": "Enlarge preview",
   "scene": "A home for your everyday AI workflow",
-  "sceneNote": "Click the sidebar, tabs and cards to look around.",
   "stage": {
     "surface": "Window",
     "main": "Main window",
     "panel": "Panel",
     "prev": "Previous view",
     "next": "Next view",
-    "live": "The real interface, running on sample data.",
+    "live": "The real interface, running on sample data. Click around.",
+    "native": "A capture of the native macOS app. Switch to Windows to try it live.",
     "loading": "Starting the live demo…",
     "failed": "The live demo could not start here. This is a screenshot.",
     "frame": "Aieyes for Windows, live demo"
@@ -269,14 +269,14 @@ export const zh = {
   "switchPlatform": "预览平台",
   "enlarge": "放大预览",
   "scene": "给日常 AI 工作流，一个清晰的入口",
-  "sceneNote": "点击侧栏、标签和卡片，随意看看。",
   "stage": {
     "surface": "窗口",
     "main": "主窗口",
     "panel": "面板",
     "prev": "上一个界面",
     "next": "下一个界面",
-    "live": "这是真实界面，运行在示例数据上。",
+    "live": "这是真实界面，运行在示例数据上，随意点点看。",
+    "native": "这是 macOS 原生应用的截图，切换到 Windows 可以实际操作。",
     "loading": "正在启动实时演示…",
     "failed": "实时演示未能在这里启动，当前显示的是截图。",
     "frame": "Aieyes Windows 版实时演示"

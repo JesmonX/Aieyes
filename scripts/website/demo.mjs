@@ -1,12 +1,13 @@
-// Interactive demo assets: the desktop frontend with its synthetic backend, and the native macOS states.
+// Demo assets: the desktop frontend with its synthetic backend, and the native macOS captures.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 
-// Stops of the tour, in sidebar order. Each lists the native states that belong to it; the first is
-// the one the stop opens. Every native state belongs to exactly one stop.
+// Stops of the tour, in sidebar order. Each lists the native captures that belong to it: the first is
+// the one the stop opens, the others are places the live frontend can reach within the stop. Every
+// native state belongs to exactly one stop.
 export const TOUR={
   main:[
     {id:'overview',mac:['overview','overview-collapsed']},
@@ -110,19 +111,17 @@ export function buildDemo({root,source,out}){
     if(!TOUR[surface])throw new Error('No tour for the native surface: '+surface);
     for(const stop of TOUR[surface])for(const state of stop.mac)if(!group.states[state])throw new Error(`Tour stop ${surface}/${stop.id} needs the native state ${state}`);
     if(!group.states[group.initial])throw new Error('Missing initial native state: '+group.initial);
-    for(const [name,state] of Object.entries(group.states)){
+    for(const name of Object.keys(group.states)){
       if(TOUR[surface].filter(stop=>stop.mac.includes(name)).length!==1)throw new Error(`${surface}/${name}: a native state belongs to exactly one tour stop`);
       for(const language of ['en','zh-CN']){
         const image=path.join(source,'public/demo/macos',language,name+'.webp');
         if(!fs.existsSync(image))throw new Error('Missing native state image: '+image);
         hash.update(fs.readFileSync(image));
-        // A hotspot may lead to the other window, as the panel's footer buttons do.
-        for(const spot of state.hotspots[language])if(!manifest[spot.surface??surface]?.states[spot.to])throw new Error(`${surface}/${name}: hotspot leads to unknown state ${spot.surface??surface}/${spot.to}`);
       }
     }
   }
   const imageVersion=hash.digest('hex').slice(0,12);
-  // One language per page: its titles and hotspots, with each state's place in the tour and in the frontend.
+  // One language per page: its titles, with each state's place in the tour and in the frontend.
   const forLanguage=language=>({
     version:imageVersion,language,
     surfaces:Object.fromEntries(Object.entries(manifest).map(([surface,group])=>[surface,{
@@ -130,9 +129,8 @@ export function buildDemo({root,source,out}){
       stops:TOUR[surface].map(stop=>({id:stop.id,state:stop.mac[0]})),
       states:Object.fromEntries(Object.entries(group.states).map(([name,state])=>[name,{
         title:state.title[language],stop:TOUR[surface].find(stop=>stop.mac.includes(name)).id,app:appView(state.view,`${surface}/${name}`),
-        spots:state.hotspots[language].map(spot=>[spot.x,spot.y,spot.w,spot.h,spot.to,spot.label,...(spot.surface&&spot.surface!==surface?[spot.surface]:[])]),
       }])),
     }])),
   });
-  return {imageVersion,forLanguage,image:(language,state)=>`/demo/macos/${language}/${state}.webp?v=${imageVersion}`};
+  return {imageVersion,forLanguage};
 }
