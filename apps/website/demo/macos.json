@@ -1,0 +1,4728 @@
+{
+  "main": {
+    "width": 1120,
+    "height": 760,
+    "initial": "overview",
+    "states": {
+      "overview": {
+        "view": {
+          "page": "agent",
+          "tab": "integrations",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Overview",
+          "zh-CN": "总览"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 912,
+              "y": 172,
+              "w": 130,
+              "h": 24,
+              "to": "analytics",
+              "label": "View analysis"
+            },
+            {
+              "x": 506,
+              "y": 647,
+              "w": 130,
+              "h": 24,
+              "to": "analytics",
+              "label": "View analysis"
+            },
+            {
+              "x": 231,
+              "y": 96,
+              "w": 830,
+              "h": 22,
+              "to": "overview-sessions",
+              "label": "3 sessions"
+            },
+            {
+              "x": 255,
+              "y": 309,
+              "w": 381,
+              "h": 36,
+              "to": "overview-collapsed",
+              "label": "Collapse quota"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 943,
+              "y": 172,
+              "w": 99,
+              "h": 24,
+              "to": "analytics",
+              "label": "查看分析"
+            },
+            {
+              "x": 537,
+              "y": 647,
+              "w": 99,
+              "h": 24,
+              "to": "analytics",
+              "label": "查看分析"
+            },
+            {
+              "x": 231,
+              "y": 96,
+              "w": 830,
+              "h": 22,
+              "to": "overview-sessions",
+              "label": "3 个会话"
+            },
+            {
+              "x": 255,
+              "y": 309,
+              "w": 381,
+              "h": 36,
+              "to": "overview-collapsed",
+              "label": "折叠额度"
+            }
+          ]
+        }
+      },
+      "overview-sessions": {
+        "view": {
+          "page": "agent",
+          "tab": "integrations",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": true,
+          "card": true
+        },
+        "title": {
+          "en": "Overview",
+          "zh-CN": "总览"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 912,
+              "y": 325,
+              "w": 130,
+              "h": 24,
+              "to": "analytics",
+              "label": "View analysis"
+            },
+            {
+              "x": 231,
+              "y": 96,
+              "w": 830,
+              "h": 22,
+              "to": "overview",
+              "label": "3 sessions"
+            },
+            {
+              "x": 255,
+              "y": 462,
+              "w": 381,
+              "h": 36,
+              "to": "overview-sessions-collapsed",
+              "label": "Collapse quota"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 943,
+              "y": 325,
+              "w": 99,
+              "h": 24,
+              "to": "analytics",
+              "label": "查看分析"
+            },
+            {
+              "x": 231,
+              "y": 96,
+              "w": 830,
+              "h": 22,
+              "to": "overview",
+              "label": "3 个会话"
+            },
+            {
+              "x": 255,
+              "y": 462,
+              "w": 381,
+              "h": 36,
+              "to": "overview-sessions-collapsed",
+              "label": "折叠额度"
+            }
+          ]
+        }
+      },
+      "overview-collapsed": {
+        "view": {
+          "page": "agent",
+          "tab": "integrations",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": false,
+          "card": false
+        },
+        "title": {
+          "en": "Overview",
+          "zh-CN": "总览"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 912,
+              "y": 172,
+              "w": 130,
+              "h": 24,
+              "to": "analytics",
+              "label": "View analysis"
+            },
+            {
+              "x": 231,
+              "y": 96,
+              "w": 830,
+              "h": 22,
+              "to": "overview-sessions-collapsed",
+              "label": "3 sessions"
+            },
+            {
+              "x": 255,
+              "y": 309,
+              "w": 381,
+              "h": 36,
+              "to": "overview",
+              "label": "Expand quota"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 943,
+              "y": 172,
+              "w": 99,
+              "h": 24,
+              "to": "analytics",
+              "label": "查看分析"
+            },
+            {
+              "x": 231,
+              "y": 96,
+              "w": 830,
+              "h": 22,
+              "to": "overview-sessions-collapsed",
+              "label": "3 个会话"
+            },
+            {
+              "x": 255,
+              "y": 309,
+              "w": 381,
+              "h": 36,
+              "to": "overview",
+              "label": "展开额度"
+            }
+          ]
+        }
+      },
+      "overview-sessions-collapsed": {
+        "view": {
+          "page": "agent",
+          "tab": "integrations",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": true,
+          "card": false
+        },
+        "title": {
+          "en": "Overview",
+          "zh-CN": "总览"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 912,
+              "y": 325,
+              "w": 130,
+              "h": 24,
+              "to": "analytics",
+              "label": "View analysis"
+            },
+            {
+              "x": 231,
+              "y": 96,
+              "w": 830,
+              "h": 22,
+              "to": "overview-collapsed",
+              "label": "3 sessions"
+            },
+            {
+              "x": 255,
+              "y": 462,
+              "w": 381,
+              "h": 36,
+              "to": "overview-sessions",
+              "label": "Expand quota"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 943,
+              "y": 325,
+              "w": 99,
+              "h": 24,
+              "to": "analytics",
+              "label": "查看分析"
+            },
+            {
+              "x": 231,
+              "y": 96,
+              "w": 830,
+              "h": 22,
+              "to": "overview-collapsed",
+              "label": "3 个会话"
+            },
+            {
+              "x": 255,
+              "y": 462,
+              "w": 381,
+              "h": 36,
+              "to": "overview-sessions",
+              "label": "展开额度"
+            }
+          ]
+        }
+      },
+      "analytics": {
+        "view": {
+          "page": "analysis",
+          "tab": "integrations",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Analytics",
+          "zh-CN": "用量分析"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            }
+          ]
+        }
+      },
+      "servers": {
+        "view": {
+          "page": "servers",
+          "tab": "integrations",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Servers",
+          "zh-CN": "服务器"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            }
+          ]
+        }
+      },
+      "accounts": {
+        "view": {
+          "page": "settings",
+          "tab": "integrations",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Accounts",
+          "zh-CN": "接入与账户"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 231,
+              "y": 52,
+              "w": 92,
+              "h": 34,
+              "to": "accounts",
+              "label": "Codex"
+            },
+            {
+              "x": 329,
+              "y": 52,
+              "w": 137,
+              "h": 34,
+              "to": "accounts-claude",
+              "label": "Claude Code"
+            },
+            {
+              "x": 472,
+              "y": 52,
+              "w": 122,
+              "h": 34,
+              "to": "accounts-antigravity",
+              "label": "Antigravity"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 231,
+              "y": 52,
+              "w": 92,
+              "h": 34,
+              "to": "accounts",
+              "label": "Codex"
+            },
+            {
+              "x": 329,
+              "y": 52,
+              "w": 137,
+              "h": 34,
+              "to": "accounts-claude",
+              "label": "Claude Code"
+            },
+            {
+              "x": 472,
+              "y": 52,
+              "w": 122,
+              "h": 34,
+              "to": "accounts-antigravity",
+              "label": "Antigravity"
+            }
+          ]
+        }
+      },
+      "accounts-claude": {
+        "view": {
+          "page": "settings",
+          "tab": "integrations",
+          "general": "appearance",
+          "agent": "claude",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Accounts",
+          "zh-CN": "接入与账户"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 231,
+              "y": 52,
+              "w": 92,
+              "h": 34,
+              "to": "accounts",
+              "label": "Codex"
+            },
+            {
+              "x": 329,
+              "y": 52,
+              "w": 137,
+              "h": 34,
+              "to": "accounts-claude",
+              "label": "Claude Code"
+            },
+            {
+              "x": 472,
+              "y": 52,
+              "w": 122,
+              "h": 34,
+              "to": "accounts-antigravity",
+              "label": "Antigravity"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 231,
+              "y": 52,
+              "w": 92,
+              "h": 34,
+              "to": "accounts",
+              "label": "Codex"
+            },
+            {
+              "x": 329,
+              "y": 52,
+              "w": 137,
+              "h": 34,
+              "to": "accounts-claude",
+              "label": "Claude Code"
+            },
+            {
+              "x": 472,
+              "y": 52,
+              "w": 122,
+              "h": 34,
+              "to": "accounts-antigravity",
+              "label": "Antigravity"
+            }
+          ]
+        }
+      },
+      "accounts-antigravity": {
+        "view": {
+          "page": "settings",
+          "tab": "integrations",
+          "general": "appearance",
+          "agent": "antigravity",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Accounts",
+          "zh-CN": "接入与账户"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 231,
+              "y": 52,
+              "w": 92,
+              "h": 34,
+              "to": "accounts",
+              "label": "Codex"
+            },
+            {
+              "x": 329,
+              "y": 52,
+              "w": 137,
+              "h": 34,
+              "to": "accounts-claude",
+              "label": "Claude Code"
+            },
+            {
+              "x": 472,
+              "y": 52,
+              "w": 122,
+              "h": 34,
+              "to": "accounts-antigravity",
+              "label": "Antigravity"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 231,
+              "y": 52,
+              "w": 92,
+              "h": 34,
+              "to": "accounts",
+              "label": "Codex"
+            },
+            {
+              "x": 329,
+              "y": 52,
+              "w": 137,
+              "h": 34,
+              "to": "accounts-claude",
+              "label": "Claude Code"
+            },
+            {
+              "x": 472,
+              "y": 52,
+              "w": 122,
+              "h": 34,
+              "to": "accounts-antigravity",
+              "label": "Antigravity"
+            }
+          ]
+        }
+      },
+      "machines": {
+        "view": {
+          "page": "settings",
+          "tab": "servers",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Machines",
+          "zh-CN": "机器与采集"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            }
+          ]
+        }
+      },
+      "prices": {
+        "view": {
+          "page": "settings",
+          "tab": "prices",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Model pricing",
+          "zh-CN": "模型价格"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            }
+          ]
+        }
+      },
+      "wakeups": {
+        "view": {
+          "page": "settings",
+          "tab": "wakeups",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Wakeups",
+          "zh-CN": "定时唤醒"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            }
+          ]
+        }
+      },
+      "settings": {
+        "view": {
+          "page": "settings",
+          "tab": "general",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Settings",
+          "zh-CN": "设置"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 103,
+              "h": 33,
+              "to": "settings",
+              "label": "Appearance"
+            },
+            {
+              "x": 348,
+              "y": 13,
+              "w": 128,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "Pets & sessions"
+            },
+            {
+              "x": 484,
+              "y": 13,
+              "w": 78,
+              "h": 33,
+              "to": "settings-network",
+              "label": "Network"
+            },
+            {
+              "x": 570,
+              "y": 13,
+              "w": 138,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "Refresh & history"
+            },
+            {
+              "x": 716,
+              "y": 13,
+              "w": 107,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "Notifications"
+            },
+            {
+              "x": 831,
+              "y": 13,
+              "w": 89,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "Advanced"
+            },
+            {
+              "x": 928,
+              "y": 13,
+              "w": 136,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "About & updates"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings",
+              "label": "外观"
+            },
+            {
+              "x": 295,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "桌宠与会话"
+            },
+            {
+              "x": 398,
+              "y": 13,
+              "w": 80,
+              "h": 33,
+              "to": "settings-network",
+              "label": "网络代理"
+            },
+            {
+              "x": 486,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "刷新与历史"
+            },
+            {
+              "x": 589,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "通知"
+            },
+            {
+              "x": 647,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "高级"
+            },
+            {
+              "x": 705,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "更新与关于"
+            }
+          ]
+        }
+      },
+      "settings-desktop": {
+        "view": {
+          "page": "settings",
+          "tab": "general",
+          "general": "desktop",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Settings",
+          "zh-CN": "设置"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 103,
+              "h": 33,
+              "to": "settings",
+              "label": "Appearance"
+            },
+            {
+              "x": 348,
+              "y": 13,
+              "w": 128,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "Pets & sessions"
+            },
+            {
+              "x": 484,
+              "y": 13,
+              "w": 78,
+              "h": 33,
+              "to": "settings-network",
+              "label": "Network"
+            },
+            {
+              "x": 570,
+              "y": 13,
+              "w": 138,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "Refresh & history"
+            },
+            {
+              "x": 716,
+              "y": 13,
+              "w": 107,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "Notifications"
+            },
+            {
+              "x": 831,
+              "y": 13,
+              "w": 89,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "Advanced"
+            },
+            {
+              "x": 928,
+              "y": 13,
+              "w": 136,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "About & updates"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings",
+              "label": "外观"
+            },
+            {
+              "x": 295,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "桌宠与会话"
+            },
+            {
+              "x": 398,
+              "y": 13,
+              "w": 80,
+              "h": 33,
+              "to": "settings-network",
+              "label": "网络代理"
+            },
+            {
+              "x": 486,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "刷新与历史"
+            },
+            {
+              "x": 589,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "通知"
+            },
+            {
+              "x": 647,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "高级"
+            },
+            {
+              "x": 705,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "更新与关于"
+            }
+          ]
+        }
+      },
+      "settings-network": {
+        "view": {
+          "page": "settings",
+          "tab": "general",
+          "general": "network",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Settings",
+          "zh-CN": "设置"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 103,
+              "h": 33,
+              "to": "settings",
+              "label": "Appearance"
+            },
+            {
+              "x": 348,
+              "y": 13,
+              "w": 128,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "Pets & sessions"
+            },
+            {
+              "x": 484,
+              "y": 13,
+              "w": 78,
+              "h": 33,
+              "to": "settings-network",
+              "label": "Network"
+            },
+            {
+              "x": 570,
+              "y": 13,
+              "w": 138,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "Refresh & history"
+            },
+            {
+              "x": 716,
+              "y": 13,
+              "w": 107,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "Notifications"
+            },
+            {
+              "x": 831,
+              "y": 13,
+              "w": 89,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "Advanced"
+            },
+            {
+              "x": 928,
+              "y": 13,
+              "w": 136,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "About & updates"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings",
+              "label": "外观"
+            },
+            {
+              "x": 295,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "桌宠与会话"
+            },
+            {
+              "x": 398,
+              "y": 13,
+              "w": 80,
+              "h": 33,
+              "to": "settings-network",
+              "label": "网络代理"
+            },
+            {
+              "x": 486,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "刷新与历史"
+            },
+            {
+              "x": 589,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "通知"
+            },
+            {
+              "x": 647,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "高级"
+            },
+            {
+              "x": 705,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "更新与关于"
+            }
+          ]
+        }
+      },
+      "settings-refresh": {
+        "view": {
+          "page": "settings",
+          "tab": "general",
+          "general": "refresh",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Settings",
+          "zh-CN": "设置"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 103,
+              "h": 33,
+              "to": "settings",
+              "label": "Appearance"
+            },
+            {
+              "x": 348,
+              "y": 13,
+              "w": 128,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "Pets & sessions"
+            },
+            {
+              "x": 484,
+              "y": 13,
+              "w": 78,
+              "h": 33,
+              "to": "settings-network",
+              "label": "Network"
+            },
+            {
+              "x": 570,
+              "y": 13,
+              "w": 138,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "Refresh & history"
+            },
+            {
+              "x": 716,
+              "y": 13,
+              "w": 107,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "Notifications"
+            },
+            {
+              "x": 831,
+              "y": 13,
+              "w": 89,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "Advanced"
+            },
+            {
+              "x": 928,
+              "y": 13,
+              "w": 136,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "About & updates"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings",
+              "label": "外观"
+            },
+            {
+              "x": 295,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "桌宠与会话"
+            },
+            {
+              "x": 398,
+              "y": 13,
+              "w": 80,
+              "h": 33,
+              "to": "settings-network",
+              "label": "网络代理"
+            },
+            {
+              "x": 486,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "刷新与历史"
+            },
+            {
+              "x": 589,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "通知"
+            },
+            {
+              "x": 647,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "高级"
+            },
+            {
+              "x": 705,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "更新与关于"
+            }
+          ]
+        }
+      },
+      "settings-notifications": {
+        "view": {
+          "page": "settings",
+          "tab": "general",
+          "general": "notifications",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Settings",
+          "zh-CN": "设置"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 103,
+              "h": 33,
+              "to": "settings",
+              "label": "Appearance"
+            },
+            {
+              "x": 348,
+              "y": 13,
+              "w": 128,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "Pets & sessions"
+            },
+            {
+              "x": 484,
+              "y": 13,
+              "w": 78,
+              "h": 33,
+              "to": "settings-network",
+              "label": "Network"
+            },
+            {
+              "x": 570,
+              "y": 13,
+              "w": 138,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "Refresh & history"
+            },
+            {
+              "x": 716,
+              "y": 13,
+              "w": 107,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "Notifications"
+            },
+            {
+              "x": 831,
+              "y": 13,
+              "w": 89,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "Advanced"
+            },
+            {
+              "x": 928,
+              "y": 13,
+              "w": 136,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "About & updates"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings",
+              "label": "外观"
+            },
+            {
+              "x": 295,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "桌宠与会话"
+            },
+            {
+              "x": 398,
+              "y": 13,
+              "w": 80,
+              "h": 33,
+              "to": "settings-network",
+              "label": "网络代理"
+            },
+            {
+              "x": 486,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "刷新与历史"
+            },
+            {
+              "x": 589,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "通知"
+            },
+            {
+              "x": 647,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "高级"
+            },
+            {
+              "x": 705,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "更新与关于"
+            }
+          ]
+        }
+      },
+      "settings-advanced": {
+        "view": {
+          "page": "settings",
+          "tab": "general",
+          "general": "advanced",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Settings",
+          "zh-CN": "设置"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 103,
+              "h": 33,
+              "to": "settings",
+              "label": "Appearance"
+            },
+            {
+              "x": 348,
+              "y": 13,
+              "w": 128,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "Pets & sessions"
+            },
+            {
+              "x": 484,
+              "y": 13,
+              "w": 78,
+              "h": 33,
+              "to": "settings-network",
+              "label": "Network"
+            },
+            {
+              "x": 570,
+              "y": 13,
+              "w": 138,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "Refresh & history"
+            },
+            {
+              "x": 716,
+              "y": 13,
+              "w": 107,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "Notifications"
+            },
+            {
+              "x": 831,
+              "y": 13,
+              "w": 89,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "Advanced"
+            },
+            {
+              "x": 928,
+              "y": 13,
+              "w": 136,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "About & updates"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings",
+              "label": "外观"
+            },
+            {
+              "x": 295,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "桌宠与会话"
+            },
+            {
+              "x": 398,
+              "y": 13,
+              "w": 80,
+              "h": 33,
+              "to": "settings-network",
+              "label": "网络代理"
+            },
+            {
+              "x": 486,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "刷新与历史"
+            },
+            {
+              "x": 589,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "通知"
+            },
+            {
+              "x": 647,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "高级"
+            },
+            {
+              "x": 705,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "更新与关于"
+            }
+          ]
+        }
+      },
+      "settings-updates": {
+        "view": {
+          "page": "settings",
+          "tab": "general",
+          "general": "updates",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Settings",
+          "zh-CN": "设置"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 103,
+              "h": 33,
+              "to": "settings",
+              "label": "Appearance"
+            },
+            {
+              "x": 348,
+              "y": 13,
+              "w": 128,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "Pets & sessions"
+            },
+            {
+              "x": 484,
+              "y": 13,
+              "w": 78,
+              "h": 33,
+              "to": "settings-network",
+              "label": "Network"
+            },
+            {
+              "x": 570,
+              "y": 13,
+              "w": 138,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "Refresh & history"
+            },
+            {
+              "x": 716,
+              "y": 13,
+              "w": 107,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "Notifications"
+            },
+            {
+              "x": 831,
+              "y": 13,
+              "w": 89,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "Advanced"
+            },
+            {
+              "x": 928,
+              "y": 13,
+              "w": 136,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "About & updates"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            },
+            {
+              "x": 237,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings",
+              "label": "外观"
+            },
+            {
+              "x": 295,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-desktop",
+              "label": "桌宠与会话"
+            },
+            {
+              "x": 398,
+              "y": 13,
+              "w": 80,
+              "h": 33,
+              "to": "settings-network",
+              "label": "网络代理"
+            },
+            {
+              "x": 486,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-refresh",
+              "label": "刷新与历史"
+            },
+            {
+              "x": 589,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-notifications",
+              "label": "通知"
+            },
+            {
+              "x": 647,
+              "y": 13,
+              "w": 50,
+              "h": 33,
+              "to": "settings-advanced",
+              "label": "高级"
+            },
+            {
+              "x": 705,
+              "y": 13,
+              "w": 95,
+              "h": 33,
+              "to": "settings-updates",
+              "label": "更新与关于"
+            }
+          ]
+        }
+      },
+      "setup": {
+        "view": {
+          "page": "setup",
+          "tab": "integrations",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Setup guide",
+          "zh-CN": "配置向导"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "Overview"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "Analytics"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "Servers"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "Accounts"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "Machines"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "Model pricing"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "Wakeups"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "Settings"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "Setup guide"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 7,
+              "y": 92,
+              "w": 200,
+              "h": 24,
+              "to": "overview",
+              "label": "总览"
+            },
+            {
+              "x": 7,
+              "y": 116,
+              "w": 200,
+              "h": 24,
+              "to": "analytics",
+              "label": "用量分析"
+            },
+            {
+              "x": 7,
+              "y": 140,
+              "w": 200,
+              "h": 24,
+              "to": "servers",
+              "label": "服务器"
+            },
+            {
+              "x": 7,
+              "y": 192,
+              "w": 200,
+              "h": 24,
+              "to": "accounts",
+              "label": "接入与账户"
+            },
+            {
+              "x": 7,
+              "y": 216,
+              "w": 200,
+              "h": 24,
+              "to": "machines",
+              "label": "机器与采集"
+            },
+            {
+              "x": 7,
+              "y": 240,
+              "w": 200,
+              "h": 24,
+              "to": "prices",
+              "label": "模型价格"
+            },
+            {
+              "x": 7,
+              "y": 264,
+              "w": 200,
+              "h": 25,
+              "to": "wakeups",
+              "label": "定时唤醒"
+            },
+            {
+              "x": 7,
+              "y": 290,
+              "w": 200,
+              "h": 24,
+              "to": "settings",
+              "label": "设置"
+            },
+            {
+              "x": 7,
+              "y": 315,
+              "w": 200,
+              "h": 24,
+              "to": "setup",
+              "label": "配置向导"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "panel": {
+    "width": 450,
+    "height": 720,
+    "initial": "panel",
+    "states": {
+      "panel": {
+        "view": {
+          "page": "agent",
+          "tab": "integrations",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": true,
+          "card": true
+        },
+        "title": {
+          "en": "Agent",
+          "zh-CN": "Agent"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 157,
+              "y": 13,
+              "w": 68,
+              "h": 24,
+              "to": "panel",
+              "label": "Agent"
+            },
+            {
+              "x": 226,
+              "y": 13,
+              "w": 67,
+              "h": 24,
+              "to": "panel-servers",
+              "label": "Servers"
+            },
+            {
+              "x": 340,
+              "y": 687,
+              "w": 28,
+              "h": 28,
+              "to": "overview",
+              "label": "Open details",
+              "surface": "main"
+            },
+            {
+              "x": 376,
+              "y": 687,
+              "w": 28,
+              "h": 28,
+              "to": "settings",
+              "label": "Settings",
+              "surface": "main"
+            },
+            {
+              "x": 0,
+              "y": 131,
+              "w": 409,
+              "h": 22,
+              "to": "panel-quotas",
+              "label": "3 sessions"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 165,
+              "y": 13,
+              "w": 60,
+              "h": 24,
+              "to": "panel",
+              "label": "Agent"
+            },
+            {
+              "x": 226,
+              "y": 13,
+              "w": 59,
+              "h": 24,
+              "to": "panel-servers",
+              "label": "服务器"
+            },
+            {
+              "x": 340,
+              "y": 687,
+              "w": 28,
+              "h": 28,
+              "to": "overview",
+              "label": "打开详情",
+              "surface": "main"
+            },
+            {
+              "x": 376,
+              "y": 687,
+              "w": 28,
+              "h": 28,
+              "to": "settings",
+              "label": "设置",
+              "surface": "main"
+            },
+            {
+              "x": 0,
+              "y": 131,
+              "w": 409,
+              "h": 22,
+              "to": "panel-quotas",
+              "label": "3 个会话"
+            }
+          ]
+        }
+      },
+      "panel-quotas": {
+        "view": {
+          "page": "agent",
+          "tab": "integrations",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": false,
+          "card": true
+        },
+        "title": {
+          "en": "Agent",
+          "zh-CN": "Agent"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 157,
+              "y": 13,
+              "w": 68,
+              "h": 24,
+              "to": "panel",
+              "label": "Agent"
+            },
+            {
+              "x": 226,
+              "y": 13,
+              "w": 67,
+              "h": 24,
+              "to": "panel-servers",
+              "label": "Servers"
+            },
+            {
+              "x": 340,
+              "y": 687,
+              "w": 28,
+              "h": 28,
+              "to": "overview",
+              "label": "Open details",
+              "surface": "main"
+            },
+            {
+              "x": 376,
+              "y": 687,
+              "w": 28,
+              "h": 28,
+              "to": "settings",
+              "label": "Settings",
+              "surface": "main"
+            },
+            {
+              "x": 0,
+              "y": 131,
+              "w": 409,
+              "h": 22,
+              "to": "panel",
+              "label": "3 sessions"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 165,
+              "y": 13,
+              "w": 60,
+              "h": 24,
+              "to": "panel",
+              "label": "Agent"
+            },
+            {
+              "x": 226,
+              "y": 13,
+              "w": 59,
+              "h": 24,
+              "to": "panel-servers",
+              "label": "服务器"
+            },
+            {
+              "x": 340,
+              "y": 687,
+              "w": 28,
+              "h": 28,
+              "to": "overview",
+              "label": "打开详情",
+              "surface": "main"
+            },
+            {
+              "x": 376,
+              "y": 687,
+              "w": 28,
+              "h": 28,
+              "to": "settings",
+              "label": "设置",
+              "surface": "main"
+            },
+            {
+              "x": 0,
+              "y": 131,
+              "w": 409,
+              "h": 22,
+              "to": "panel",
+              "label": "3 个会话"
+            }
+          ]
+        }
+      },
+      "panel-servers": {
+        "view": {
+          "page": "servers",
+          "tab": "integrations",
+          "general": "appearance",
+          "agent": "codex",
+          "sessions": true,
+          "card": true
+        },
+        "title": {
+          "en": "Servers",
+          "zh-CN": "服务器"
+        },
+        "hotspots": {
+          "en": [
+            {
+              "x": 157,
+              "y": 13,
+              "w": 68,
+              "h": 24,
+              "to": "panel",
+              "label": "Agent"
+            },
+            {
+              "x": 226,
+              "y": 13,
+              "w": 67,
+              "h": 24,
+              "to": "panel-servers",
+              "label": "Servers"
+            },
+            {
+              "x": 340,
+              "y": 687,
+              "w": 28,
+              "h": 28,
+              "to": "overview",
+              "label": "Open details",
+              "surface": "main"
+            },
+            {
+              "x": 376,
+              "y": 687,
+              "w": 28,
+              "h": 28,
+              "to": "settings",
+              "label": "Settings",
+              "surface": "main"
+            }
+          ],
+          "zh-CN": [
+            {
+              "x": 165,
+              "y": 13,
+              "w": 60,
+              "h": 24,
+              "to": "panel",
+              "label": "Agent"
+            },
+            {
+              "x": 226,
+              "y": 13,
+              "w": 59,
+              "h": 24,
+              "to": "panel-servers",
+              "label": "服务器"
+            },
+            {
+              "x": 340,
+              "y": 687,
+              "w": 28,
+              "h": 28,
+              "to": "overview",
+              "label": "打开详情",
+              "surface": "main"
+            },
+            {
+              "x": 376,
+              "y": 687,
+              "w": 28,
+              "h": 28,
+              "to": "settings",
+              "label": "设置",
+              "surface": "main"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

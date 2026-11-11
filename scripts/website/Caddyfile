@@ -4,13 +4,23 @@ aieyes.2h3ngy4n.space {
     header {
         X-Content-Type-Options nosniff
         Referrer-Policy strict-origin-when-cross-origin
-        X-Frame-Options DENY
-        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         Strict-Transport-Security "max-age=15552000"
     }
-    @pages not path /screenshots/* /providers/* /fonts/* /brand.png /favicon.png /og.jpg /og-zh-CN.jpg /pet-*.webp /go/download/*
+    # The live demo under /demo/app is the desktop frontend, shown in a frame of this site only; it
+    # styles elements inline. Every other path keeps the strict policy and cannot be framed.
+    @site not path /demo/app/*
+    header @site {
+        X-Frame-Options DENY
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    }
+    @demoApp path /demo/app/*
+    header @demoApp {
+        X-Frame-Options SAMEORIGIN
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
+    }
+    @pages not path /screenshots/* /demo/macos/* /providers/* /fonts/* /brand.png /favicon.png /og.jpg /og-zh-CN.jpg /pet-*.webp /go/download/*
     header @pages Cache-Control "no-cache"
-    @assets path /screenshots/* /providers/* /fonts/* /brand.png /favicon.png /og.jpg /og-zh-CN.jpg /pet-*.webp
+    @assets path /screenshots/* /demo/macos/* /providers/* /fonts/* /brand.png /favicon.png /og.jpg /og-zh-CN.jpg /pet-*.webp
     header @assets Cache-Control "public, max-age=3600"
     redir /go/github https://github.com/JesmonX/Aieyes 302
     redir /go/download/macos /#download-macos 302

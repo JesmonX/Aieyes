@@ -45,7 +45,7 @@ def get(origin, path):
     except urllib.error.HTTPError as error:
         response = error
     with response:
-        return response.status, dict(response.headers), response.read().decode()
+        return response.status, dict(response.headers), response.read().decode(errors="replace")
 
 
 def main():
@@ -94,6 +94,14 @@ def main():
                     code, headers, _ = get(origin, "/go/download/" + route)
                     assert code == 302 and headers["Location"] == location
                 assert get(origin, "/go/github")[1]["Location"] == "https://github.com/JesmonX/Aieyes"
+                # Only the live demo may be framed, and only by this site; it alone allows inline styles.
+                for route, frame, ancestors, inline in [("/", "DENY", "'none'", False), ("/zh-CN/index.html", "DENY", "'none'", False), ("/demo/stage.en.json", "DENY", "'none'", False), ("/demo/app/index.html", "SAMEORIGIN", "'self'", True), ("/demo/app/app.js", "SAMEORIGIN", "'self'", True)]:
+                    code, headers, _ = get(origin, route)
+                    policy = headers.get("Content-Security-Policy", "")
+                    assert code == 200 and headers.get("X-Frame-Options") == frame, (route, code, headers)
+                    assert f"frame-ancestors {ancestors}" in policy and "script-src 'self';" in policy and ("'unsafe-inline'" in policy) == inline, (route, policy)
+                    assert headers.get("X-Content-Type-Options") == "nosniff" and headers.get("Cache-Control") == "no-cache", (route, headers)
+                assert get(origin, "/demo/macos/en/overview.webp")[1].get("Cache-Control") == "public, max-age=3600"
             finally:
                 process.terminate(); process.wait(timeout=10); upstream.shutdown()
             stats = json.loads(subprocess.check_output(["node", str(ROOT / "scripts/website/stats.mjs"), "--file", str(work / "access.log"), "--json"]))
@@ -103,7 +111,7 @@ def main():
                 assert row["clicks"] >= 2 and row["label"].startswith("Download · "), row
             report = ROOT / ".local/website/download-test.json"
             report.write_text(json.dumps(dict(downloads=results, upstreamFailures=4, legacyRoutes=5, statistics=stats), indent=2) + "\n")
-            print("Caddy downloads passed: six packages, two latest versions, four upstream failures, retry, legacy routes and package statistics.")
+            print("Caddy downloads passed: six packages, two latest versions, four upstream failures, retry, legacy routes, demo frame headers and package statistics.")
 
 
 if __name__ == "__main__": main()

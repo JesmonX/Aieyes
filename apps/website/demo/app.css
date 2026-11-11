@@ -1,0 +1,4 @@
+/* Website demo only: the desktop frontend with the visitor's system fonts in place of the bundled face. */
+:root:is([data-platform=windows],[data-platform=linux]) {
+  --font-ui:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",system-ui,-apple-system,"PingFang SC","Noto Sans CJK SC","Noto Sans SC",sans-serif;
+}

@@ -1,6 +1,6 @@
 const platformButtons=[...document.querySelectorAll('[data-platform]')];
 const reduceMotion=matchMedia('(prefers-reduced-motion: reduce)');
-let platform='macos',swapToken=0;
+let platform='macos',swapToken=0,stagePlatform=()=>{};
 try{if(sessionStorage.getItem('aieyes.previewPlatform')==='windows')platform='windows';}catch{}
 // Keeps the content-version query; <source> carries the phone-sized screenshot.
 function previewPath(element,value){
@@ -31,6 +31,7 @@ function setPlatform(value,animate=true){
     });
   });
   try{sessionStorage.setItem('aieyes.previewPlatform',value);}catch{}
+  stagePlatform();
 }
 platformButtons.forEach(button=>button.addEventListener('click',()=>setPlatform(button.dataset.platform)));
 setPlatform(platform,false);
@@ -97,6 +98,154 @@ document.documentElement.classList.add('js-ready');
 const reveal=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){entry.target.classList.add('in-view');reveal.unobserve(entry.target);}}),{threshold:.08});
 document.querySelectorAll('.ecosystem,.language-story,.workflow,.download,.faq').forEach(element=>{element.classList.add('reveal');reveal.observe(element);});
 document.querySelectorAll('.provider-list,.steps,.downloads,.faq-list').forEach(group=>{group.classList.add('stagger');[...group.children].forEach((child,index)=>child.style.setProperty('--i',index));});
-const stage=document.querySelector('.hero-stage');
-stage?.addEventListener('pointermove',event=>{if(reduceMotion.matches||event.pointerType!=='mouse')return;const box=stage.getBoundingClientRect();stage.style.setProperty('--tilt',`${(event.clientY-box.top-box.height/2)/box.height*1.4}deg`);});
-stage?.addEventListener('pointerleave',()=>stage.style.setProperty('--tilt','0deg'));
+
+// The stage is the product in the page. macOS is a set of native captures: each state is an image
+// with click targets that lead to other states. Windows is the desktop frontend itself, running in a
+// frame on sample data (apps/website/demo/bridge.js). Both follow one tour, so the arrows, the
+// window switch and the platform switch always show the same place.
+async function startStage(root){
+  const response=await fetch(root.dataset.stage);
+  if(!response.ok)return;
+  const data=await response.json(),$=selector=>root.querySelector(selector);
+  const stage=$('.hero-stage'),screen=$('.stage-screen'),image=$('.stage-image'),spots=$('.stage-spots'),status=$('.stage-status');
+  const surfaceButtons=[...root.querySelectorAll('[data-surface-tab]')];
+  // Phones start with the portrait panel, as the picture without scripts does.
+  let surface=matchMedia('(max-width:700px)').matches?'panel':'main',paint=0,swiped=-Infinity;
+  const current=Object.fromEntries(Object.entries(data.surfaces).map(([name,group])=>[name,group.initial]));
+  const frames={},loaded=new Set();
+  const address=name=>`/demo/macos/${data.language}/${name}.webp?v=${data.version}`;
+  const group=()=>data.surfaces[surface],state=()=>group().states[current[surface]];
+  // The live window carries its own title bar inside the same outer size as the native one.
+  const frameHeight=name=>data.surfaces[name].height+(name==='main'?28:0);
+  image.closest('picture')?.replaceWith(image);
+
+  function describe(){
+    const stops=group().stops,index=stops.findIndex(stop=>stop.id===state().stop),count=number=>String(number).padStart(2,'0');
+    $('.tour-count').textContent=`${count(index+1)} / ${count(stops.length)}`;
+    $('.tour-title strong').textContent=stops[index].title;$('.tour-text').textContent=stops[index].text;
+    $('.stage-note').textContent=platform==='macos'?data.text.native:data.text.live;
+  }
+  function drawSpots(){
+    const {width,height}=group(),focused=spots.contains(document.activeElement)?document.activeElement.getAttribute('aria-label'):null;
+    spots.replaceChildren(...state().spots.map(([x,y,w,h,to,label,other])=>{
+      const button=document.createElement('button');
+      button.type='button';button.className='stage-spot';button.setAttribute('aria-label',label);
+      if(!other&&to===current[surface])button.setAttribute('aria-current','true');
+      Object.assign(button.style,{left:`${x/width*100}%`,top:`${y/height*100}%`,width:`${w/width*100}%`,height:`${h/height*100}%`});
+      button.addEventListener('click',()=>{if(performance.now()-swiped>400)show(other??surface,to);});
+      return button;
+    }));
+    // A keyboard visitor stays on the control they pressed when the next state has it too.
+    if(focused)[...spots.children].find(button=>button.getAttribute('aria-label')===focused)?.focus({preventScroll:true});
+  }
+  function preload(){
+    for(const [,,,,to,,other] of state().spots){
+      const key=`${other??surface}/${to}`;
+      if(!loaded.has(key)){loaded.add(key);new Image().src=address(to);}
+    }
+  }
+  function showNative(){
+    const token=++paint,name=current[surface],next=address(name),{width,height}=group();
+    $('.stage-title').textContent=`${state().title} — Aieyes`;
+    const apply=()=>{
+      if(token!==paint)return;
+      Object.assign(image,{src:next,width,height,alt:`${state().title} — macOS`,hidden:false});
+      drawSpots();setTimeout(()=>{if(token===paint)preload();},300);
+    };
+    // The next state decodes first, so a click never shows a half-painted window.
+    if(image.getAttribute('src')===next){apply();return;}
+    const probe=new Image();probe.src=next;probe.decode().then(apply,apply);
+  }
+  // Where the live frontend cannot start, Windows shows its screenshot of this window.
+  function fallback(){
+    const [name,width,height]=surface==='main'?['overview',1360,1000]:['panel',450,720];
+    Object.assign(image,{src:`/screenshots/${data.language}/windows-${name}.webp`,width,height,alt:`${state().title} — Windows`,hidden:false});
+    screen.style.aspectRatio=`${width}/${height}`;
+    status.textContent=data.text.failed;status.hidden=false;stage.dataset.mode='image';
+  }
+  function showLive(){
+    let frame=frames[surface];
+    if(!frame){
+      const element=document.createElement('iframe');
+      Object.assign(element,{className:'stage-frame',title:data.text.frame,width:group().width,height:frameHeight(surface)});
+      element.src=`/demo/app/${surface==='main'?'index':'floating'}.html?${new URLSearchParams({lang:data.language,theme:'dark',view:JSON.stringify(state().app)})}`;
+      frame=frames[surface]={element,ready:false,failed:false,asked:current[surface]};
+      screen.append(element);
+      // A frame that never reports is a failure too: blocked frames, old engines.
+      setTimeout(()=>{if(!frame.ready&&!frame.failed){frame.failed=true;if(platform==='windows'&&frames[surface]===frame)paintStage();}},20000);
+    }else if(frame.ready&&frame.asked!==current[surface]){
+      frame.asked=current[surface];frame.element.contentWindow.AieyesDemo.go(state().app);
+    }
+    if(frame.failed){fallback();return;}
+    image.hidden=true;status.textContent=data.text.loading;status.hidden=frame.ready;
+  }
+  function paintStage(){
+    stage.dataset.surface=surface;
+    surfaceButtons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.surfaceTab===surface)));
+    for(const [name,frame] of Object.entries(frames))frame.element.hidden=frame.failed||platform!=='windows'||name!==surface;
+    status.hidden=true;describe();
+    stage.dataset.mode=platform==='macos'?'native':'live';
+    screen.style.aspectRatio=`${group().width}/${platform==='macos'?group().height:frameHeight(surface)}`;
+    if(platform==='macos')showNative();else{++paint;spots.replaceChildren();showLive();}
+    fit();
+  }
+  function show(nextSurface,name){surface=nextSurface;current[surface]=name;paintStage();}
+  function step(delta){const stops=group().stops,index=stops.findIndex(stop=>stop.id===state().stop);show(surface,stops[(index+delta+stops.length)%stops.length].state);}
+  // The frame keeps the window's real size and is scaled to the stage, so its layout matches the app.
+  function fit(){stage.style.setProperty('--stage-scale',String(screen.clientWidth/group().width));}
+  new ResizeObserver(fit).observe(screen);
+
+  // The frontend reports where the visitor went inside the frame; the tour follows.
+  const owner=frameWindow=>Object.keys(frames).find(name=>frames[name].element.contentWindow===frameWindow);
+  function follow(name,view){
+    const states=Object.entries(data.surfaces[name].states),same=key=>([,candidate])=>candidate.app[key]===undefined||candidate.app[key]===view[key];
+    const page=states.filter(([,candidate])=>candidate.app.page===view.page&&(candidate.app.tab??null)===(view.tab??null));
+    const exact=page.filter(same('sessions')).filter(same('section')).filter(same('agent'));
+    // Several native states can be one place in the frontend (a folded card); the current one stays.
+    const match=exact.find(([key])=>key===current[name])??exact[0]??page[0];
+    if(!match||match[0]===current[name])return;
+    current[name]=frames[name].asked=match[0];
+    if(name===surface)describe();
+  }
+  window.AieyesDemoHost={
+    ready(frameWindow,view){
+      const name=owner(frameWindow);if(!name)return;
+      const frame=frames[name];frame.ready=true;
+      // The visitor may have moved on while the frame was starting.
+      if(frame.asked!==current[name]){frame.asked=current[name];frameWindow.AieyesDemo.go(data.surfaces[name].states[current[name]].app);}
+      else follow(name,view);
+      if(platform==='windows'&&name===surface)status.hidden=true;
+    },
+    changed(frameWindow,view){const name=owner(frameWindow);if(name&&frames[name].ready)follow(name,view);},
+    failed(frameWindow){const name=owner(frameWindow);if(!name)return;frames[name].failed=true;if(platform==='windows'&&name===surface)paintStage();},
+    // The panel's buttons open the main window on the page they name.
+    open(frameWindow,view){
+      const main=data.surfaces.main,name=view?.target?'settings':view?.page==='analysis'?'analytics':{settings:'settings',prices:'prices','add-host':'machines'}[view?.action];
+      show('main',main.states[name]?name:main.initial);
+    },
+  };
+
+  surfaceButtons.forEach(button=>button.addEventListener('click',()=>show(button.dataset.surfaceTab,current[button.dataset.surfaceTab])));
+  root.querySelectorAll('[data-tour-step]').forEach(button=>button.addEventListener('click',()=>step(Number(button.dataset.tourStep))));
+  root.addEventListener('keydown',event=>{
+    if(event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||!['ArrowLeft','ArrowRight'].includes(event.key))return;
+    event.preventDefault();step(event.key==='ArrowLeft'?-1:1);
+  });
+  // Touch: a sideways swipe over the window moves through the tour.
+  let touch=null;
+  screen.addEventListener('pointerdown',event=>{touch=event.pointerType==='mouse'?null:{x:event.clientX,y:event.clientY};});
+  screen.addEventListener('pointercancel',()=>{touch=null;});
+  screen.addEventListener('pointerup',event=>{
+    if(!touch)return;
+    const x=event.clientX-touch.x,y=event.clientY-touch.y;touch=null;
+    if(Math.abs(x)>48&&Math.abs(x)>Math.abs(y)*1.5){swiped=performance.now();step(x<0?1:-1);}
+  });
+  // The targets show themselves once at the start, and again on a click beside them.
+  let hint=0;
+  const reveal=()=>{spots.classList.add('is-hinting');clearTimeout(hint);hint=setTimeout(()=>spots.classList.remove('is-hinting'),900);};
+  spots.addEventListener('click',event=>{if(event.target===spots)reveal();});
+  stagePlatform=paintStage;
+  root.classList.add('is-live');paintStage();setTimeout(reveal,1200);
+}
+const showcase=document.querySelector('[data-stage]');
+if(showcase)startStage(showcase).catch(()=>{});

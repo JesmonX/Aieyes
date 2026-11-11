@@ -1,7 +1,10 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const browsers=require('../../apps/desktop/node_modules/playwright');
 const root=path.resolve(__dirname,'../..'),site=path.join(root,'dist/website'),qa=path.join(root,'.local/website/qa');
-const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.webp':'image/webp','.png':'image/png','.xml':'application/xml','.txt':'text/plain','.woff2':'font/woff2','.json':'application/json'};
+// The two policies of scripts/website/Caddyfile: the site's, then the live demo's.
+const policies=[...fs.readFileSync(path.join(__dirname,'Caddyfile'),'utf8').matchAll(/Content-Security-Policy "([^"]+)"/g)].map(match=>match[1]);
+assert(policies.length===2&&!policies[0].includes('unsafe-inline')&&policies[1].includes("frame-ancestors 'self'"),'Caddyfile policies');
+const mime={'.jpg':'image/jpeg','.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.webp':'image/webp','.png':'image/png','.xml':'application/xml','.txt':'text/plain','.woff2':'font/woff2','.json':'application/json'};
 async function checkMobile(browser,origin,errors,failed){
   for(const [language,url] of [['en','/'],['zh-CN','/zh-CN/index.html']]){
     for(const [width,height] of [[320,700],[360,800],[390,844],[430,932],[768,1024],[844,390]]){
@@ -10,17 +13,18 @@ async function checkMobile(browser,origin,errors,failed){
         const page=await context.newPage(),label=`${language} ${width}×${height}`;
         page.on('pageerror',error=>errors.push(String(error)));
         page.on('response',response=>{if(response.status()>=400)failed.push(response.url());});
-        await page.goto(origin+url);
-        await page.waitForFunction(()=>document.querySelector('.hero-shot img').complete&&document.querySelector('.hero-shot img').naturalWidth>0);
+        await page.goto(origin+url);await page.waitForSelector('.showcase.is-live');
+        await page.waitForFunction(()=>document.querySelector('.stage-image').complete&&document.querySelector('.stage-image').naturalWidth>0);
+        assert.equal(await page.locator('.hero-stage').getAttribute('data-surface'),width<=700?'panel':'main',`${label}: phones start on the panel`);
         const checkLayout=async()=>{
           const layout=await page.evaluate(()=>{
             const visible=el=>el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden';
             const box=el=>el.getBoundingClientRect();
             const within=(inner,outer)=>inner.left>=outer.left-1&&inner.right<=outer.right+1&&inner.top>=outer.top-1&&inner.bottom<=outer.bottom+1;
             const overlap=(a,b)=>a.left<b.right&&b.left<a.right&&a.top<b.bottom&&b.top<a.bottom;
-            const controls=[...document.querySelectorAll('.brand,.menu-toggle,.header nav a,.platform-switch button,.button,.package-button,[data-feature-tab],.dialog-close,.release-link,.faq summary,.footer-links a,.footer-bottom a')].filter(visible);
+            const controls=[...document.querySelectorAll('.brand,.menu-toggle,.header nav a,.platform-switch button,.surface-switch button,.tour-step,.button,.package-button,[data-feature-tab],.dialog-close,.release-link,.faq summary,.footer-links a,.footer-bottom a')].filter(visible);
             const small=controls.filter(el=>box(el).width<43.9||box(el).height<43.9).map(el=>el.outerHTML.slice(0,160));
-            const overflowing=[...document.querySelectorAll('.wrap,.hero-pet,.hero-pet .animated-pet,.stage-tag,.feature-copy,.type-art,.pet-line,.pet-line em,.pet-line .animated-pet,.download-card,.footer-links')].filter(visible).filter(el=>box(el).left< -1||box(el).right>innerWidth+1).map(el=>el.className);
+            const overflowing=[...document.querySelectorAll('.wrap,.hero-pet,.hero-pet .animated-pet,.stage-tag,.stage-window,.tour,.preview-toolbar,.feature-copy,.type-art,.pet-line,.pet-line em,.pet-line .animated-pet,.download-card,.footer-links')].filter(visible).filter(el=>box(el).left< -1||box(el).right>innerWidth+1).map(el=>el.className);
             const clippedPets=[...document.querySelectorAll('.animated-pet')].filter(visible).filter(el=>{const container=el.closest('.type-art');return container&&!within(box(el),box(container));});
             const coveredPets=[...document.querySelectorAll('.pet-line')].filter(visible).filter(el=>overlap(box(el.querySelector('em')),box(el.querySelector('.animated-pet'))));
             return {width:document.documentElement.scrollWidth,viewport:innerWidth,small,overflowing,clippedPets:clippedPets.length,coveredPets:coveredPets.length,heroCovered:overlap(box(document.querySelector('.hero-pet')),box(document.querySelector('.stage-tag')))};
@@ -59,8 +63,13 @@ async function checkMobile(browser,origin,errors,failed){
         await page.keyboard.press('End');await checkSelectedTab();
         await page.locator('button[data-platform=windows]').tap();
         assert.equal(await page.locator('button[data-platform=windows]').getAttribute('aria-pressed'),'true');
-        await page.waitForFunction(()=>document.querySelector('.hero-shot img').complete&&document.querySelector('.hero-shot img').naturalWidth>0);
-        await page.locator('.hero-shot').tap();
+        await page.waitForFunction(()=>document.querySelector('.stage-frame:not([hidden])')&&document.querySelector('.stage-status').hidden,null,{timeout:30000});
+        assert.equal(await page.locator('.hero-stage').getAttribute('data-mode'),'live');
+        await checkLayout();
+        await page.locator('[data-tour-step="1"]').tap();await checkLayout();
+        await page.locator('[data-feature-tab="overview"]').tap();
+        await page.waitForFunction(()=>{const image=document.querySelector('#overview .shot img');return image.complete&&image.naturalWidth>0;});
+        await page.locator('#overview .shot').tap();
         const dialog=await page.locator('#image-dialog').evaluate(el=>({open:el.open,scroll:el.scrollHeight,height:el.clientHeight,box:el.getBoundingClientRect().toJSON(),close:el.querySelector('button').getBoundingClientRect().toJSON()}));
         assert(dialog.open&&dialog.box.y>=0&&dialog.box.bottom<=height+1,`${label}: the image dialog fits`);
         assert(dialog.scroll<=dialog.height+1,`${label}: the dialog image and caption fit without clipping`);
@@ -71,7 +80,7 @@ async function checkMobile(browser,origin,errors,failed){
         assert(await page.locator('.faq details').first().getAttribute('open')!==null);
         await page.goto(origin+url+'#wakeups');await checkSelectedTab();
         assert(await page.locator('#wakeups').isVisible());
-        console.log(`Mobile passed: ${label}, touch controls, six features, visible tabs, pets, zoom, FAQ.`);
+        console.log(`Mobile passed: ${label}, touch controls, stage, live frame, six features, visible tabs, pets, zoom, FAQ.`);
       }finally{await context.close();}
     }
   }
@@ -122,13 +131,93 @@ async function checkFontsAndAnimation(browser,origin){
     fs.writeFileSync(path.join(qa,`animation-${process.env.AIEYES_WEBSITE_BROWSER||'chromium'}.json`),JSON.stringify({fonts,frames},null,2));
   }finally{await page.close();}
 }
+// The stage: native macOS states joined by click targets, and the live frontend for Windows.
+async function checkStage(browser,origin,errors,failed){
+  for(const [language,url] of [['en','/'],['zh-CN','/zh-CN/index.html']]){
+    const data=JSON.parse(fs.readFileSync(path.join(site,`demo/stage.${language}.json`),'utf8'));
+    const main=data.surfaces.main,panel=data.surfaces.panel;
+    // Every state has its picture, and every target leads to a state that exists.
+    for(const [surface,group] of Object.entries(data.surfaces))for(const [name,state] of Object.entries(group.states)){
+      assert(fs.statSync(path.join(site,'demo/macos',language,name+'.webp')).size>1000,`${language}: ${name}.webp`);
+      for(const [x,y,w,h,to,label,other] of state.spots){
+        assert(data.surfaces[other??surface].states[to],`${language} ${name}: ${label} leads to ${to}`);
+        assert(label&&x>=0&&y>=0&&w>0&&h>0&&x+w<=group.width&&y+h<=group.height,`${language} ${name}: ${label} is inside the window`);
+      }
+    }
+    if(language==='en')assert(!/[㐀-鿿]/.test(JSON.stringify(data)),'the English stage has no Chinese text');
+    const context=await browser.newContext({viewport:{width:1440,height:1100},reducedMotion:'reduce'});
+    try{
+      const page=await context.newPage(),label=`${language} stage`;
+      page.on('pageerror',error=>errors.push(String(error)));page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});
+      page.on('response',response=>{if(response.status()>=400)failed.push(response.url());});
+      await page.goto(origin+url);await page.waitForSelector('.showcase.is-live');
+      const view=()=>page.evaluate(()=>({mode:document.querySelector('.hero-stage').dataset.mode,surface:document.querySelector('.hero-stage').dataset.surface,image:new URL(document.querySelector('.stage-image').src).pathname,count:document.querySelector('.tour-count').textContent,stop:document.querySelector('.tour-title strong').textContent,spots:document.querySelectorAll('.stage-spot').length}));
+      const shows=async(surface,name,step)=>{
+        const group=data.surfaces[surface],state=group.states[name],index=group.stops.findIndex(stop=>stop.id===state.stop);
+        await page.waitForFunction(pathname=>new URL(document.querySelector('.stage-image').src).pathname===pathname,`/demo/macos/${language}/${name}.webp`);
+        assert.deepEqual(await view(),{mode:'native',surface,image:`/demo/macos/${language}/${name}.webp`,count:`${String(index+1).padStart(2,'0')} / ${String(group.stops.length).padStart(2,'0')}`,stop:group.stops[index].title,spots:state.spots.length},`${label}: ${step}`);
+      };
+      const spot=(surface,from,to)=>data.surfaces[surface].states[from].spots.find(item=>item[4]===to)[5];
+      const press=(surface,from,to)=>page.locator(`.stage-spot[aria-label="${spot(surface,from,to)}"]`).first().click();
+      await shows('main',main.initial,'first view');
+      await page.locator('#showcase').screenshot({path:path.join(qa,`${language}-stage-macos.png`)});
+      // Click targets: sidebar, a settings sub-page, folding a card, the session list.
+      await press('main','overview','analytics');await shows('main','analytics','sidebar');
+      assert.equal(await page.locator('.stage-spot[aria-current=true]').count(),1);
+      await press('main','analytics','settings');await shows('main','settings','settings');
+      await press('main','settings','settings-desktop');await shows('main','settings-desktop','settings sub-page');
+      await press('main','settings-desktop','overview');await press('main','overview','overview-collapsed');await shows('main','overview-collapsed','folded card');
+      await press('main','overview-collapsed','overview');await press('main','overview','overview-sessions');await shows('main','overview-sessions','session list');
+      // The tour: buttons and arrow keys, wrapping at both ends.
+      await page.locator('[data-tour-step="1"]').click();await shows('main',main.stops[2].state,'next');
+      await page.keyboard.press('ArrowLeft');await page.keyboard.press('ArrowLeft');await shows('main',main.stops[0].state,'arrow keys');
+      await page.locator('[data-tour-step="-1"]').click();await shows('main',main.stops.at(-1).state,'wraps');
+      // The panel, and its buttons that open the main window.
+      await page.locator('[data-surface-tab=panel]').click();await shows('panel',panel.initial,'panel');
+      assert.equal(await page.locator('[data-surface-tab=panel]').getAttribute('aria-pressed'),'true');
+      await page.locator('#showcase').screenshot({path:path.join(qa,`${language}-stage-panel.png`)});
+      await press('panel','panel','panel-servers');await shows('panel','panel-servers','panel tab');
+      await page.locator('[data-surface-tab=main]').click();await page.locator('[data-surface-tab=panel]').click();await shows('panel','panel-servers','each window keeps its place');
+      await press('panel','panel-servers','panel');
+      const opened=panel.states.panel.spots.find(item=>item[6]==='main'&&item[4]==='settings');
+      await page.locator(`.stage-spot[aria-label="${opened[5]}"]`).click();await shows('main','settings','panel opens the main window');
+      // Windows: the frontend itself, in a frame, following the same tour.
+      await page.locator('button[data-platform=windows]').click();
+      await page.waitForFunction(()=>document.querySelector('.stage-frame:not([hidden])')&&document.querySelector('.stage-status').hidden,null,{timeout:30000});
+      const frame=page.frameLocator('.stage-frame:not([hidden])'),inside=()=>page.locator('.stage-frame:not([hidden])').evaluate(element=>element.contentWindow.AieyesDemo.view());
+      assert.equal((await view()).mode,'live');assert.equal(await page.locator('.stage-spot').count(),0);
+      assert.equal(await frame.locator('html').getAttribute('lang'),language);
+      await page.waitForFunction(()=>document.querySelector('.stage-frame:not([hidden])').contentWindow.AieyesDemo.view().page==='settings');
+      await page.locator('[data-tour-step="1"]').click();
+      await page.waitForFunction(()=>document.querySelector('.stage-frame:not([hidden])').contentWindow.AieyesDemo.view().page==='setup');
+      assert.equal((await view()).stop,main.stops.at(-1).title);
+      // Moving inside the frame moves the tour.
+      await frame.locator('aside nav button[data-page="analysis"]').click();
+      await page.waitForFunction(title=>document.querySelector('.tour-title strong').textContent===title,main.stops.find(stop=>stop.id==='analytics').title);
+      assert.equal((await inside()).page,'analysis');
+      await page.locator('#showcase').screenshot({path:path.join(qa,`${language}-stage-windows.png`)});
+      // The frame has the window's real size and is scaled to fit the stage.
+      const fitted=await page.evaluate(()=>{const frame=document.querySelector('.stage-frame:not([hidden])').getBoundingClientRect(),screen=document.querySelector('.stage-screen').getBoundingClientRect();return Math.abs(frame.width-screen.width)<2&&Math.abs(frame.height-screen.height)<2;});
+      assert(fitted,`${label}: the live window fills the stage`);
+      await page.locator('[data-surface-tab=panel]').click();
+      await page.waitForFunction(()=>document.querySelector('.stage-frame:not([hidden])')?.contentWindow.AieyesDemo?.panel&&document.querySelector('.stage-status').hidden,null,{timeout:30000});
+      await page.locator('#showcase').screenshot({path:path.join(qa,`${language}-stage-windows-panel.png`)});
+      // Back on macOS the picture is the place the visitor reached on Windows.
+      await page.locator('[data-surface-tab=main]').click();await page.locator('button[data-platform=macos]').click();await shows('main','analytics','platforms share one place');
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+      console.log(`Stage passed: ${language}, click targets, tour, panel, live Windows frame.`);
+    }finally{await context.close();}
+  }
+}
 async function checkNoScript(browser,origin){
   const context=await browser.newContext({javaScriptEnabled:false});
   try{const page=await context.newPage();for(const [language,url] of [['en','/'],['zh-CN','/zh-CN/index.html']]){
     await page.goto(origin+url);assert.equal(await page.locator('.package-button').count(),6);
     assert(await page.locator('.hero-actions a[href="#download"]').isVisible());
-    const preview=new URL(await page.locator('.hero-shot img').getAttribute('src'),origin);
-    assert.equal(preview.pathname,`/screenshots/${language}/macos-overview.webp`);
+    const preview=new URL(await page.locator('.stage-image').getAttribute('src'),origin);
+    assert.equal(preview.pathname,`/demo/macos/${language}/overview.webp`);
+    assert(fs.statSync(path.join(site,preview.pathname)).size>1000);
+    assert.equal(await page.locator('.stage-spot').count(),0);
     assert.match(preview.searchParams.get('v'),/^[a-f0-9]{12}$/);
     for(const platform of ['macos','windows'])for(const feature of ['overview','analytics','servers','panel']){
       const file=path.join(site,'screenshots',language,`${platform}-${feature}.webp`);assert(fs.statSync(file).size>1000,file);
@@ -148,6 +237,8 @@ for(const name of ['README.md','README.zh-CN.md','docs/development.md']){
     let file=path.resolve(site,'.'+decodeURIComponent(new URL(req.url,'http://localhost').pathname));
     if(fs.existsSync(file)&&fs.statSync(file).isDirectory())file=path.join(file,'index.html');
     if(!file.startsWith(site+path.sep)||!fs.existsSync(file)){res.writeHead(404,{'Content-Type':'text/html'});return res.end(fs.readFileSync(path.join(site,'404.html')));}
+    const app=path.relative(site,file).split(path.sep).slice(0,2).join('/')==='demo/app';
+    res.setHeader('Content-Security-Policy',policies[app?1:0]);res.setHeader('X-Frame-Options',app?'SAMEORIGIN':'DENY');
     res.setHeader('Content-Type',mime[path.extname(file)]||'application/octet-stream');res.end(fs.readFileSync(file));
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -190,16 +281,16 @@ for(const name of ['README.md','README.zh-CN.md','docs/development.md']){
       assert.equal(await page.locator('[data-feature-tab="overview"]').evaluate(el=>el===document.activeElement),true);
       assert.equal(await page.locator('.animated-pet').first().evaluate(el=>getComputedStyle(el).animationName),'none');
 
-      const previewVersion=new URL(await page.locator('.hero-shot img').getAttribute('src'),origin).searchParams.get('v');
+      const previewVersion=new URL(await page.locator('.feature img[data-preview]').first().getAttribute('src'),origin).searchParams.get('v');
       await page.locator('button[data-platform=windows]').click();
       assert.match(previewVersion,/^[a-f0-9]{12}$/);
       assert(await page.locator('img[data-preview]').evaluateAll((images,version)=>images.every(image=>new URL(image.src).searchParams.get('v')===version),previewVersion));
       assert.equal(await page.locator('button[data-platform=windows]').getAttribute('aria-pressed'),'true');
       assert(await page.locator('.feature img[data-preview]').evaluateAll(images=>images.every(image=>image.src.includes('/windows-'))));
       await page.waitForFunction(()=>[...document.querySelectorAll('img[data-preview]')].every(image=>image.complete&&image.naturalWidth>0));
-      await page.locator('.hero-shot').click();assert(await page.locator('#image-dialog').evaluate(dialog=>dialog.open));
+      await page.locator('[data-feature-tab="overview"]').click();await page.locator('#overview .shot').click();assert(await page.locator('#image-dialog').evaluate(dialog=>dialog.open));
       await page.keyboard.press('Escape');assert.equal(await page.locator('#image-dialog').evaluate(dialog=>dialog.open),false);
-      assert(await page.locator('.hero-shot').evaluate(button=>button===document.activeElement));
+      assert(await page.locator('#overview .shot').evaluate(button=>button===document.activeElement));
       await page.locator('.faq details').first().locator('summary').click();assert(await page.locator('.faq details').first().getAttribute('open')!==null);
       await page.setViewportSize({width:390,height:844});await page.goto(origin+url);
       if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1)){
@@ -218,11 +309,12 @@ for(const name of ['README.md','README.zh-CN.md','docs/development.md']){
     await page.locator('[data-feature-tab="servers"]').click();
     await page.locator('#servers').screenshot({path:path.join(qa,'server-section.png')});
     await page.goto(origin+'/');await page.locator('button[data-platform=macos]').click();await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:path.join(qa,'hero-final.png')});
+    await checkStage(browser,origin,errors,failed);
     await checkFontsAndAnimation(browser,origin);
     await checkNoScript(browser,origin);
     await checkMobile(browser,origin,errors,failed);
     assert.deepEqual(errors,[]);assert.deepEqual(failed,[]);
-    console.log('Passed: bilingual content, assets, links, six feature galleries, platform switching, zoom/focus/Escape, navigation, FAQ, mobile/tablet layout, language anchors.');
+    console.log('Passed: bilingual content, assets, links, the interactive stage on both platforms, six feature galleries, platform switching, zoom/focus/Escape, navigation, FAQ, mobile/tablet layout, language anchors.');
     console.log('Visual review:',qa);
   }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

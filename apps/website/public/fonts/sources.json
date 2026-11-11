@@ -6,7 +6,7 @@
     "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/comicneue/ComicNeue-Regular.ttf",
     "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/comicneue/OFL.txt",
     "sha256": "a0ee5a37c8b27c4db0700137d928598b1e23b0089e1546a8961909176b779360",
-    "bytes": 12952
+    "bytes": 12956
   },
   {
     "file": "comic-neue-bold.woff2",
@@ -15,7 +15,7 @@
     "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/comicneue/ComicNeue-Bold.ttf",
     "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/comicneue/OFL.txt",
     "sha256": "3e7e5fccfd7e0788f317b43312151c1bd5cf058c9697a8d83eac3939050bd61e",
-    "bytes": 12768
+    "bytes": 12816
   },
   {
     "file": "lxgw-wenkai-regular.woff2",
@@ -24,7 +24,7 @@
     "source": "https://github.com/lxgw/LxgwWenKai/releases/download/v1.530/LXGWWenKai-Regular.ttf",
     "license": "https://raw.githubusercontent.com/lxgw/LxgwWenKai/main/OFL.txt",
     "sha256": "2d73eea94ad808999d90c0000c239a84a33b09d4bc6ab6c5b8bbf1eda8a7fc8b",
-    "bytes": 104572,
+    "bytes": 110888,
     "unicodeRange": "U+0-1FFF,U+2013-2014,U+2018-201A,U+201C-201E,U+2022,U+2026,U+2039-203A,U+2044,U+2070-2191,U+2193,U+2195-229D,U+229F-2317,U+2319-25C7,U+25C9-25CE,U+25D0-3001,U+3003-4E2C,U+4E2E-4F52,U+4F54-6586,U+6588-7B7F,U+7B81-10FFFF"
   },
   {
@@ -34,7 +34,7 @@
     "source": "https://github.com/lxgw/LxgwWenKai/releases/download/v1.530/LXGWWenKai-Regular.ttf",
     "license": "https://raw.githubusercontent.com/lxgw/LxgwWenKai/main/OFL.txt",
     "sha256": "2d73eea94ad808999d90c0000c239a84a33b09d4bc6ab6c5b8bbf1eda8a7fc8b",
-    "bytes": 4404,
+    "bytes": 4416,
     "unicodeRange": "U+2000-2012,U+2015-2017,U+201B,U+201F-2021,U+2023-2025,U+2027-2038,U+203B-2043,U+2045-206F,U+2192,U+2194,U+229E,U+2318,U+25C8,U+25CF,U+3002,U+4E2D,U+4F53,U+6587,U+7B80"
   }
 ]

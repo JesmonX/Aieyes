@@ -42,6 +42,20 @@ if(require.main===module)(async()=>{
         await sharp(path.join(dir,file)).resize(64,64,{fit:'contain',background:{r:0,g:0,b:0,alpha:0},kernel:'lanczos3'}).webp({quality:90,alphaQuality:100,effort:6}).toFile(path.join(dir,file.replace(/\.png$/,'.webp')));
       }
       console.log('Encoded provider icons at 64 px');
+    }else if(process.argv.includes('--demo')){
+      // Click-through states of the website demo. Captures follow the screen's scale; the published image is 1×.
+      const language=process.argv.includes('--language')?process.argv[process.argv.indexOf('--language')+1]:'all';
+      for(const locale of ['en','zh-CN'].includes(language)?[language]:['en','zh-CN']){
+        const input=path.join(work,'native',locale,'demo'),target=path.join(out,'demo/macos',locale);
+        fs.rmSync(target,{recursive:true,force:true});fs.mkdirSync(target,{recursive:true});
+        for(const file of fs.readdirSync(input).filter(name=>name.endsWith('.png')).sort()){
+          const {width,height}=JSON.parse(fs.readFileSync(path.join(input,file.replace('.png','.json')),'utf8'));
+          let png=fs.readFileSync(path.join(input,file));const size=await sharp(png).metadata();
+          if(size.width!==width||size.height!==height)png=await sharp(png).resize(Math.round(width),Math.round(height),{kernel:'lanczos3'}).png().toBuffer();
+          const bytes=await encode(page,png);fs.writeFileSync(path.join(target,file.replace('.png','.webp')),bytes);
+          console.log('Encoded demo',locale,file,bytes.length,'bytes');
+        }
+      }
     }else{
       const language=process.argv[process.argv.indexOf('--language')+1]||'all';
       for(const locale of language==='all'||!['en','zh-CN'].includes(language)?['en','zh-CN']:[language]){

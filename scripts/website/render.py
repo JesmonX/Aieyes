@@ -20,10 +20,15 @@ parser.add_argument("--language", choices=["all", "en", "zh-CN"], default="all")
 parser.add_argument("--prepare", action="store_true")
 parser.add_argument("--capture", action="store_true")
 parser.add_argument("--audit-layout", action="store_true")
+parser.add_argument("--demo", action="store_true", help="render the click-through states of the website demo only")
 args = parser.parse_args()
 languages = ["en", "zh-CN"] if args.language == "all" else [args.language]
 ROOT = Path(__file__).resolve().parents[2]
 WORK = ROOT / ".local/website"
+# The website demo's windows: an audited main-window width at a height that fits a laptop screen, and the panel.
+DEMO_SIZE = {"main": (1120, 760), "panel": (450, 720)}
+DEMO_SWIFT = {"DEMO_MAIN_WIDTH": DEMO_SIZE["main"][0], "DEMO_MAIN_HEIGHT": DEMO_SIZE["main"][1],
+              "DEMO_PANEL_WIDTH": DEMO_SIZE["panel"][0], "DEMO_PANEL_HEIGHT": DEMO_SIZE["panel"][1]}
 OUT = WORK / "native"
 SOURCE = WORK / "native-source"
 APP = WORK / "AieyesPreview.app"
@@ -63,6 +68,11 @@ for source in (ROOT / "apps/macos/Sources/Aieyes").glob("*.swift"):
                          ("}.listStyle(.sidebar)", "}.listStyle(.plain).scrollContentBackground(.hidden)")]:
             assert text.count(old) == 1, old
             text = text.replace(old, new)
+        # Rows of the plain list expose no accessibility frames; the demo hotspots use each label's own layout frame.
+        row = "Label { Text(title).lineLimit(1) } icon: { Image(systemName: icon) }\n            .accessibilityLabel(title)"
+        assert text.count(row) == 1
+        text = text.replace(row, row + "\n            .background(GeometryReader { geometry in Color.clear.onChange(of: geometry.frame(in: .global), initial: true) { _, frame in websiteSidebarRows[title] = frame } })")
+        text += "\n@MainActor var websiteSidebarRows: [String: CGRect] = [:]\n"
     if source.name == "AieyesApp.swift":
         text = text.replace("200_000_000", "1_200_000_000")
         # Keep invisible capture windows on a real screen so AppKit draws layers.
@@ -115,7 +125,8 @@ for source in (ROOT / "apps/macos/Sources/Aieyes").glob("*.swift"):
     }
     visit(view, path: "root")
     guard !truncated, rows.count > 20 else { throw ClientError.message("Incomplete preview accessibility tree") }
-    try JSONSerialization.data(withJSONObject: ["width": bounds.width, "height": bounds.height, "elements": rows], options: [.prettyPrinted, .sortedKeys]).write(to: url)
+    let sidebar: [[String: Any]] = websiteSidebarRows.map { ["title": $0.key, "x": $0.value.minX, "y": $0.value.minY, "width": $0.value.width, "height": $0.value.height] }
+    try JSONSerialization.data(withJSONObject: ["width": bounds.width, "height": bounds.height, "title": window.title, "sidebar": sidebar, "elements": rows], options: [.prettyPrinted, .sortedKeys]).write(to: url)
 }
 '''
         anchor = 'try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)'
@@ -126,6 +137,25 @@ for source in (ROOT / "apps/macos/Sources/Aieyes").glob("*.swift"):
                          ("servers", "servers", "integrations", "appearance")]
             let selection: PetSelection = try await model.engine.call("pets.current")
             model.importedPet = selection.pet
+            if let demo = ProcessInfo.processInfo.environment["AIEYES_DEMO_STATE"] {
+                // name|surface|page|settings tab|general page|agent|sessions expanded|Codex card expanded
+                let parts = demo.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+                guard parts.count == 8, ["main", "panel"].contains(parts[1]) else { throw ClientError.message("Invalid demo state") }
+                let directory = root.appendingPathComponent("demo")
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let panel = parts[1] == "panel"
+                model.detailPage = parts[2]; model.settingsTab = parts[3]; model.generalPage = parts[4]; model.settingsAgent = parts[5]; model.panelHeight = DEMO_PANEL_HEIGHT
+                var preview = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+                preview[NativePanelKey.scoped(.panelSessions, .detailSessions, compact: panel)] = parts[6] == "1"
+                preview[NativePanelKey.expansion(.quota, id: "codex:codex", compact: panel)] = parts[7] == "1"
+                preview["setup.scene.v1"] = "mixed"; preview["setup.expanded.v2"] = ""
+                UserDefaults.standard.setVolatileDomain(preview, forName: UserDefaults.argumentDomain)
+                NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+                let url = directory.appendingPathComponent(parts[0] + ".png")
+                if panel { try await capture(RootView(model: model, page: parts[2]), size: NSSize(width: DEMO_PANEL_WIDTH, height: DEMO_PANEL_HEIGHT), dark: true, to: url) }
+                else { try await capture(MainWindowView(model: model), size: NSSize(width: DEMO_MAIN_WIDTH, height: DEMO_MAIN_HEIGHT), dark: true, to: url) }
+                model.stop(); NSApp.terminate(nil); return
+            }
             if let target = ProcessInfo.processInfo.environment["AIEYES_CAPTURE_TARGET"] {
                 let parts = target.split(separator: "-").map(String.init)
                 guard parts.count == 3, let width = Int(parts[1]), ["light", "dark"].contains(parts[2]),
@@ -169,9 +199,151 @@ for source in (ROOT / "apps/macos/Sources/Aieyes").glob("*.swift"):
         start = text.index('            if ProcessInfo.processInfo.environment["AIEYES_UI_LAYOUT_ONLY"]')
         end = text.index('        } catch { fputs', start)
         text = text[:start] + text[end:]
+    for key, value in DEMO_SWIFT.items():
+        text = text.replace(key, str(value))
     (SOURCE / source.name).write_text(text)
 if "--prepare" in sys.argv:
     print(SOURCE); sys.exit(0)
+
+# Website demo: one native capture per reachable state, and the controls that lead from one to another.
+def demo_state(name, page, surface="main", tab="integrations", general="appearance", agent="codex", sessions=False, card=True):
+    return dict(name=name, surface=surface, page=page, tab=tab, general=general, agent=agent, sessions=sessions, card=card)
+
+
+# Titles are spelled as in the application source; English comes from the product catalog.
+DEMO_SIDEBAR = {"总览": "overview", "用量分析": "analytics", "服务器": "servers", "接入与账户": "accounts", "机器与采集": "machines",
+                "模型价格": "prices", "定时唤醒": "wakeups", "设置": "settings", "配置向导": "setup"}
+DEMO_GENERAL = {"外观": "appearance", "桌宠与会话": "desktop", "网络代理": "network", "刷新与历史": "refresh", "通知": "notifications",
+                "高级": "advanced", "更新与关于": "updates"}
+DEMO_AGENTS = {"Codex": "codex", "Claude Code": "claude", "Antigravity": "antigravity"}
+general_state = lambda key: "settings" if key == "appearance" else "settings-" + key
+agent_state = lambda key: "accounts" if key == "codex" else "accounts-" + key
+DEMO_STATES = [
+    demo_state("overview", "agent"),
+    demo_state("overview-sessions", "agent", sessions=True),
+    demo_state("overview-collapsed", "agent", card=False),
+    demo_state("overview-sessions-collapsed", "agent", sessions=True, card=False),
+    demo_state("analytics", "analysis"),
+    demo_state("servers", "servers"),
+    *[demo_state(agent_state(key), "settings", agent=key) for key in DEMO_AGENTS.values()],
+    demo_state("machines", "settings", tab="servers"),
+    demo_state("prices", "settings", tab="prices"),
+    demo_state("wakeups", "settings", tab="wakeups"),
+    *[demo_state(general_state(key), "settings", tab="general", general=key) for key in DEMO_GENERAL.values()],
+    demo_state("setup", "setup"),
+    demo_state("panel", "agent", surface="panel", sessions=True),
+    demo_state("panel-quotas", "agent", surface="panel"),
+    demo_state("panel-servers", "servers", surface="panel", sessions=True),
+]
+# The session list and the Codex quota card open and close independently of each other.
+DEMO_SESSIONS = {"overview": "overview-sessions", "overview-sessions": "overview", "overview-collapsed": "overview-sessions-collapsed",
+                 "overview-sessions-collapsed": "overview-collapsed", "panel": "panel-quotas", "panel-quotas": "panel"}
+DEMO_CARD = {"overview": "overview-collapsed", "overview-collapsed": "overview", "overview-sessions": "overview-sessions-collapsed",
+             "overview-sessions-collapsed": "overview-sessions"}
+# Panel controls that bring up the main window.
+DEMO_PANEL_OPENS = {"打开详情": "overview", "设置": "settings"}
+DEMO_INITIAL = {"main": "overview", "panel": "panel"}
+
+
+def write_demo_manifest():
+    catalog = json.loads((ROOT / "locales/en.json").read_text(encoding="utf-8"))
+    word = lambda text, language: text if language == "zh-CN" else catalog[text]
+    manifest = {surface: dict(width=size[0], height=size[1], initial=DEMO_INITIAL[surface], states={}) for surface, size in DEMO_SIZE.items()}
+    for state in DEMO_STATES:
+        name, surface = state["name"], state["surface"]
+        width, height = DEMO_SIZE[surface]
+        # `view` is where the state sits in the application, in the native application's own terms.
+        entry = dict(view={key: state[key] for key in ("page", "tab", "general", "agent", "sessions", "card")}, title={}, hotspots={})
+        for language in ("en", "zh-CN"):
+            dump = OUT / language / "demo" / (name + ".json")
+            if not dump.exists():
+                raise SystemExit(f"Missing {dump}; render both languages once with --demo --language all.")
+            data = json.loads(dump.read_text())
+            if (round(data["width"]), round(data["height"])) != (width, height):
+                raise SystemExit(f"{dump}: unexpected capture size")
+            if not (ROOT / "apps/website/public/demo/macos" / language / (name + ".webp")).exists():
+                raise SystemExit(f"Missing encoded image for {language} {name}")
+            elements = [e for e in data["elements"] if e["frameAvailable"] and e["width"] > 0 and e["height"] > 0]
+            scrolls = [e for e in elements if e["role"] == "AXScrollArea"]
+            spots = []
+
+            def spot(x, y, w, h, target, label, clip=None, opens=None):
+                left, top, right, bottom = max(0, x), max(0, y), min(width, x + w), min(height, y + h)
+                if clip:
+                    left, top, right, bottom = max(left, clip["x"]), max(top, clip["y"]), min(right, clip["x"] + clip["width"]), min(bottom, clip["y"] + clip["height"])
+                # A control scrolled mostly out of view is not offered.
+                if right - left < 12 or bottom - top < min(h, 14):
+                    return False
+                spots.append(dict(x=round(left), y=round(top), w=round(right - left), h=round(bottom - top), to=target, label=label, **({"surface": opens} if opens else {})))
+                return True
+
+            def element_spot(element, target, label, opens=None):
+                parents = [s for s in scrolls if element["path"].startswith(s["path"] + ".")]
+                return spot(element["x"], element["y"], element["width"], element["height"], target, label, max(parents, key=lambda s: len(s["path"])) if parents else None, opens)
+
+            def buttons(label):
+                return [e for e in elements if e["role"] == "AXButton" and e["label"] == label]
+
+            if surface == "main":
+                title = data["title"]
+                if not title.endswith(" — Aieyes"):
+                    raise SystemExit(f"{dump}: window title was not set")
+                entry["title"][language] = title[:-len(" — Aieyes")]
+                outline = next(e for e in elements if e["role"] == "AXOutline")
+                rows = {row["title"]: row for row in data["sidebar"]}
+                for source, target in DEMO_SIDEBAR.items():
+                    row = rows.get(word(source, language))
+                    # The label's measured frame, widened to the list row it sits in.
+                    if not row or not spot(outline["x"] + 8, row["y"] - 4, outline["width"] - 16, row["height"] + 8, target, word(source, language)):
+                        raise SystemExit(f"{dump}: sidebar row {source} is missing")
+                for element in buttons(word("查看分析", language)):
+                    element_spot(element, "analytics", element["label"])
+                if state["page"] == "agent" and not any(s["to"] == "analytics" and s["x"] > outline["width"] for s in spots):
+                    raise SystemExit(f"{dump}: no analysis button")
+                if state["page"] == "settings" and state["tab"] == "general":
+                    for source, key in DEMO_GENERAL.items():
+                        chip = buttons(word(source, language))
+                        if len(chip) != 1 or not element_spot(chip[0], general_state(key), chip[0]["label"]):
+                            raise SystemExit(f"{dump}: settings page {source} is missing")
+                if state["page"] == "settings" and state["tab"] == "integrations":
+                    for label, key in DEMO_AGENTS.items():
+                        chip = buttons(label)
+                        if len(chip) != 1 or not element_spot(chip[0], agent_state(key), label):
+                            raise SystemExit(f"{dump}: agent {label} is missing")
+            else:
+                tabs = [e for e in elements if e["role"] == "AXRadioButton"][:2]
+                if len(tabs) != 2:
+                    raise SystemExit(f"{dump}: panel tabs are missing")
+                entry["title"][language] = tabs[0 if state["page"] == "agent" else 1]["label"]
+                for tab, target in zip(tabs, ("panel", "panel-servers")):
+                    element_spot(tab, target, tab["label"])
+                for source, target in DEMO_PANEL_OPENS.items():
+                    button = buttons(word(source, language))
+                    if len(button) != 1 or not element_spot(button[0], target, button[0]["label"], "main"):
+                        raise SystemExit(f"{dump}: panel control {source} is missing")
+            if name in DEMO_SESSIONS:
+                disclosure = next((e for e in elements if e["role"] == "AXDisclosureTriangle"), None)
+                if not disclosure or not element_spot(disclosure, DEMO_SESSIONS[name], disclosure["label"].split(", ")[1 if ", " in disclosure["label"] else 0]):
+                    raise SystemExit(f"{dump}: session disclosure is missing")
+            if name in DEMO_CARD:
+                toggles = [word("折叠额度", language), word("展开额度", language)]
+                # Accessibility labels lower-case the action inside an English sentence.
+                ends = lambda element, text: element["label"].lower().endswith(text.lower())
+                card = next((e for e in elements if e["role"] == "AXButton" and any(ends(e, t) for t in toggles)), None)
+                if not card or not element_spot(card, DEMO_CARD[name], next(t for t in toggles if ends(card, t))):
+                    raise SystemExit(f"{dump}: Codex quota card header is missing")
+            entry["hotspots"][language] = spots
+        manifest[surface]["states"][name] = entry
+    for surface, group in manifest.items():
+        for name, entry in group["states"].items():
+            for language, spots in entry["hotspots"].items():
+                for item in spots:
+                    if item["to"] not in manifest[item.get("surface", surface)]["states"]:
+                        raise SystemExit(f"{surface}/{name} ({language}): hotspot leads to unknown state {item['to']}")
+    target = ROOT / "apps/website/demo/macos.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print("Wrote demo manifest:", target)
 
 framework = ROOT / ".build/swift/debug"
 if not (framework / "Sparkle.framework").exists():
@@ -197,6 +369,19 @@ for language in languages:
     environment = dict(os.environ, AIEYES_LANGUAGE=language, AIEYES_CORE_PATH=str(fixture), AIEYES_DATA_DIR=str(WORK / "native-data" / language), AIEYES_UI_SCENARIO="website", AIEYES_UI_STAMP="1792584000", AIEYES_PREVIEW_FIXTURE=str(fixture_path), AIEYES_LAYOUT_AUDIT="0")
     environment.pop("AIEYES_CAPTURE_TARGET", None)
     fixture_path.write_bytes(subprocess.check_output([sys.executable, str(fixture), "--fixture"], env=environment))
+    if args.demo:
+        shutil.rmtree(output / "demo", ignore_errors=True)
+        def capture_demo(state):
+            demo_env = dict(environment, AIEYES_LAYOUT_AUDIT="1", AIEYES_DEMO_STATE="|".join([state["name"], state["surface"], state["page"], state["tab"], state["general"], state["agent"], str(int(state["sessions"])), str(int(state["card"]))]),
+                            AIEYES_DATA_DIR=str(WORK / "native-demo-data" / language / state["name"]))
+            subprocess.run([str(binary), "--render", str(output)], env=demo_env, check=True, timeout=60)
+            print("Captured demo state:", language, state["name"], flush=True)
+
+        # One process per state, as for the layout audit: each owns its accessibility tree.
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            for index in range(0, len(DEMO_STATES), 2):
+                list(executor.map(capture_demo, DEMO_STATES[index:index + 2]))
+        continue
     subprocess.run([str(binary), "--render", str(output)], env=environment, check=True, timeout=180)
     if args.audit_layout:
         def capture_audit(target):
@@ -213,5 +398,10 @@ for language in languages:
                 targets += [f"panel-{width}-{theme}" for width in (360, 450)]
                 for index in range(0, len(targets), 2):
                     list(executor.map(capture_audit, targets[index:index + 2]))
+if args.demo:
+    # The eight gallery screenshots are left as they are; only the demo states are encoded.
+    subprocess.run(["node", str(ROOT / "scripts/website/encode.cjs"), "--demo", "--language", args.language], check=True)
+    write_demo_manifest()
+    sys.exit(0)
 subprocess.run(["node", str(ROOT / "scripts/website/encode.cjs"), "--language", args.language], check=True)
 print("Rendered native macOS product previews:", OUT)
