@@ -475,7 +475,7 @@ html:not(:has(#panel,body[data-platform=windows])) { scrollbar-gutter:stable; }
 }
 
 @layer components {
-:root[data-surface=panel][data-theme=light] #content > .card { background:#fff; box-shadow:var(--shadow-xs); }
+:root[data-surface=panel][data-theme=light] #content > .card { background:rgb(255 255 255 / 94%); box-shadow:var(--shadow-xs); }
 }
 
 @layer components {
