@@ -49,6 +49,7 @@ where
 impl Engine {
     pub(crate) fn sample_hosts(&mut self, params: Value) -> Result<Value> {
         let settings = self.store.settings()?;
+        self.sync_host_observer(&settings);
         let active: std::collections::HashSet<_> = settings
             .monitored_hosts()
             .into_iter()
@@ -77,9 +78,12 @@ impl Engine {
                     );
                     this.previous_metrics.insert(host.id.clone(), raw);
                     monitoring::filter_devices(&mut display, host);
+                    this.host_observer.observe(&host.id, &host.name, &display);
                     json!({"id":host.id,"name":host.name,"sample":display})
                 }
                 Err(error) => {
+                    this.host_observer
+                        .observe(&host.id, &host.name, &Value::Null);
                     this.previous_metrics.remove(&host.id);
                     json!({"id":host.id,"name":host.name,"error":error.to_string()})
                 }

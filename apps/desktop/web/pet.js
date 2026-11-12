@@ -55,7 +55,13 @@
     } catch (error) {frames = [];delete sprite.dataset.asset;paint();} finally
     {if (loading === key) loading = null;}
   }
+  function celebrate() {
+    if (!enabled || document.hidden || reduced.matches || !sprite) return;
+    sprite.animate([{filter:'brightness(1)'},{filter:'brightness(1.5)'},{filter:'brightness(1)'}], {duration:520, easing:'ease-out'});
+  }
+  window.__TAURI__?.event?.listen('desktop:celebrate', celebrate).catch(() => {});
   function update(info) {
+    const previousBehavior = state?.behavior;
     if (!info.nativePet) void loadAsset(info.petAsset);
     enabled = !!info.petEnabled && !info.nativePet && !info.panelOpen;
     scale = Number.isFinite(info.petScale) ? Math.min(2, Math.max(0.5, info.petScale)) : 1;
@@ -77,9 +83,10 @@
       ball.setAttribute('aria-label', ball.title);
     }
     schedule();
+    if (previousBehavior && previousBehavior !== 'success' && state?.behavior === 'success') celebrate();
   }
   reduced.addEventListener('change', schedule);document.addEventListener('visibilitychange', schedule);
   window.addEventListener('resize', paint);
   window.addEventListener('pagehide', () => {cancelAnimationFrame(timer);timer = null;});
-  window.AieyesPet = { update, frame };
+  window.AieyesPet = { update, frame, celebrate };
 })();

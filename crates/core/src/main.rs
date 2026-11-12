@@ -108,6 +108,9 @@ fn run() -> anyhow::Result<()> {
             let mut operation = None;
             if let Ok(v) = serde_json::from_str::<Value>(&line) {
                 let result = match v["method"].as_str() {
+                    Some("dashboard.cancel") => Some(aieyes_core::operations::cancel_query(
+                        v["params"]["operationId"].as_str().unwrap_or(""),
+                    )),
                     Some("operations.prepareUpdate") => Some(aieyes_core::operations::prepare()),
                     Some("operations.resume") => Some(aieyes_core::operations::resume()),
                     Some("operations.status") => Some(aieyes_core::operations::status()),
@@ -127,7 +130,12 @@ fn run() -> anyhow::Result<()> {
                 }
                 if let Some(method) = v["method"].as_str() {
                     match aieyes_core::operations::enter(method) {
-                        Ok(_scope) => operation = aieyes_core::operations::context(),
+                        Ok(_scope) => {
+                            aieyes_core::operations::identify_query(
+                                v["params"]["operationId"].as_str().unwrap_or(""),
+                            );
+                            operation = aieyes_core::operations::context();
+                        }
                         Err(error) => {
                             if let Some(id) = v.get("id") {
                                 let mut out = io::stdout().lock();

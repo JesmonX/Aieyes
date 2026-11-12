@@ -121,10 +121,6 @@ module.exports=async function verifyAlignment({browser,url,data,installFixture,o
         if(!await page.locator('#agent-section-api').evaluate(el=>el.open))await page.locator('#agent-section-api > summary').click();
         await page.locator('[data-codex-api=add]').click();
         await checkDialog('#editor','dialog-api-width','api-editor'+suffix);
-        await page.evaluate(()=>openPanelAccounts());
-        await checkDialog('#quota-dialog','dialog-selection-width','account-picker'+suffix);
-        await page.evaluate(()=>openQuotaOrder());
-        await checkDialog('#quota-dialog','dialog-selection-width','account-order'+suffix);
         await page.evaluate(()=>openProviderEstimates('codex'));
         await checkDialog('#quota-dialog','dialog-valuation-width','valuation'+suffix);
         await page.evaluate(()=>AieyesAccountTargets.open('codex:codex'));
@@ -162,10 +158,6 @@ module.exports=async function verifyAlignment({browser,url,data,installFixture,o
         const menu=await page.locator('#panel-menu').boundingBox();
         assert(menu.x>=0&&menu.x+menu.width<=viewport.width,'refresh menu remains inside the panel');
         await page.keyboard.press('Escape');
-        await page.evaluate(()=>openPanelAccounts());
-        const picker=await page.locator('#quota-dialog').boundingBox();
-        assert(picker.x>=0&&picker.y>=0&&picker.x+picker.width<=viewport.width&&picker.y+picker.height<=viewport.height,'panel picker fits the viewport');
-        await capture('panel-picker-'+viewport.width);await page.keyboard.press('Escape');
       }
       assert.deepEqual(errors,[]);
     } finally {await context.close();}

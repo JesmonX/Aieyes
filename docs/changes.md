@@ -72,6 +72,17 @@
   - 会话行显示项目名（工作目录）、本轮已用时间、本会话与本轮 Token，以及有可靠证据时的输出速度；本机会话可点击切换到所属终端或 IDE。逐 Agent 情况见下表，跳转验收见 [manual-verification.md](manual-verification.md)。
   - 定时唤醒编辑器按最近 30 个完整自然日推荐唤醒时间，见 [credits-and-wakeups.md](credits-and-wakeups.md#唤醒时间推荐)。
   - 官网截图重新生成；`scripts/website/render.py` 的侧栏补丁更新为当前 `NavigationSplitView` 结构。
+- 工作台体验与系统集成（11-12）。两端同时交付，详见 [workbench-experience.md](workbench-experience.md)：
+  - 新增会话页（进行中／最近结束、等待输入优先、按 Agent 筛选，只含生命周期信息）。
+  - 设置收为一个窗口：一个搜索框、两端相同的十个常规页面；面板账户、账户顺序与后台采样从辅助窗口移入设置页。
+  - 面板账户卡可“在主窗口中查看”，主窗口滚动到该账户并高亮一次；面板宽度可选 450／360；永久禁用的选择框改为只读行。
+  - 浅色模式卡片改为白色并带阴影层级；空态使用同一组件；状态色只表示状态，赠送余额与静态标签改为中性色。
+  - 额度环弧长过渡并在刷新后亮起一次，数字原位滚动，图表切换范围时淡入，刷新反馈、桌宠一次性闪光、触控板反馈与页面切换动效；减少动态效果时只保留页面淡入。
+  - 登录时启动、`aieyes://` 导航链接、macOS Dock 等待数徽标。
+  - Webhook 通知（JSON、纯文本、Bark、Slack、企业微信、飞书，可选额度重置、会话等待输入／完成／失败、服务器告警）。
+  - 服务器卡片显示最近 60 分钟走势，并支持 CPU／内存持续偏高告警。
+  - 首次读取前显示占位布局；版本更新后显示一次“本次更新”。
+  - 核心新增 `hosts.history`、`hostAlerts.take`、`webhooks.dispatch`／`webhooks.test`、`app.launch`，以及供 Windows/Linux 会话线程使用的 `SessionObserver`。
 
 #### 会话 Token 与输出速度（本机已启用的 Agent）
 
@@ -183,6 +194,15 @@
 - 会话跳转：macOS 仅在 Ghostty 与 ChatGPT 内置 Codex 上实机确认；Terminal、iTerm2、VS Code、同应用多窗口未验收。Windows 只做了交叉类型检查，Linux X11/Wayland 未实机运行。tmux、screen 及守护进程启动的会话找不到所属窗口。
 - 唤醒推荐的 SSH 目标读取运行记录与时区靠新增的 `runs` 远程操作（远程脚本随每次调用发送，无需重新部署），只在模拟测试中验证，真实 SSH 主机未验收。
 - `cargo test` 中 `process::line_transport_tests::errors_and_timeouts_close_the_stream_without_hanging_on_pipes` 在本机全量运行时超时（清理约 20 秒），未修改的 `HEAD` 同样失败，单独运行通过。`scripts/test-native-bilingual-layout.py` 的 6 项差异（英文“View analysis”按钮高度、重置时间换行）在 `HEAD` 上同样存在。
+
+### 工作台体验与系统集成（11-12）
+
+- 动画（弧长过渡、刷新亮起、卡片描边、桌宠闪光、页面淡入）只检查了最终画面，触控板反馈未实机确认。
+- Windows/Linux 的登录时启动（HKCU Run、XDG autostart）、`aieyes://` 注册与启动、服务器告警系统通知、面板改为 360 宽度均未实机运行；Windows/Linux 平台模块未在本机编译。
+- Webhook 只在测试中投递，未向真实的 Bark、Slack、企业微信、飞书地址发送。
+- macOS 小组件需要正式签名，ad-hoc 签名下未实现。
+- 服务器分钟历史只在内存中保留 180 分钟，核心重启后从空开始。
+- Windows/Linux 在首次结果前会显示上一次同筛选的总览结果并标注“正在更新”；macOS 不跨启动缓存统计，两端在这一点上不同。
 
 ### 性能
 

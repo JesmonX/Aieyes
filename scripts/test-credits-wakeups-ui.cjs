@@ -82,7 +82,7 @@ function fixture(){
   assert(await card().locator('.quota-collapsed-summary').isVisible());
   const titleBox=await card().locator('.quota-title h3').boundingBox(),balanceBox=await card().locator('.quota-collapsed-summary').boundingBox();
   assert(balanceBox.y>=titleBox.y+titleBox.height-1,'Collapsed credits and Bank Reset use their own row below the account');
-  assert.equal(await card().locator('.quota-collapsed-summary .credit-label').evaluate(el=>getComputedStyle(el).color),await page.evaluate(()=>{const probe=document.createElement('span');probe.style.color='var(--accent-text)';document.body.append(probe);const color=getComputedStyle(probe).color;probe.remove();return color;}));
+  assert.equal(await card().locator('.quota-collapsed-summary .credit-label').evaluate(el=>getComputedStyle(el).color),await page.evaluate(()=>{const probe=document.createElement('span');probe.style.color='var(--muted)';document.body.append(probe);const color=getComputedStyle(probe).color;probe.remove();return color;}));
   assert.equal(await card().locator('.quota-title .provider-mark img').evaluate(img=>img.complete&&img.naturalWidth>0),true,'Provider icon is bundled and loads');
   assert.equal(await card().locator('.subscription-badge').textContent(),'Pro');
   const edgeCases=await page.evaluate(()=>{

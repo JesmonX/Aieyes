@@ -97,7 +97,8 @@ label:has(> input[type=checkbox]:disabled) { color:var(--muted); cursor:default;
 .settings-block .card .card + .card { border-top-color:var(--border); }
 .settings-subpage .between { flex-wrap:wrap; gap:var(--space-control); }
 .form-row { display:grid; grid-template-columns:var(--form-label-width) minmax(0,1fr); align-items:center; gap:var(--space-card-content); margin:var(--space-card-content) 0; }
-.form-row > label { color:var(--ink); font-size:var(--font-body); }
+.form-row > :is(label,.form-row-label) { color:var(--ink); font-size:var(--font-body); }
+.form-row > .form-row-value { color:var(--muted); font-size:var(--font-body); overflow-wrap:anywhere; }
 .form-row input:not([type=checkbox]),.form-row select { width:100%; }
 .form-row textarea { min-height:76px; resize:vertical; font-family:var(--font-code); font-size:var(--font-secondary); }
 [data-general-section=appearance] .form-row { grid-template-columns:minmax(0,1fr) 220px; margin:0; padding:8px 0; border-bottom:1px solid var(--border); }

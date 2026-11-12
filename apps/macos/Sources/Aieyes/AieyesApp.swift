@@ -25,6 +25,7 @@ struct AieyesCommands: Commands {
             Button(L("总览")) { delegate.menuShowPage("agent") }.keyboardShortcut("1")
             Button(L("用量分析")) { delegate.menuShowPage("analysis") }.keyboardShortcut("2")
             Button(L("服务器")) { delegate.menuShowPage("servers") }.keyboardShortcut("3")
+            Button(L("会话")) { delegate.menuShowPage("sessions") }.keyboardShortcut("4")
             Divider()
             Button(L("刷新")) { delegate.menuRefresh() }.keyboardShortcut("r")
             Divider()
@@ -44,9 +45,6 @@ struct AieyesCommands: Commands {
     private var appearanceController: AppAppearanceController?
     private var detailWindow: NSWindow?
     private var accountSwitchWindow: NSWindow?
-    private var samplingWindow: NSWindow?
-    private var quotaOrderWindow: NSWindow?
-    private var panelAccountsWindow: NSWindow?
     private var globalClickMonitor: Any?
     private var localEventMonitor: Any?
     private var estimateWindows: [String: NSWindow] = [:]
@@ -54,8 +52,10 @@ struct AieyesCommands: Commands {
     private var quitWaitCancelled = false
     private var accountSwitchFlow = UUID()
     private var accountSwitchKey: String?
-    // Unsaved-draft state reported by the account order / panel accounts editors, keyed by window.
-    private var auxiliaryDirty: [ObjectIdentifier: Bool] = [:]
+    // Links that arrive before the status item exists are opened once launch finishes.
+    private var pendingLinks: [URL] = []
+    private var appliedPanelWidth = PanelWidth.current
+    private static let estimateSizeKey = "window.estimate.contentSize"
     private var cancellables = Set<AnyCancellable>()
     private var model: AppModel!
     private var titleUpdatePending = false
@@ -93,9 +93,6 @@ struct AieyesCommands: Commands {
         }.store(in: &cancellables)
         model.showEstimate = { [weak self] quota, credits, group in self?.openEstimate(quota, credits: credits, group: group) }
         model.showAccountSwitch = { [weak self] key in self?.openAccountSwitch(key) }
-        model.showSampling = { [weak self] in self?.openSampling() }
-        model.showQuotaOrder = { [weak self] in self?.openQuotaOrder() }
-        model.showPanelAccounts = { [weak self] in self?.openPanelAccounts() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.target = self; button.action = #selector(togglePopover)
@@ -112,7 +109,7 @@ struct AieyesCommands: Commands {
         popover.behavior = .applicationDefined; popover.animates = true; popover.delegate = self
         popover.contentViewController = PanelContainer(model: model)
         appearanceController?.updatePanel()
-        popover.contentSize = NSSize(width: 450, height: 720)
+        popover.contentSize = NSSize(width: PanelWidth.current.points, height: 720)
         petWindow = PetWindowController(model: model, checkUpdates: { AppUpdater.shared.check() }, open: { [weak self] anchor, toggle in
             guard let self else { return }
             if self.popover.isShown { if toggle { self.popover.performClose(nil) }; return }
@@ -159,6 +156,22 @@ struct AieyesCommands: Commands {
         }
         NotificationCenter.default.addObserver(self, selector: #selector(applicationDeactivated), name: NSApplication.didResignActiveNotification, object: nil)
         if CommandLine.arguments.contains("--show-detail") { openDetail() }
+        let links = pendingLinks; pendingLinks = []
+        for url in links { open(url) }
+    }
+    /// `aieyes://` links only navigate: the panel, a page or a settings page.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard !CommandLine.arguments.contains("--render") else { return }
+        guard statusItem != nil else { pendingLinks += urls; return }
+        for url in urls { open(url) }
+    }
+    private func open(_ url: URL) {
+        guard let link = AieyesLink(url) else { return }
+        switch link {
+        case .panel: if !popover.isShown { showPopover() }
+        case .page(let page): openDetail(page: page)
+        case .settings(let category, let section): model.openSettings(.init(category: category, section: section))
+        }
     }
     @objc private func togglePopover() {
         guard let button = statusItem.button else { return }
@@ -188,7 +201,7 @@ struct AieyesCommands: Commands {
     }
     private func preparePopover(screen: NSScreen?) {
         let area = (screen ?? NSScreen.main)?.visibleFrame.size ?? NSSize(width: 1024, height: 800)
-        let size = NSSize(width: min(450, max(1, area.width - 24)), height: min(720, max(1, area.height - 34)))
+        let size = NSSize(width: min(PanelWidth.current.points, max(1, area.width - 24)), height: min(720, max(1, area.height - 34)))
         (popover.contentViewController as? PanelContainer)?.prepare(size: size)
         popover.contentSize = size
     }
@@ -212,7 +225,7 @@ struct AieyesCommands: Commands {
     }
     func popoverDidClose(_ notification: Notification) { statusItem.button?.highlight(false); model.setWindowVisible(false, window: "panel") }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        let windows = [detailWindow, accountSwitchWindow, panelAccountsWindow, quotaOrderWindow, samplingWindow].compactMap { $0 } + Array(estimateWindows.values)
+        let windows = [detailWindow, accountSwitchWindow].compactMap { $0 } + Array(estimateWindows.values)
         if let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first(where: { $0.isVisible || $0.isMiniaturized }) {
             showWindow(window)
         } else { showPopover() }
@@ -235,7 +248,7 @@ struct AieyesCommands: Commands {
         UserDefaults.standard.set(!visible, forKey: "aieyes.pet.enabled")
     }
     @objc private func quitAction() { NSApp.terminate(nil) }
-    @objc private func samplingAction() { openSampling() }
+    @objc private func samplingAction() { model.openSettings(.init(category: "general", section: "advanced")) }
     @objc private func wake() { model.resumeAfterWake() }
     private func scheduleTitleUpdate() {
         guard !titleUpdatePending else { return }
@@ -248,9 +261,6 @@ struct AieyesCommands: Commands {
         measuredMenu = nil
         scheduleTitleUpdate()
         accountSwitchWindow?.title = L("切换账户")
-        samplingWindow?.title = L("管理采样")
-        quotaOrderWindow?.title = L("调整账户顺序")
-        panelAccountsWindow?.title = L("面板显示账户")
         for (key, window) in estimateWindows {
             if let quota = model.dashboard.quotas.first(where: { key == $0.id + ":credits" || key == $0.id + ":quota" }) {
                 window.title = quota.name + (key.hasSuffix(":credits") ? L(" · credit 价值") : L(" · 额度估值"))
@@ -279,11 +289,17 @@ struct AieyesCommands: Commands {
         if !model.runningEstimates.isEmpty { tooltip += " · " + model.samplingSummary }
         if button.toolTip != tooltip { button.toolTip = tooltip; button.setAccessibilityLabel(tooltip) }
         if let window = detailWindow, window.isDocumentEdited != model.settingsDirty { window.isDocumentEdited = model.settingsDirty }
-
+        DockBadge.update(waiting: model.sessions.filter { $0.phase == .needsInput }.count)
+        // A width change in Settings also applies to a panel that is already open.
+        let panelWidth = PanelWidth.current
+        if panelWidth != appliedPanelWidth {
+            appliedPanelWidth = panelWidth
+            if popover.isShown { preparePopover(screen: popover.contentViewController?.view.window?.screen) }
+        }
     }
     private func openDetail(page: String? = nil) {
         if let page { model.requestedDetailPage = page; model.detailPage = page }
-        else if detailWindow == nil, let saved = UserDefaults.standard.string(forKey: NativePanelKey.detailPage.rawValue), ["agent", "analysis", "servers", "settings"].contains(saved) { model.detailPage = saved }
+        else if detailWindow == nil, let saved = UserDefaults.standard.string(forKey: NativePanelKey.detailPage.rawValue), ["agent", "analysis", "servers", "sessions", "settings"].contains(saved) { model.detailPage = saved }
         popover.performClose(nil)
         if detailWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
@@ -370,6 +386,11 @@ struct AieyesCommands: Commands {
         if estimateWindows[key] == nil {
             window.title = quota.name + (credits ? L(" · credit 价值") : L(" · 额度估值")); window.isReleasedWhenClosed = false
             window.contentMinSize = NSSize(width: 490, height: 360)
+            // Estimate windows share one remembered size; each still opens centred.
+            if let saved = UserDefaults.standard.string(forKey: Self.estimateSizeKey) {
+                let size = NSSizeFromString(saved)
+                if size.width >= 490, size.height >= 360 { window.setContentSize(size) }
+            }
             window.center(); estimateWindows[key] = window
         }
         window.title = quota.name + (credits ? L(" · credit 价值") : L(" · 额度估值"))
@@ -385,43 +406,8 @@ struct AieyesCommands: Commands {
         window.title = L("切换账户"); window.isReleasedWhenClosed = false
         let flow = UUID(); accountSwitchFlow = flow
         window.contentView = NSHostingView(rootView: AccountTargetsView(model: model, accountKey: key, onClose: { [weak self, weak window] success in guard let self, self.accountSwitchFlow == flow else { return }; window?.close(); if success && returnToPopover { self.showPopover() } }))
-        if accountSwitchWindow == nil { window.center() }
+        if accountSwitchWindow == nil { window.center(); window.setFrameAutosaveName("AieyesAccountSwitch") }
         accountSwitchWindow = window; accountSwitchKey = key; fitToVisibleScreen(window); showWindow(window)
-    }
-    private func openSampling() {
-        popover.performClose(nil)
-        if samplingWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 530, height: 400), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-            window.title = L("管理采样"); window.isReleasedWhenClosed = false
-            window.contentMinSize = NSSize(width: 470, height: 260)
-            window.contentView = NSHostingView(rootView: SamplingManagementView(model: model))
-            window.center(); samplingWindow = window
-        }
-        if let window = samplingWindow { fitToVisibleScreen(window); showWindow(window) }
-    }
-    private func openQuotaOrder() {
-        popover.performClose(nil)
-        if quotaOrderWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 488, height: 430), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.title = L("调整账户顺序"); window.isReleasedWhenClosed = false; window.center(); window.delegate = self; quotaOrderWindow = window
-        }
-        guard let window = quotaOrderWindow else { return }
-        if window.isVisible || window.isMiniaturized { showWindow(window); return }
-        let id = ObjectIdentifier(window); auxiliaryDirty[id] = false
-        window.contentView = NSHostingView(rootView: QuotaOrderView(model: model, onClose: { [weak window] in window?.close() }, onDirtyChange: { [weak self] in self?.auxiliaryDirty[id] = $0 }))
-        fitToVisibleScreen(window); showWindow(window)
-    }
-    private func openPanelAccounts() {
-        popover.performClose(nil)
-        if panelAccountsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 488, height: 528), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.title = L("面板显示账户"); window.isReleasedWhenClosed = false; window.center(); window.delegate = self; panelAccountsWindow = window
-        }
-        guard let window = panelAccountsWindow else { return }
-        if window.isVisible || window.isMiniaturized { showWindow(window); return }
-        let id = ObjectIdentifier(window); auxiliaryDirty[id] = false
-        window.contentView = NSHostingView(rootView: PanelAccountsView(model: model, onClose: { [weak window] in window?.close() }, onDirtyChange: { [weak self] in self?.auxiliaryDirty[id] = $0 }))
-        fitToVisibleScreen(window); showWindow(window)
     }
     private func fitToVisibleScreen(_ window: NSWindow) {
         guard let screen = window.screen ?? NSScreen.main else { return }
@@ -433,20 +419,6 @@ struct AieyesCommands: Commands {
         window.setFrame(frame, display: true)
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if sender === quotaOrderWindow || sender === panelAccountsWindow {
-            guard auxiliaryDirty[ObjectIdentifier(sender)] == true, sender.attachedSheet == nil else { return sender.attachedSheet == nil }
-            // Same wording as the editors' discardDraftConfirmation.
-            let alert = NSAlert()
-            alert.messageText = L("放弃未保存的编辑？")
-            alert.informativeText = L("此编辑器的输入尚未保存，放弃后无法恢复。")
-            alert.addButton(withTitle: L("继续编辑"))
-            alert.addButton(withTitle: L("放弃更改"))
-            alert.buttons[0].keyEquivalent = "\u{1b}"
-            alert.beginSheetModal(for: sender) { [weak sender] response in
-                if response == .alertSecondButtonReturn { sender?.close() }
-            }
-            return false
-        }
         guard sender === detailWindow else { return true }
         if approvingSettingsClose { approvingSettingsClose = false; return true }
         guard sender.attachedSheet == nil else { return false }
@@ -480,12 +452,20 @@ struct AieyesCommands: Commands {
     }
     func windowWillClose(_ notification: Notification) {
         if let window = notification.object as? NSWindow, estimateWindows.values.contains(where: { $0 === window }) {
+            rememberEstimateSize(window)
             // Keep window position, but release history, subscriptions and its IPC
             // reader. Reopening already creates a fresh estimate view.
             window.contentView = nil
         }
         if (notification.object as? NSWindow) === detailWindow { model.setWindowVisible(false, window: "detail") }
         if (notification.object as? NSWindow) === detailWindow { model.settingsWindowVisible = false }
+    }
+    private func rememberEstimateSize(_ window: NSWindow) {
+        guard estimateWindows.values.contains(where: { $0 === window }) else { return }
+        UserDefaults.standard.set(NSStringFromSize(window.contentRect(forFrameRect: window.frame).size), forKey: Self.estimateSizeKey)
+    }
+    func windowDidEndLiveResize(_ notification: Notification) {
+        if let window = notification.object as? NSWindow { rememberEstimateSize(window) }
     }
     func windowDidChangeOcclusionState(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
@@ -612,6 +592,35 @@ struct AieyesCommands: Commands {
             }
         }
     }
+    /// Sessions for the sessions-page snapshot; the preview core reports none. Lifecycle
+    /// metadata only, exactly like the real list: no prompts, tool arguments or replies.
+    private func previewSessions() -> [LiveSession] {
+        let now = Date().timeIntervalSince1970
+        func session(_ id: String, _ provider: String, _ phase: SessionPhase, project: String, started: Double, ended: Double? = nil,
+                     host: (id: String, name: String)? = nil, usage: SessionUsage? = nil) -> LiveSession {
+            var value = LiveSession(id: id, source: Format.provider(provider), phase: phase, updatedAt: Date(timeIntervalSince1970: now - (ended ?? 0)))
+            value.provider = provider; value.workspace = "/Users/preview/dev/" + project
+            value.turnStartedAt = (now - started) * 1000
+            if let ended { value.turnEndedAt = (now - ended) * 1000 }
+            if let host { value.machineId = host.id; value.machine = host.name } else { value.pid = 4242; value.processStart = (now - started - 30) * 1000 }
+            value.usage = usage
+            return value
+        }
+        var idle = LiveSession(id: "preview-idle", source: "Codex", phase: .idle, updatedAt: Date(timeIntervalSince1970: now))
+        idle.provider = "codex"
+        return [
+            session("preview-1", "codex", .needsInput, project: "billing-api", started: 254,
+                    usage: SessionUsage(sessionTokens: 1_240_000, turnTokens: 8_400, turnOutputTokens: 1_900, outputTokensPerSecond: 42)),
+            session("preview-2", "claude", .tool, project: "checkout-web", started: 96,
+                    usage: SessionUsage(sessionTokens: 310_000, turnTokens: 24_000, turnOutputTokens: 6_100, outputTokensPerSecond: 18.4)),
+            session("preview-3", "codex", .thinking, project: "docs-site", started: 18),
+            session("preview-4", "claude", .complete, project: "billing-api", started: 640, ended: 210,
+                    usage: SessionUsage(sessionTokens: 88_000, turnTokens: 41_000, turnOutputTokens: 9_800, outputTokensPerSecond: 31)),
+            session("preview-5", "codex", .failed, project: "data-pipeline", started: 1_500, ended: 1_020),
+            session("preview-6", "claude", .working, project: "checkout-web", started: 420, host: ("preview-host", "build-01")),
+            idle,
+        ]
+    }
     private func renderSnapshots(to directory: String) async {
         do {
             let info: CoreInfo = try await model.engine.call("hello")
@@ -624,6 +633,8 @@ struct AieyesCommands: Commands {
             await model.loadPetLibrary()
             await model.testNetwork()
             if ProcessInfo.processInfo.environment["AIEYES_UI_SCENARIO"] != nil { await model.scan(); await model.refreshQuotas(); await model.sampleHosts() }
+            // The servers page reads its minute history through the same call as the running app.
+            model.outbound.attach(model); await model.outbound.refreshHistory()
             UserDefaults.standard.setVolatileDomain(NativePanelKey.snapshotOverrides(panelQuotaExpanded: model.quotaAccounts.count <= 1), forName: UserDefaults.argumentDomain)
             let root = URL(fileURLWithPath: directory)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -650,7 +661,7 @@ struct AieyesCommands: Commands {
                         try await capture(AnnualUsageTable(days: model.dashboard.heatmap).padding(16), size: NSSize(width: width, height: 300), dark: dark, to: root.appendingPathComponent("annual-\(width)-\(theme).png"))
                         try await capture(DailyUsage(days: model.dashboard.trendDays, rows: model.dashboard.dayModels, compact: false).padding(16), size: NSSize(width: width, height: 440), dark: dark, to: root.appendingPathComponent("daily-\(width)-\(theme).png"))
                     }
-                    try await capture(PanelAccountsView(model: model, onClose: {}), size: NSSize(width: 488, height: 528), dark: dark, to: root.appendingPathComponent("panel-accounts-\(theme).png"))
+                    try await capture(ScrollView { PanelAccountsView(model: model).padding(20) }, size: NSSize(width: 488, height: 528), dark: dark, to: root.appendingPathComponent("panel-accounts-\(theme).png"))
                 }
                 model.stop(); NSApp.terminate(nil); return
             }
@@ -675,11 +686,13 @@ struct AieyesCommands: Commands {
             }
             if ProcessInfo.processInfo.environment["AIEYES_UI_WORKSPACE_ONLY"] == "1" {
                 for dark in [false, true] {
-                    for page in ["agent", "analysis", "servers", "settings"] {
+                    for page in ["agent", "analysis", "servers", "sessions", "settings"] {
                         model.detailPage = page; model.settingsTab = "integrations"; model.settingsAgent = "codex"
-                        try await capture(MainWindowView(model: model), size: NSSize(width: 1080, height: 800), dark: dark, to: root.appendingPathComponent("workspace-\(page)-\(dark ? "dark" : "light").png"))
+                        // "workspace-sessions-*" already names the panel session strip below.
+                        let name = page == "sessions" ? "sessions-page" : page
+                        try await capture(MainWindowView(model: model), size: NSSize(width: 1080, height: 800), dark: dark, to: root.appendingPathComponent("workspace-\(name)-\(dark ? "dark" : "light").png"))
                         if page == "agent" { try await capture(MainWindowView(model: model), size: NSSize(width: 1280, height: 900), dark: dark, to: root.appendingPathComponent("workspace-agent-1280-\(dark ? "dark" : "light").png")) }
-                        try await capture(MainWindowView(model: model), size: NSSize(width: 760, height: 480), dark: dark, to: root.appendingPathComponent("workspace-\(page)-small-\(dark ? "dark" : "light").png"))
+                        try await capture(MainWindowView(model: model), size: NSSize(width: 760, height: 480), dark: dark, to: root.appendingPathComponent("workspace-\(name)-small-\(dark ? "dark" : "light").png"))
                     }
                     model.detailPage = "agent"
                     for height in [720, 440] {
@@ -731,7 +744,7 @@ struct AieyesCommands: Commands {
                 }
             }
             model.settingsAgent = "codex"; model.settingsTab = "general"
-            for page in ["appearance", "desktop", "network", "refresh", "notifications", "advanced", "updates"] {
+            for page in SettingsIndex.generalPageKeys {
                 model.generalPage = page
                 for dark in [false, true] {
                     try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: dark, to: root.appendingPathComponent("settings-general-\(page)-\(dark ? "dark" : "light").png"))
@@ -755,6 +768,15 @@ struct AieyesCommands: Commands {
             }
             for dark in [false, true] {
                 try await capture(RootView(model: model, compact: false, page: "servers"), size: NSSize(width: 1080, height: 800), dark: dark, to: root.appendingPathComponent("servers-\(dark ? "dark" : "light").png"))
+                do {
+                    let theme = dark ? "dark" : "light"
+                    let sessions = model.sessions, unavailable = model.sessionsUnavailable
+                    try await capture(SessionsPage(model: model), size: NSSize(width: 1080, height: 800), dark: dark, to: root.appendingPathComponent("sessions-empty-\(theme).png"))
+                    model.sessions = previewSessions(); model.sessionsUnavailable = false
+                    try await capture(SessionsPage(model: model), size: NSSize(width: 1080, height: 800), dark: dark, to: root.appendingPathComponent("sessions-\(theme).png"))
+                    try await capture(SessionsPage(model: model), size: NSSize(width: 760, height: 480), dark: dark, to: root.appendingPathComponent("sessions-minimum-\(theme).png"))
+                    model.sessions = sessions; model.sessionsUnavailable = unavailable
+                }
                 if let host = model.settings.hosts.first {
                     for compact in [false, true] {
                         let key = NativePanelKey.expansion(.server, id: host.id, compact: compact)
@@ -766,6 +788,10 @@ struct AieyesCommands: Commands {
                             let name = "server-" + (compact ? "panel" : "minimum") + (expanded ? "-expanded" : "-folded") + (dark ? "-dark" : "-light") + ".png"
                             try await capture(card, size: NSSize(width: compact ? 360 : 620, height: expanded ? 900 : 640), dark: dark, to: root.appendingPathComponent(name))
                         }
+                    }
+                    for compact in [false, true] {
+                        let card = ServerCard(host: host, result: model.hosts.first { $0.id == host.id }, trend: model.hostTrend(host.id), compact: compact)
+                        try await capture(card, size: NSSize(width: compact ? 360 : 620, height: 640), dark: dark, to: root.appendingPathComponent("server-trend-" + (compact ? "panel" : "minimum") + (dark ? "-dark" : "-light") + ".png"))
                     }
                 }
                 model.panelHeight = 540
@@ -821,7 +847,7 @@ struct AieyesCommands: Commands {
                     try await capture(QuotaEstimateView(model: model, quota: account, credits: true), size: NSSize(width: 518, height: 620), dark: dark, to: root.appendingPathComponent("credit-estimate-\(dark ? "dark" : "light").png"))
                 }
             }
-            try await capture(PanelAccountsView(model: model, onClose: {}), size: NSSize(width: 488, height: 528), dark: false, to: root.appendingPathComponent("panel-accounts.png"))
+            try await capture(ScrollView { PanelAccountsView(model: model).padding(20) }, size: NSSize(width: 488, height: 528), dark: false, to: root.appendingPathComponent("panel-accounts.png"))
             if let quota = model.dashboard.quotas.first {
                 var overrides = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
                 overrides[NativePanelKey.expansion(.quota, id: quota.id, compact: true)] = false
@@ -834,7 +860,7 @@ struct AieyesCommands: Commands {
                 dormant.windows = [QuotaWindow(name: "5h", usedPercent: 0, windowMinutes: 300, resetsAt: Date().timeIntervalSince1970 + 7200), QuotaWindow(name: "7d", usedPercent: 20, windowMinutes: 10080, resetsAt: Date().timeIntervalSince1970 + 172800)]
                 try await capture(QuotaCard(quota: dormant), size: NSSize(width: 414, height: 450), dark: false, to: root.appendingPathComponent("quota-full-window-reset.png"))
             }
-            try await capture(QuotaOrderView(model: model), size: NSSize(width: 488, height: 430), dark: false, to: root.appendingPathComponent("quota-order.png"))
+            try await capture(QuotaOrderView(model: model).padding(20), size: NSSize(width: 488, height: 430), dark: false, to: root.appendingPathComponent("quota-order.png"))
             for provider in ["antigravity", "deepseek"] {
                 let source = AgentSource(name: Format.provider(provider), provider: provider, path: "")
                 try await capture(SourceEditor(source: source, hosts: model.settings.hosts, onSave: { _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent(provider + "-source.png"))

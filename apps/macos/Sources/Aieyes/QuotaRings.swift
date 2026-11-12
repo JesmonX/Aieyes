@@ -45,7 +45,8 @@ struct QuotaRingSection: View {
             } else {
                 QuotaRingAwaitingTile(model: model, account: entry.account, style: style, compact: compact)
             }
-        }.modifier(AccountCardActions(model: model, account: entry.account))
+        }.modifier(AccountCardActions(model: model, account: entry.account, opensMainWindow: compact))
+            .modifier(AccountFocusHighlight(store: model.accountFocus, account: compact ? "" : entry.account.key, radius: style == .tile ? Palette.radiusCard : 12))
     }
 }
 
@@ -70,6 +71,9 @@ private struct QuotaRingDetail: View {
                 if let plan = quota.plan, Format.subscription(plan).count <= 10 { SubscriptionBadge(plan: plan).frame(maxWidth: 76) }
                 if model.canSwitchAccount(quota.id) {
                     Button { model.showAccountSwitch?(quota.id) } label: { Image(systemName: "arrow.left.arrow.right") }.help(L("切换账户")).accessibilityLabel(L("切换账户"))
+                }
+                if compact {
+                    Button { model.showAccount(quota.id) } label: { Image(systemName: "macwindow") }.help(L("在主窗口中查看")).accessibilityLabel(L("在主窗口中查看"))
                 }
                 Button(action: close) { Image(systemName: "chevron.up") }.help(L("收起")).accessibilityLabel(L("收起"))
             }.buttonStyle(.plain)
@@ -140,8 +144,9 @@ private struct QuotaRingDetail: View {
                                 let share = meter.total.flatMap { $0 > 0 ? max(0, min(1, (meter.remaining ?? 0) / $0)) : nil } ?? 0
                                 ZStack {
                                     Circle().stroke(Color.primary.opacity(0.1), lineWidth: 3)
-                                    Circle().trim(from: 0, to: share).stroke(Palette.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round)).rotationEffect(.degrees(-90))
-                                    Image(systemName: "c.circle").foregroundStyle(Palette.accent)
+                                    // A meter's share is data: the provider's series colour, as on the rings.
+                                    Circle().trim(from: 0, to: share).stroke(QuotaRingModel.healthy(quota.provider), style: StrokeStyle(lineWidth: 3, lineCap: .round)).rotationEffect(.degrees(-90))
+                                    Image(systemName: "c.circle").foregroundStyle(QuotaRingModel.healthy(quota.provider))
                                 }.frame(width: 28, height: 24)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(L(meter.label)).foregroundStyle(.secondary)
@@ -253,7 +258,8 @@ private struct RingTime: View {
     var body: some View {
         HStack(spacing: 2) {
             if Palette.quotaCritical(arc.used) { Image(systemName: "exclamationmark.triangle").font(.system(size: 10, weight: .semibold)) }
-            Text(percent ? QuotaRingModel.remainingText(arc) : QuotaRingModel.resetText(arc, now: now)).monospacedDigit().lineLimit(1)
+            let text = percent ? QuotaRingModel.remainingText(arc) : QuotaRingModel.resetText(arc, now: now)
+            Text(text).monospacedDigit().lineLimit(1).numericTransition(value: text)
         }.foregroundStyle(Palette.quota(arc.used))
     }
 }
@@ -287,7 +293,7 @@ struct QuotaDialTile: View {
             Button(action: action) {
                 VStack(spacing: 4) {
                     ZStack {
-                        QuotaRingView(kind: item.kind, healthy: QuotaRingModel.healthy(item.quota.provider), lineWidth: compact ? 6 : 6.5, composition: RingBalanceComposition.make(item.quota), gap: 2.5)
+                        QuotaRingView(kind: item.kind, healthy: QuotaRingModel.healthy(item.quota.provider), lineWidth: compact ? 6 : 6.5, composition: RingBalanceComposition.make(item.quota), gap: 2.5, refreshedAt: item.quota.updatedAt)
                         center(now: context.date).padding(compact ? 9 : 11)
                     }.frame(width: size, height: size).opacity(item.quota.isStale ? 0.6 : 1)
                     HStack(spacing: 4) {
@@ -313,8 +319,8 @@ struct QuotaDialTile: View {
         let font = Font.system(size: compact ? DesignTokens.fontCaption + 1 : DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)
         if let meter = item.meter {
             VStack(spacing: 3) {
-                Text(showPercent ? item.kind.top.map(QuotaRingModel.remainingText) ?? "—" : qoderCreditNumber(meter.remaining))
-                    .font(font).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+                let text = showPercent ? item.kind.top.map(QuotaRingModel.remainingText) ?? "—" : qoderCreditNumber(meter.remaining)
+                Text(text).font(font).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).numericTransition(value: text)
                 if let arc = item.meterReset, arc.resetsAt != nil {
                     Text(QuotaRingModel.resetText(arc, now: now)).font(.system(size: DesignTokens.fontCaption, weight: DesignTokens.weightMedium)).foregroundStyle(.secondary).monospacedDigit()
                 }
@@ -341,7 +347,7 @@ struct QuotaDialTile: View {
                 Text(QuotaRingModel.resetText(top, now: now)).font(.system(size: DesignTokens.fontCaption, weight: DesignTokens.weightMedium)).foregroundStyle(.secondary).monospacedDigit()
             }.minimumScaleFactor(0.7)
         case .coin(let amount, let low):
-            Text(amount).font(font).monospacedDigit().lineLimit(1).minimumScaleFactor(0.55).foregroundStyle(low ? Palette.danger : Color.primary)
+            Text(amount).font(font).monospacedDigit().lineLimit(1).minimumScaleFactor(0.55).foregroundStyle(low ? Palette.danger : Color.primary).numericTransition(value: amount)
         case .empty:
             if item.quota.queryFailure != nil { Text("!").font(.system(size: 17, weight: .bold)).foregroundStyle(Palette.danger) }
             else { Text("—").font(font).foregroundStyle(.secondary) }
@@ -372,7 +378,7 @@ struct QuotaRingTile: View {
                     }
                     HStack(alignment: .center, spacing: 10) {
                         ZStack {
-                            QuotaRingView(kind: item.kind, healthy: QuotaRingModel.healthy(item.quota.provider), lineWidth: compact ? 4.5 : 5, composition: RingBalanceComposition.make(item.quota), gap: 2)
+                            QuotaRingView(kind: item.kind, healthy: QuotaRingModel.healthy(item.quota.provider), lineWidth: compact ? 4.5 : 5, composition: RingBalanceComposition.make(item.quota), gap: 2, refreshedAt: item.quota.updatedAt)
                             center
                         }.frame(width: size, height: size).opacity(item.quota.isStale ? 0.6 : 1)
                         if let meter = item.meter {
@@ -404,11 +410,11 @@ struct QuotaRingTile: View {
         switch item.kind {
         case .duo(let top, let bottom):
             VStack(spacing: 0) {
-                Text(String(format: "%.0f", top.remaining)).foregroundStyle(Palette.quota(top.used))
-                Text(String(format: "%.0f", bottom.remaining)).foregroundStyle(Palette.quota(bottom.used))
+                Text(String(format: "%.0f", top.remaining)).foregroundStyle(Palette.quota(top.used)).numericTransition(value: top.remaining)
+                Text(String(format: "%.0f", bottom.remaining)).foregroundStyle(Palette.quota(bottom.used)).numericTransition(value: bottom.remaining)
             }.font(font).monospacedDigit()
         case .single(let top):
-            Text(String(format: "%.0f", top.remaining)).font(font).monospacedDigit().foregroundStyle(Palette.quota(top.used))
+            Text(String(format: "%.0f", top.remaining)).font(font).monospacedDigit().foregroundStyle(Palette.quota(top.used)).numericTransition(value: top.remaining)
         case .coin:
             if let split = RingBalanceComposition.make(item.quota) { RingBalanceCenter(split: split, healthy: QuotaRingModel.healthy(item.quota.provider)).font(.system(size: DesignTokens.fontCaption, weight: DesignTokens.weightStrong)).padding(7) }
             else { ProviderMark(provider: item.quota.provider, size: size * 0.5) }
@@ -562,7 +568,7 @@ private struct RingBalanceCenter: View {
     var percent = false
     var body: some View {
         VStack(spacing: 3) {
-            Text(percent ? String(format: "%.0f%%", split.share * 100) : split.granted).foregroundStyle(Palette.ok).help(L("赠送 {0}", split.granted))
+            Text(percent ? String(format: "%.0f%%", split.share * 100) : split.granted).foregroundStyle(RingBalanceComposition.grantedTint).help(L("赠送 {0}", split.granted))
             Rectangle().fill(Palette.cardBorder.opacity(0.6)).frame(width: 22, height: 1)
             Text(percent ? String(format: "%.0f%%", (1 - split.share) * 100) : split.paid).foregroundStyle(healthy).help(L("充值 {0}", split.paid))
         }.monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)

@@ -29,7 +29,7 @@
     const revision = statusRevisions.get(id) ?? 0,previous = statusRequests.get(id);
     if (previous?.revision === revision) return previous.promise;
     const request = (async () => {
-      try {const value = await api('wakeups.status', { id });if ((statusRevisions.get(id) ?? 0) === revision) {statuses[id] = value;delete statusErrors[id];taskErrors.get(id)?.delete('status');}}
+      try {const value = await api('wakeups.status', { id });if ((statusRevisions.get(id) ?? 0) === revision) {const previous = statuses[id],last = value.history?.[0];if (previous && last?.status === 'success' && !previous.history?.some((run) => run.startedAt === last.startedAt && run.status === 'success')) {void window.__TAURI__?.event?.emit?.('desktop:celebrate').catch(() => {});requestAnimationFrame(() => AieyesMotion.highlight('[data-wake-row="' + CSS.escape(id) + '"]'));}statuses[id] = value;delete statusErrors[id];taskErrors.get(id)?.delete('status');}}
       catch (e) {if ((statusRevisions.get(id) ?? 0) === revision) statusErrors[id] = e.message ?? String(e);} finally
       {if (statusRequests.get(id)?.revision === revision) statusRequests.delete(id);drawTask(id);}
     })();statusRequests.set(id, { revision, promise: request });drawTask(id);return request;

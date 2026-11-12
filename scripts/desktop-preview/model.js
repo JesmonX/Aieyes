@@ -19,7 +19,7 @@
       this.data = copy(data);this.methods = Object.fromEntries(methods.map(m => [m.name, m]));this.providers = providers;this.hooks = hooks;
       this.revisions = Object.fromEntries(['settings', 'usage', 'quotas', 'estimates', 'prices', 'sources', 'accounts'].map(k => [k, 1]));
       this.listeners = new Map();this.monitorVersion = 0;this.delay = 0;this.fail = 'none';
-      this.desktop = { platform: data.platform, page: 'agent', panelPage: 'agent', mode: 'pet', effectiveMode: 'pet', nativePet: true, petEnabled: false, showCount: true, hidden: false, panelOpen: true, panelPinned: false, petScale: 1, ...copy(data.desktop), material: 'opaque', materials: { main: 'opaque', floating: 'opaque' }, sessions: copy(data.sessions), activeCount: data.sessions.filter(s => s.phase !== 'complete').length, summary: '预览会话 · 模拟数据' };
+      this.desktop = { platform: data.platform, page: 'agent', panelPage: 'agent', mode: 'pet', effectiveMode: 'pet', nativePet: true, petEnabled: false, showCount: true, hidden: false, panelOpen: true, panelPinned: false, panelWidth: 'standard', petScale: 1, ...copy(data.desktop), material: 'opaque', materials: { main: 'opaque', floating: 'opaque' }, sessions: copy(data.sessions), activeCount: data.sessions.filter(s => s.phase !== 'complete').length, summary: '预览会话 · 模拟数据' };
       this.updates = { currentVersion: data.version, phase: 'idle', automatic: true, prompt: false, message: '预览模式：更新查询和安装不会访问网络。' };
     }
     listen(name, callback) {const set = this.listeners.get(name) || new Set();set.add(callback);this.listeners.set(name, set);return () => {set.delete(callback);if (!set.size) this.listeners.delete(name);};}
@@ -195,6 +195,10 @@
         case 'pets.current': return { pet: null, error: '预览模式：原生桌宠需在目标系统验收。' };
         case 'operations.status': return { busy: false, operations: [] };
         case 'quotaResetNotifications.take': return [];
+        case 'hostAlerts.take': return [];
+        case 'hosts.history': return { hosts: copy(d.hostHistory?.hosts ?? []).filter(h => !p.hostId || h.id === p.hostId) };
+        case 'webhooks.dispatch': return { delivered: 0, failed: 0, pending: 0 };
+        case 'webhooks.test': return this.boundary('Webhook 测试');
         default:
           if (/^(?:codexAuth\.(?:login|switch|openUrl|adopt|enable|profiles\.)|agyAuth\.(?!inspect)|subscriptions\.openLogin|wakeups\.(?:deploy|remove|run|enable|disable)|sessions\.hooks\.(?:repair|remove)|accounts\.native\.remove|pets\.(?:import|select|asset)|(?:quota|credit)Estimates\.(?:start|stop|restart|repair)|autoEstimates\.(?:tick|rebuild))/.test(method)) return this.boundary(method);
           throw new Error(`未实现的预览调用 / Unhandled preview call: ${method}`);
@@ -211,6 +215,7 @@
         case 'desktop_mode': this.desktop.mode = p.mode;this.desktop.effectiveMode = p.mode;this.emit('desktop:status', this.desktop);return this.desktop;
         case 'desktop_pet_uniform_timing': this.desktop.petUniformTiming = p.enabled;this.emit('desktop:status', this.desktop);return this.desktop;
         case 'desktop_pet_scale': this.desktop.petScale = p.scale;this.emit('desktop:status', this.desktop);return this.desktop;
+        case 'desktop_panel_width': if (!['standard', 'compact'].includes(p.width)) throw new Error('未知面板宽度');this.desktop.panelWidth = p.width;this.emit('desktop:status', this.desktop);return this.desktop;
         case 'desktop_materials': this.desktop.materialPreferences = {main:p.main, floating:p.floating};this.desktop.materials = {main:p.main === 'default'?'mica':p.main, floating:p.floating === 'default'?'acrylic':p.floating};this.emit('desktop:status', this.desktop);return this.desktop;
         case 'desktop_appearance': this.emit('desktop:status', this.desktop);return null;
         case 'desktop_detail': this.hooks.navigate?.(p.view);return null;
@@ -224,6 +229,10 @@
           else if (!['snap', 'reset-position'].includes(action)) return this.boundary(action);
           this.emit('desktop:status', this.desktop);return this.desktop;
         }
+        case 'whats_new_info': return { version: d.version, previousVersion: d.version, updated: false, notes: null, changelog: null };
+        case 'whats_new_open_changelog': return this.boundary('完整变更记录');
+        case 'system_info': return { autostart: { available: true, enabled: Boolean(this.desktop.autostart), error: null }, links: ['aieyes://panel', 'aieyes://overview', 'aieyes://analysis', 'aieyes://servers', 'aieyes://sessions', 'aieyes://settings'] };
+        case 'system_autostart': this.desktop.autostart = Boolean(p.enabled);return this.native('system_info');
         case 'updates_info': return this.updates;
         case 'updates_automatic': this.updates.automatic = p.automatic;return this.updates;
         case 'updates_check': case 'updates_panel_check': return { ...this.updates, phase: 'current' };
@@ -244,10 +253,10 @@
         const mutation = command === 'engine_call' && this.methods[method]?.invalidates.length > 0;
         if (this.fail === 'save' && mutation && !/^(sources\.(scan|rescan)|quotas\.refresh|hosts\.)/.test(method)) throw new Error('模拟保存失败：数据未写入，输入已保留');
         if (this.fail === 'query' && /^(dashboard|quotas\.refresh|hosts\.(sample|monitor\.refresh)|network\.test)/.test(method)) throw new Error('模拟查询失败：连接不可用，请重试');
-        const desktopChange = ['desktop_mode', 'desktop_pet_scale', 'desktop_pet_uniform_timing', 'desktop_panel_pin', 'desktop_action'].includes(command);
+        const desktopChange = ['desktop_mode', 'desktop_pet_scale', 'desktop_panel_width', 'system_autostart', 'desktop_pet_uniform_timing', 'desktop_panel_pin', 'desktop_action'].includes(command);
         if (mutation || desktopChange) before = copy(this.data);
         const result = copy(command === 'engine_call' ? this.engine(method, p) : this.native(command, p));
-        if (desktopChange) {this.data.desktop = Object.fromEntries(['mode','effectiveMode','petScale','petUniformTiming','hidden','showCount','panelPinned'].map(k => [k, this.desktop[k]]));this.persist();}
+        if (desktopChange) {this.data.desktop = Object.fromEntries(['mode','effectiveMode','petScale','panelWidth','autostart','petUniformTiming','hidden','showCount','panelPinned'].map(k => [k, this.desktop[k]]));this.persist();}
         if (mutation) {
           this.persist();
           const revisions = this.methods[method].invalidates;for (const key of revisions) this.revisions[key] = (this.revisions[key] || 0) + 1;

@@ -8,14 +8,16 @@
   const escape = (value) => window.AieyesUI.escapeHTML(value);
   let latest = null;
   // Turn time includes tool and user waits and stops at the terminal event; unknown sessions show none.
+  const activePhases = ['working', 'thinking', 'tool', 'needsInput'];
   const elapsed = (s, now = Date.now()) => {
     if (s.phase === 'unknown' || !(s.turnStartedAt > 0)) return null;
-    const active = ['working', 'thinking', 'tool', 'needsInput'].includes(s.phase),end = s.turnEndedAt > 0 ? s.turnEndedAt : active ? now : null;
+    const active = activePhases.includes(s.phase),end = s.turnEndedAt > 0 ? s.turnEndedAt : active ? now : null;
     return end != null && end >= s.turnStartedAt ? (end - s.turnStartedAt) / 1000 : null;
   };
   const elapsedText = (seconds) => {const total = Math.floor(seconds);return total < 3600 ? `${Math.floor(total / 60)}m${String(total % 60).padStart(2, '0')}s` : `${Math.floor(total / 3600)}h${String(Math.floor(total % 3600 / 60)).padStart(2, '0')}m`;};
   const project = (s) => {const name = String(s.workspace ?? '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();return name || null;};
-  const updatedText = (s) => AieyesI18n.t("最后更新 {0}", Number.isFinite(s.updatedAt) ? new Date(s.updatedAt * 1000).toLocaleTimeString(AieyesI18n.locale, { hour: '2-digit', minute: '2-digit', ...AieyesI18n.clock }) : '—');
+  const updatedTime = (s) => Number.isFinite(s.updatedAt) ? new Date(s.updatedAt * 1000).toLocaleTimeString(AieyesI18n.locale, { hour: '2-digit', minute: '2-digit', ...AieyesI18n.clock }) : '—';
+  const updatedText = (s) => AieyesI18n.t("最后更新 {0}", updatedTime(s));
   // Unknown parts are omitted, never shown as zero.
   const usageText = (s) => {
     const u = s.usage;if (!u) return '';
@@ -46,9 +48,11 @@
   }
   document.addEventListener('click', (event) => {const row = event.target instanceof Element ? event.target.closest('[data-focus-session]') : null;if (row) void focusSession(row.dataset.focusSession);});
   document.addEventListener('keydown', (event) => {const row = event.target instanceof Element ? event.target.closest('[data-focus-session]') : null;if (row && (event.key === 'Enter' || event.key === ' ')) {event.preventDefault();void focusSession(row.dataset.focusSession);}});
-  globalThis.AieyesSessions = { visibility() {if (latest) renderLiveSessions(latest);}, tick, elapsed, elapsedText, detailText, usageText, focusSession };
+  globalThis.AieyesSessions = { visibility() {if (latest) renderLiveSessions(latest);}, tick, elapsed, elapsedText, detailText, usageText, focusSession, phaseLabel, phaseKey, updatedText, updatedTime, active: (phase) => activePhases.includes(phase), snapshot: () => latest };
   globalThis.renderLiveSessions = (info) => {
     latest = info;
+    // The sessions page draws the same snapshot in full.
+    window.AieyesSessionsPage?.update();
     const rank = { needsInput: 0, failed: 1, unknown: 2, working: 3, thinking: 4, tool: 5, complete: 6, interrupted: 7, idle: 8 };
     info = { ...info, sessions: (info.sessions ?? []).filter((s) => !state.provider || AieyesUI.sameAgent(s.provider, state.provider)).sort((a, b) => (rank[a.phase] ?? 2) - (rank[b.phase] ?? 2) || b.updatedAt - a.updatedAt) };
     const container = document.querySelector('#live-sessions');

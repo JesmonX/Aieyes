@@ -44,7 +44,18 @@ fn entry_size(app: &AppHandle) -> (f64, f64) {
 }
 /// Panel size in logical pixels; height is clamped to the monitor work area.
 const PANEL_WIDTH: f64 = 450.0;
+/// The compact panel width chosen in Settings › Panel.
+const PANEL_COMPACT_WIDTH: f64 = 360.0;
 const PANEL_HEIGHT: f64 = 720.0;
+/// Mirrors `Preferences::panel_compact` so geometry code needs no state lock.
+static PANEL_COMPACT: AtomicBool = AtomicBool::new(false);
+fn panel_width() -> f64 {
+    if PANEL_COMPACT.load(Ordering::Relaxed) {
+        PANEL_COMPACT_WIDTH
+    } else {
+        PANEL_WIDTH
+    }
+}
 /// Distance to a work-area edge that makes a dragged ball snap, in logical pixels.
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 const SNAP_DISTANCE: f64 = 48.0;
@@ -76,6 +87,7 @@ struct Preferences {
     floating_material: String,
     main_window: Option<MainWindowPreferences>,
     background_hint_shown: bool,
+    panel_compact: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -90,6 +102,7 @@ impl Default for Preferences {
             floating_material: "default".into(),
             main_window: None,
             background_hint_shown: false,
+            panel_compact: false,
         }
     }
 }
@@ -341,7 +354,10 @@ fn clamp_position(p: Position, x: i32, y: i32, w: u32, h: u32, b: i32) -> Positi
     clamp_rect(p, x, y, w, h, (b, b))
 }
 fn panel_size(scale: f64, work_height: Option<u32>) -> (u32, u32) {
-    let width = (PANEL_WIDTH * scale).round() as u32;
+    panel_size_for(panel_width(), scale, work_height)
+}
+fn panel_size_for(logical_width: f64, scale: f64, work_height: Option<u32>) -> (u32, u32) {
+    let width = (logical_width * scale).round() as u32;
     let height = (PANEL_HEIGHT * scale).round() as u32;
     let margin = (24.0 * scale).round() as u32;
     let height = work_height.map_or(height, |work| {
@@ -616,6 +632,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         .ok()
         .and_then(|s| serde_json::from_slice(&s).ok())
         .unwrap_or_default();
+    PANEL_COMPACT.store(preferences.panel_compact, Ordering::Relaxed);
     #[cfg(not(target_os = "linux"))]
     let menu = build_context_menu(app.handle(), false, false, false, false)?;
     app.manage(Desktop {
@@ -758,6 +775,9 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
     let handle = app.handle().clone();
     std::thread::spawn(move || {
         let mut monitor = SessionMonitor::default();
+        // This thread is the only session reader on Windows/Linux (no engine calls `sessions.list`),
+        // so it also queues the session webhooks.
+        let mut webhooks = aieyes_core::webhooks::SessionObserver::default();
         let mut tick = 0u32;
         let mut pet_revision = None;
         let mut pet_asset = Value::Null;
@@ -770,7 +790,10 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                 .unwrap_or_default();
             let snapshot = match store.settings() {
                 Ok(settings) => {
-                    monitor.read_with_usage(&settings, std::time::SystemTime::now(), &store)
+                    let snapshot =
+                        monitor.read_with_usage(&settings, std::time::SystemTime::now(), &store);
+                    webhooks.observe(&store, &settings, &snapshot.sessions);
+                    snapshot
                 }
                 Err(_) => Snapshot {
                     unavailable: true,
@@ -887,7 +910,7 @@ fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
             .title(crate::localization::label("Aieyes 面板"))
             .inner_size(
                 if cfg!(any(windows, target_os = "linux")) {
-                    PANEL_WIDTH
+                    panel_width()
                 } else {
                     144.0
                 },
@@ -2007,6 +2030,7 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "sources": state.snapshot.sources, "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
         "hidden": state.hidden, "panelOpen": state.panel, "panelPinned": state.pin,
         "showCount": state.preferences.show_count, "panelPage": state.panel_page, "nativePet": cfg!(any(windows, target_os = "linux")),
+        "panelWidth": if state.preferences.panel_compact { "compact" } else { "standard" },
         "recovery": state.recovery,
         "accent": state.accent,
     }))
@@ -2121,6 +2145,33 @@ pub fn desktop_pet_scale(app: AppHandle, scale: f64) -> Result<Value, String> {
     emit_shell(&app);
     desktop_info(app)
 }
+/// Settings › Panel › 面板宽度: standard (450) or compact (360). An open panel is reopened at the new size.
+#[tauri::command]
+pub fn desktop_panel_width(app: AppHandle, width: String) -> Result<Value, String> {
+    let compact = match width.as_str() {
+        "compact" => true,
+        "standard" => false,
+        _ => return Err("未知面板宽度".into()),
+    };
+    let open = {
+        let desktop = app.state::<Desktop>();
+        let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+        let previous = state.preferences.panel_compact;
+        state.preferences.panel_compact = compact;
+        if let Err(error) = write_preferences(&desktop.path, &state.preferences) {
+            state.preferences.panel_compact = previous;
+            return Err(format!("显示偏好保存失败：{error}"));
+        }
+        PANEL_COMPACT.store(compact, Ordering::Relaxed);
+        state.panel
+    };
+    if open {
+        set_panel(&app, false)?;
+        set_panel(&app, true)?;
+    }
+    emit_shell(&app);
+    desktop_info(app)
+}
 #[tauri::command]
 pub fn desktop_panel(app: AppHandle, open: bool) -> Result<Value, String> {
     set_panel(&app, open)?;
@@ -2164,7 +2215,14 @@ pub fn desktop_detail(app: AppHandle, view: Value) -> Result<(), String> {
 
 fn detail_view(view: &Value) -> Result<Value, String> {
     let mut filter = serde_json::Map::new();
-    for key in ["provider", "sourceId", "accountKey", "model"] {
+    // `focusAccount` names the account card the overview scrolls to; it is not a filter.
+    for key in [
+        "provider",
+        "sourceId",
+        "accountKey",
+        "model",
+        "focusAccount",
+    ] {
         if let Some(value) = view[key].as_str() {
             filter.insert(key.into(), json!(value));
         }
@@ -2174,6 +2232,7 @@ fn detail_view(view: &Value) -> Result<Value, String> {
         json!(match view["page"].as_str() {
             Some("analysis") => "analysis",
             Some("servers") => "servers",
+            Some("sessions") => "sessions",
             _ => "agent",
         }),
     );
@@ -2365,7 +2424,7 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
         _ => Err("未知操作".into()),
     }
 }
-fn show_main(app: &AppHandle, page: &str) -> Result<(), String> {
+pub(crate) fn show_main(app: &AppHandle, page: &str) -> Result<(), String> {
     let _ = set_panel(app, false);
     if let Ok(mut state) = app.state::<Desktop>().state.lock() {
         state.page = page.into();
@@ -3465,6 +3524,10 @@ mod tests {
             json!({"page":"agent", "days":30, "cost":true, "dateRange":null})
         );
         assert!(detail_view(&json!({"dateRange":{"kind":"invalid"}})).is_err());
+        assert_eq!(
+            detail_view(&json!({"page":"agent", "focusAccount":"codex:a", "extra":1})).unwrap(),
+            json!({"page":"agent", "focusAccount":"codex:a"})
+        );
     }
 
     #[test]
@@ -3755,8 +3818,18 @@ mod tests {
             8,
         );
         assert_eq!((p.x, p.y), (300, 40));
-        assert_eq!(panel_size(1.0, Some(1040)), (450, 720));
-        assert_eq!(panel_size(2.0, Some(700)), (900, 652));
+        assert_eq!(panel_size_for(PANEL_WIDTH, 1.0, Some(1040)), (450, 720));
+        assert_eq!(panel_size_for(PANEL_WIDTH, 2.0, Some(700)), (900, 652));
+        assert_eq!(
+            panel_size_for(PANEL_COMPACT_WIDTH, 1.0, Some(1040)),
+            (360, 720)
+        );
+        assert_eq!(panel_size_for(PANEL_COMPACT_WIDTH, 1.5, None), (540, 1080));
+        let old: Preferences = serde_json::from_str(r#"{"mode":"tray"}"#).unwrap();
+        assert!(
+            !old.panel_compact,
+            "older preference files keep the standard width"
+        );
     }
     #[test]
     fn tall_panel_uses_free_side_without_covering_pet_window() {

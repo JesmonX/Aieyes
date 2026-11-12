@@ -287,6 +287,8 @@ struct AccountFlowResult {
         }
     }
     let resetNotifications = QuotaNotificationService()
+    /// Webhook delivery, server alerts, minute history and the launch record.
+    let outbound = OutboundEventService()
     private let automaticEngine = EngineClient(configurationOnly: true)
     private var automaticTask: Task<Void, Never>?
     @Published var automaticSaving = false
@@ -434,6 +436,8 @@ struct AccountFlowResult {
     private var scopeCache: [String: Dashboard] = [:]
     private var scopeCacheRevision: [String: Int] = [:]
     private var scopeStatusRevisions: [String: [String: Int]] = [:]
+    private var statusCache: [String: DashboardStatus] = [:]
+    private var statusCacheRevision: [String: Int] = [:]
     private var menuCache: (usage: [String: Int], status: [String: Int], value: Dashboard)?
     private var usageRevisions: [String: Int] { dashboardRevisions.filter { ["settings", "usage", "prices", "calendarDay", "timeZone"].contains($0.key) } }
     var dashboardCacheNow: () -> Date = Date.init
@@ -507,6 +511,8 @@ struct AccountFlowResult {
             }
             if changed.contains("accounts") { await self.loadAccountStatuses() }
             if changed.contains("notifications") { await self.resetNotifications.drain() }
+            // Delivery makes network requests; it never holds up the refreshes below.
+            if changed.contains("webhooks") { Task { await self.outbound.dispatchWebhooks() } }
             if (!self.busy || self.collectingHistory && self.historyProgressPending), !self.quotaBusy, self.estimateBusy.isEmpty, self.completedDashboardRevision != self.dashboardRevisions {
                 self.historyProgressPending = false
                 await self.reload()
@@ -740,6 +746,12 @@ struct AccountFlowResult {
         updateFilters(next, scope: "analysis", resetDependents: false)
         showDetailPage?("analysis")
     }
+    /// Panel → main window, straight to one account's card on the overview.
+    let accountFocus = AccountFocusStore()
+    func showAccount(_ account: String) {
+        accountFocus.show(account)
+        showDetailPage?("agent")
+    }
     func reconcileDashboardFilters() {
         for scope in ["panel", "overview", "analysis"] {
             var next = filters(for: scope)
@@ -784,6 +796,7 @@ struct AccountFlowResult {
     var serverTabVisible: Bool { !visibleServerWindows.intersection(visibleWindows).isEmpty }
     func setServerVisible(_ visible: Bool, window: String) {
         if visible { visibleServerWindows.insert(window) } else { visibleServerWindows.remove(window) }; scheduleRefreshes()
+        if visible { Task { await outbound.refreshHistory() } }
     }
     @Published var quotaBusy = false { didSet { scheduleRefreshes() } }
     @Published var quotaError: String?
@@ -802,9 +815,11 @@ struct AccountFlowResult {
     var showSettings: (() -> Void)?
     var showEstimate: ((Quota, Bool, String?) -> Void)?
     var showAccountSwitch: ((String) -> Void)?
-    var showSampling: (() -> Void)?
-    var showQuotaOrder: (() -> Void)?
-    var showPanelAccounts: (() -> Void)?
+    /// Shows the release notes of the running version in the main window.
+    func openWhatsNew() {
+        outbound.showsWhatsNew = false; outbound.presentingWhatsNew = true
+        showDetailPage?(detailPage == "setup" ? "agent" : detailPage)
+    }
     func openSettings(_ destination: SettingsDestination = .init()) {
         settingsTab = destination.normalizedCategory
         if let account = settings.accounts.first(where: { $0.key == destination.accountKey }) { settingsAgent = CoreContract.agentProvider(account.provider) }
@@ -863,6 +878,7 @@ struct AccountFlowResult {
             }
             settings = try await engine.call("settings.get"); PanelAccountPreference.migrateAntigravity(settings.accountAliases ?? [:]); settingsDraft = settings; settingsLoaded = true
             resetNotifications.start()
+            outbound.start(self)
             startSessionMonitoring()
             startRuntimeMonitoring()
             synchronizeAccountDeployments()
@@ -875,6 +891,14 @@ struct AccountFlowResult {
         catch { message = error.localizedDescription }
     }
     func openPricing() { openSettings(.init(category: "prices")) }
+    let queryActivity = QueryActivity()
+    private var queryOperation: String?
+    func cancelDashboardQuery() {
+        guard let id = queryOperation else { return }
+        dashboardRequest += 1; reloadAgain = false; dashboardPending = false; queryActivity.progress = nil
+        completedDashboardRevision = dashboardRevisions; dashboardError = L("查询已取消")
+        Task { let _: [String: Int]? = try? await engine.call("dashboard.cancel", params: ["operationId": id]) }
+    }
     @Published private(set) var dashboardPending = false
     @Published private(set) var dashboardError: String?
     @Published private(set) var appliedScope = L("今日 · 全部 Agent · 全部来源 · 全部模型")
@@ -908,14 +932,18 @@ struct AccountFlowResult {
         if let current: [String: Int] = try? await summaryEngine.call("runtime.revisions") { acceptRuntimeRevisions(current) }
         let revision = dashboardRevisions, usage = usageRevisions
         if scopeCacheRevision != usage { scopeCache.removeAll(); scopeStatusRevisions.removeAll(); scopeCacheRevision = usage }
+        if statusCacheRevision != revision { statusCache.removeAll(); statusCacheRevision = revision }
         var statusRequests: [String: Task<DashboardStatus, Error>] = [:]
         func status(_ params: [String: Any]) async throws -> DashboardStatus {
-            let scope = params.filter { ["provider", "accountId", "sourceId"].contains($0.key) }
+            let scope = params.filter { ["provider", "accountId", "sourceId"].contains($0.key) && !($0.value is NSNull) }
             let key = String(data: try JSONSerialization.data(withJSONObject: scope, options: .sortedKeys), encoding: .utf8)!
+            if let cached = statusCache[key] { return cached }
             if let request = statusRequests[key] { return try await request.value }
             let request = Task { @MainActor in try await self.summaryEngine.call("dashboard.status", params: scope, as: DashboardStatus.self) }
             statusRequests[key] = request
-            return try await request.value
+            let value = try await request.value
+            if revision == dashboardRevisions { statusCache[key] = value }
+            return value
         }
         let summary = Task<Dashboard?, Never> { @MainActor [weak self] in
             guard let self else { return nil }
@@ -946,7 +974,16 @@ struct AccountFlowResult {
                 else if !runtimeRevisions.isEmpty, let cached = scopeCache[key] {
                     next = cached
                     if scopeStatusRevisions[key] != revision { next.applyStatus(try await status(params)); cacheChanged = true }
-                } else { next = try await engine.call("dashboard", params: params); cacheChanged = true }
+                } else {
+                    let id = UUID().uuidString; queryOperation = id; queryActivity.progress = nil
+                    params["operationId"] = id
+                    defer { if queryOperation == id { queryOperation = nil; queryActivity.progress = nil } }
+                    next = try await engine.call("dashboard", params: params, onProgress: { [weak self] stage in
+                        let parts = stage.split(separator: ":")
+                        guard parts.count == 3, parts[0] == "dashboard", let done = Double(parts[1]), let total = Double(parts[2]), total > 0 else { return }
+                        Task { @MainActor in guard let self, self.queryOperation == id, self.dashboardPending else { return }; self.queryActivity.progress = done / total }
+                    }); cacheChanged = true
+                }
                 if cacheChanged {
                     let candidate = next
                     let bytes = await Task.detached(priority: .utility) { (try? JSONEncoder().encode(candidate).count) ?? Int.max }.value
@@ -1156,6 +1193,9 @@ struct AccountFlowResult {
         }
         let main = merge(dashboard.quotas), menu = merge(menuDashboard.quotas), panel = merge(panelDashboard.quotas)
         if dashboard.quotas != main { dashboard.quotas = main }
+        if menu.contains(where: { row in row.error == nil && menuDashboard.quotas.contains(where: { $0.id == row.id && $0.error != nil && row.updatedAt >= $0.updatedAt }) }) {
+            NotificationCenter.default.post(name: Notification.Name("aieyes.eventFeedback"), object: nil)
+        }
         if menuDashboard.quotas != menu { menuDashboard.quotas = menu }
         if panelDashboard.quotas != panel { panelDashboard.quotas = panel }
         let overview = merge(overviewDashboard.quotas)
@@ -1461,7 +1501,7 @@ struct AccountFlowResult {
         sessionTask?.cancel(); sessionTask = nil
         runtimeTask?.cancel(); runtimeRefresh?.cancel(); summaryEngine.stop()
         if let runtimeObserver { NotificationCenter.default.removeObserver(runtimeObserver) }
-        automaticTask?.cancel(); automaticEngine.stop(); resetNotifications.stop()
+        automaticTask?.cancel(); automaticEngine.stop(); resetNotifications.stop(); outbound.stop()
         filterRefresh?.cancel(); reloadTask?.cancel(); quotaScheduleTask?.cancel()
         deploymentSyncTask?.cancel(); settingsRefreshTask?.cancel(); generalSaveTask?.cancel(); petLibraryTask?.cancel()
         for task in antigravityRefreshTasks.values { task.cancel() }
@@ -1475,4 +1515,9 @@ struct AccountFlowResult {
         default: return ""
         }
     }
+}
+
+/// Progress updates only this small view, never the chart tree.
+@MainActor final class QueryActivity: ObservableObject {
+    @Published var progress: Double?
 }

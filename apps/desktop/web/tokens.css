@@ -214,6 +214,10 @@
   --field-price-width: 140px;
   --field-medium-width: 320px;
   --field-choice-width: 220px;
+  --elevation-shadow-blur: 9px;
+  --elevation-shadow-y: 3px;
+  --elevation-contact-blur: 1px;
+  --elevation-contact-y: 0.5px;
   --card-border-opacity: 0.3;
   --panel-card-opacity: 0.46;
   --control-fill-opacity: 0.3;
@@ -229,6 +233,10 @@
   --model-chart-inner-ratio: 0.72;
   --model-chart-angular-inset: 2;
   --heat-empty-opacity: 0.055;
+  --elevation-shadow-light: 0.09;
+  --elevation-contact-light: 0.07;
+  --elevation-shadow-dark: 0.06;
+  --elevation-contact-dark: 0;
   --weight-regular: 400;
   --weight-medium: 500;
   --weight-strong: 600;
@@ -255,7 +263,7 @@
   --window-base: #ffffff;
   --panel: #ffffff;
   --detail-window: #fbfcfc;
-  --detail-card: #f1f1f1;
+  --detail-card: #ffffff;
   --form-surface: #f7f7f7;
   --surface-strong: #e9e9eb;
   --solid: #f7f7f8;

@@ -25,6 +25,10 @@ cp "$PROJECT_DIR/apps/macos/Resources/BrandTemplate.png" "$APP_DIR/Contents/Reso
 cp "$PROJECT_DIR"/apps/desktop/web/provider-*.png "$APP_DIR/Contents/Resources/"
 cp "$PROJECT_DIR"/apps/desktop/web/sounds/*.wav "$APP_DIR/Contents/Resources/"
 cp "$PROJECT_DIR/apps/macos/Info.plist" "$APP_DIR/Contents/Info.plist"
+# The notes of this version back the in-app "what's new" page; a version without a notes file ships none.
+APP_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PROJECT_DIR/apps/macos/Info.plist")
+rm -f "$APP_DIR/Contents/Resources/ReleaseNotes.md"
+if [ -f "$PROJECT_DIR/docs/release-notes/v$APP_VERSION.md" ]; then cp "$PROJECT_DIR/docs/release-notes/v$APP_VERSION.md" "$APP_DIR/Contents/Resources/ReleaseNotes.md"; fi
 # Declared localizations let AppKit localize the menus, panels and text menus it provides.
 for lproj in zh-Hans en; do mkdir -p "$APP_DIR/Contents/Resources/$lproj.lproj"; printf '"CFBundleDisplayName" = "Aieyes";\n' > "$APP_DIR/Contents/Resources/$lproj.lproj/InfoPlist.strings"; done
 if [ "$BUILD_MODE" = debug ]; then

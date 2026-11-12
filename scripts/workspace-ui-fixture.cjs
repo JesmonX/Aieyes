@@ -11,7 +11,8 @@ function fixture({platform, failStatus = false}) {
   const quotas = accounts.map(a => ({provider: a.provider, accountId: a.id, name: a.name, sourceId: 's-' + a.id, updatedAt: stamp, origin: 'live', windows: a.provider === 'deepseek' ? [] : [{id: 'five', name: '5h', windowMinutes: 300, usedPercent: 20, resetsAt: stamp + 1000}, {id: 'week', name: '7d', windowMinutes: 10080, usedPercent: 10, resetsAt: stamp + 100000}], credits: a.provider === 'codex' ? {balance: '100', unlimited: false} : null}));
   const nav = window.navigationFixture = {settings, quotas, records: [record, {...record, id: 'history', status: 'completed', checkpointAt: stamp - 20}], calls: [], listeners: {}, failSave: false, holdSave: false, failStatus};
   const materialPreferences = {main:'default', floating:'default'};
-  const desktopInfo = () => ({platform, page:'agent', mode:'floating', effectiveMode:'floating', sessions:[], panelOpen:true, materialPreferences:{...materialPreferences}, materials:platform === 'windows' ? {main:materialPreferences.main === 'default' ? 'mica' : materialPreferences.main, floating:materialPreferences.floating === 'default' ? 'acrylic' : materialPreferences.floating} : {main:'opaque',floating:'opaque'}});
+  let panelWidth = 'standard';
+  const desktopInfo = () => ({platform, page:'agent', mode:'floating', effectiveMode:'floating', sessions:[], panelOpen:true, panelWidth, materialPreferences:{...materialPreferences}, materials:platform === 'windows' ? {main:materialPreferences.main === 'default' ? 'mica' : materialPreferences.main, floating:materialPreferences.floating === 'default' ? 'acrylic' : materialPreferences.floating} : {main:'opaque',floating:'opaque'}});
   const copy = v => structuredClone(v);
   nav.emit = (name, payload) => Promise.all((nav.listeners[name] || []).map(fn => fn({payload})));
   function merge(base, next, current) {
@@ -30,11 +31,15 @@ function fixture({platform, failStatus = false}) {
     core: {async invoke(command, args) {
       nav.calls.push({command, args: copy(args)});
       if (command === 'desktop_info' || command === 'desktop_panel') return desktopInfo();
+      if (command === 'whats_new_info') return copy(nav.whatsNew ?? {version: '0.2.5', previousVersion: '0.2.5', updated: false, notes: null, changelog: null});
+      if (command === 'system_info' || command === 'system_autostart') {if (command === 'system_autostart') {if (nav.failAutostart) throw Error('登录时启动设置未保存：拒绝访问');nav.autostart = args.enabled;}return {autostart: {available: true, enabled: Boolean(nav.autostart), error: null}, links: ['aieyes://panel', 'aieyes://overview', 'aieyes://analysis', 'aieyes://servers', 'aieyes://sessions', 'aieyes://settings']};}
+      if (command === 'desktop_panel_width') {if (nav.failPanelWidth) throw Error('显示偏好保存失败：模拟写入失败');panelWidth = args.width;return desktopInfo();}
       if (command === 'desktop_materials') {Object.assign(materialPreferences,args);return desktopInfo();}
       if (command !== 'engine_call') return {};
       const {method, params} = args;
       if (method === 'hello') return {version: 'fixture'};
       if (method === 'settings.get') return copy(nav.settings);
+      if (method === 'dashboard' && nav.holdDashboard) {nav.holdDashboard = false; await new Promise(resolve => nav.releaseDashboard = resolve);}
       if (method === 'dashboard' || method === 'dashboard.summary') return dashboard(method === 'dashboard.summary' ? {} : params);
       if (method === 'settings.patch') {
         if (nav.holdSave) {nav.holdSave = false; await new Promise(resolve => nav.releaseSave = resolve);}
@@ -47,6 +52,8 @@ function fixture({platform, failStatus = false}) {
         return copy(params?.accountId ? quotas.filter(q => q.accountId === params.accountId) : quotas);
       }
       if (method === 'quotaEstimates.stop') {nav.records.find(r => r.id === params.id).status = 'completed'; return {};}
+      if (method === 'hosts.history') return {hosts: copy(nav.hostHistory ?? [])};
+      if (method === 'hostAlerts.take') return [];
       if (method === 'hosts.sample') return [{id: 'host', sample: {timestamp: Date.now()/1000, cpu: [{id: 'cpu', utilization: 12}], errors: {}}}];
       if (method === 'accounts.status.refresh') return {accountKey: params.accountKey, sourceId: params.sourceId, machineId: 'local', current: params.accountKey.endsWith(':a0'), credential: true, checkedAt: stamp};
       if (method === 'accounts.status.get' && nav.failStatus) throw Error('模拟设备状态读取失败');
@@ -55,6 +62,7 @@ function fixture({platform, failStatus = false}) {
       if (method === 'codexAuth.inspect') return {profiles: [], processes: [], storageMode: 'file'};
       if (method === 'sessions.list') return {sessions: [], warnings: []};
       if (method === 'quotas.schedule') return {nextDueAt: stamp + 86400};
+      if (method === 'webhooks.test') {(nav.webhookTests ||= []).push(copy(params.target));if (nav.failWebhook) throw Error('Webhook 返回 HTTP 500');return {delivered: true};}
       return {};
     }}
   };

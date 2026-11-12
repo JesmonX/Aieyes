@@ -128,7 +128,12 @@ function fixture(){
      try { await Promise.all([...holder.querySelectorAll('img')].map(img=>img.decode()));return {images:holder.querySelectorAll('img').length,fallback:holder.querySelectorAll('svg').length}; } finally {holder.remove();}
    });assert.deepEqual(icons,{images:5,fallback:1});
    await agy.locator('.quota-title').click();assert.equal(await agy.locator('.quota-reset:visible').count(),6,'Collapsed accounts retain reset summaries');assert.equal(await agy.locator('.resource-bar:visible').count(),6,'Collapsed AGY accounts retain all model windows');await agy.locator('.quota-title').click();assert.equal(await agy.locator('.resource-bar:visible').count(),6,'Expanding restores all model groups');
-   await page.locator('#order-quotas').click();await page.locator('[data-order="antigravity:a"] [data-direction="-1"]').click();
+   if(surface==='index.html'){
+   // Account order is a settings page: the heading button opens it and the order is saved from there.
+   await page.locator('#order-quotas').click();await page.locator('#quota-order-list [data-order]').first().waitFor();
+   assert.equal(await page.evaluate(()=>[state.page,state.settingsTab,state.generalTab].join()),'settings,general,panel');assert.equal(await page.locator('#quota-dialog[open]').count(),0);
+   assert(await page.locator('#quota-order-save').isDisabled(),'an unchanged order has nothing to save');
+   await page.locator('[data-order="antigravity:a"] [data-direction="-1"]').click();assert(!await page.locator('#quota-order-save').isDisabled());
    // Button reordering animates both rows. Native drag computes its target
    // before dragstart cancels those animations, so wait for stable positions.
    await page.evaluate(async()=>{await document.fonts.ready;await Promise.all(document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});
@@ -137,8 +142,19 @@ function fixture(){
    await page.waitForFunction(()=>document.querySelector('[data-order]').dataset.order==='codex:c');await page.evaluate(()=>Promise.all(document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{}))));
    await page.locator('[data-order="antigravity:a"]').dragTo(page.locator('[data-order="codex:c"]'),{steps:10});
    await page.waitForFunction(()=>document.querySelector('[data-order]').dataset.order==='antigravity:a');
-   await page.evaluate(()=>quotaFixture.fail=true);await page.locator('#quota-order-save').click();await page.waitForFunction(()=>document.querySelector('#quota-tool-error').textContent.includes('保存失败'));
-   assert(await page.locator('#quota-dialog').evaluate(e=>e.open));await page.evaluate(()=>quotaFixture.fail=false);await page.locator('#quota-order-save').click();await page.waitForFunction(()=>!document.querySelector('#quota-dialog').open);
+   await page.evaluate(()=>quotaFixture.fail=true);await page.locator('#quota-order-save').click();await page.waitForFunction(()=>document.querySelector('[data-settings-section=order] [data-settings-error]')?.textContent.includes('保存失败')&&!state.estimateBusy);
+   assert.equal(await page.locator('[data-order]').first().getAttribute('data-order'),'antigravity:a','a failed save keeps the chosen order on the page');assert(!await page.locator('#quota-order-save').isDisabled());
+   await page.evaluate(()=>quotaFixture.fail=false);await page.locator('#quota-order-save').click();await page.waitForFunction(()=>document.querySelector('#quota-order-save')?.disabled&&!state.estimateBusy&&document.querySelector('[data-settings-section=order] [data-settings-error]').hidden);
+   assert.deepEqual(await page.evaluate(()=>quotaFixture.order),['antigravity:a','codex:c']);
+   await page.locator('[data-page=agent]').click();
+   } else {
+   // The panel hands account order to the settings page of the main window.
+   await page.evaluate(()=>{const invoke=window.__TAURI__.core.invoke;window.orderActions=[];window.__TAURI__.core.invoke=(command,args)=>{if(command==='desktop_action')window.orderActions.push(args.action);return invoke(command,args);};});
+   await page.locator('#order-quotas').click();await page.waitForFunction(()=>window.orderActions.length===1);
+   assert.deepEqual(JSON.parse((await page.evaluate(()=>window.orderActions[0])).slice('settings-target:'.length)),{category:'general',section:'panel',focus:'order'});
+   assert.equal(await page.locator('#quota-dialog[open]').count(),0,'the panel opens no order dialog');
+   await page.evaluate(async()=>{await api('quotas.order.set',{keys:['antigravity:a','codex:c'],operationId:crypto.randomUUID()});await loadDashboard();});
+   }
    assert.equal(await page.locator('[data-quota]').first().getAttribute('data-quota'),'antigravity:a');
    if(!await page.locator('[data-quota="codex:c"]:visible .quota-disclosure').evaluate(el=>el.open))await page.locator('[data-quota="codex:c"]:visible .quota-disclosure summary').click();
    await page.locator('[data-estimate="codex:c"]:visible').click();assert(await page.locator('#estimate-start').isDisabled());await page.locator('#estimate-confirm').check();

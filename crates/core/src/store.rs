@@ -128,6 +128,7 @@ impl Store {
         crate::usage_cache::setup(&db)?;
         crate::native_credits::setup(&db)?;
         crate::quota_notifications::setup(&db)?;
+        crate::webhooks::setup(&db)?;
         crate::remote_history::setup(&db)?;
         crate::qoder_state::setup(&db)?;
         crate::codex_api::usage::setup(&db)?;
@@ -381,6 +382,8 @@ impl Store {
             ["high", "low"].contains(&s.appearance.chart_contrast.as_str()),
             "无效的图表对比度"
         );
+        crate::webhooks::validate(&s.webhooks)?;
+        crate::host_history::validate(&s.server_alerts)?;
         let mut normalized = s.clone();
         crate::providers::normalize_settings(&mut normalized);
         let previous: Option<String> = self

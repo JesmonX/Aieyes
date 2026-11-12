@@ -11,6 +11,12 @@ Windows 和 Linux 默认显示桌宠，可通过文件、资源链接、npx 命�
 - 显示方式为「桌面宠物」或「系统状态栏 / 托盘」，默认桌面宠物。检测不到可用托盘时，即使选择了托盘也会使用桌宠。
 - 固定面板同步主窗口的配置与采样，慢请求或失败时保留旧读数并标记数据延迟／连接失败。Windows 主窗口最低 640×440，打开或切换 DPI 时会适配当前工作区。
 - 关闭详情窗口后继续运行，使用菜单或设置页的「退出 Aieyes」退出。会话监测在 Rust 后台线程运行，不依赖隐藏窗口的 JavaScript 计时器，也不会被 SSH 或限额查询阻塞。
+- 「设置 → 启动与系统」提供登录时启动和可复制的 `aieyes://` 链接。Windows 写入 HKCU `…\CurrentVersion\Run` 的 `Aieyes` 值；Linux 写入 `$XDG_CONFIG_HOME/autostart/aieyes.desktop`，程序路径变化时在启动时更新。
+- 每次启动都会注册链接：Windows 写 HKCU `Software\Classes\aieyes`，Linux 写 `~/.local/share/applications/aieyes-url-handler.desktop` 并执行 `xdg-mime default`；卸载后注册项保留。已运行时，链接经单实例插件交给运行中的进程；首次启动时，主窗口加载后打开链接指定的页面。
+- Webhook 的投递与重试、服务器告警的轮询（每 15 秒 `hostAlerts.take`）在 Rust 后台线程 `outbound.rs` 运行；会话事件由会话读取线程通过核心的 `SessionObserver` 排队。
+- 面板宽度 450／360 保存在 `desktop.json`；修改时已打开的面板以新尺寸重新打开。
+- 版本更新后，总览（主窗口与面板）显示一次“本次更新”横幅，说明由 `build.rs` 内置，显示在「设置 → 更新与关于」。
+- 详见[工作台体验与系统集成](workbench-experience.md)。
 
 「设置 → Agent 接入 → 对应 Agent」中的账户归档操作保留账户历史、价格快照、数据源关联与导入进度，只停止账户限额查询；数据源仍同步用量。展开「已归档账户」可恢复。概览的账户筛选保留归档账户，并标注「已归档」。旧客户端试图直接删除有历史的账户时，核心会拒绝保存，以保护历史记录。
 

@@ -104,6 +104,10 @@ enum DesignTokens {
     static let fieldPriceWidth: CGFloat = 140
     static let fieldMediumWidth: CGFloat = 320
     static let fieldChoiceWidth: CGFloat = 220
+    static let elevationShadowBlur: CGFloat = 9
+    static let elevationShadowY: CGFloat = 3
+    static let elevationContactBlur: CGFloat = 1
+    static let elevationContactY: CGFloat = 0.5
     static let cardBorderOpacity: Double = 0.3
     static let panelCardOpacity: Double = 0.46
     static let controlFillOpacity: Double = 0.3
@@ -119,6 +123,10 @@ enum DesignTokens {
     static let modelChartInnerRatio: Double = 0.72
     static let modelChartAngularInset: Double = 2
     static let heatEmptyOpacity: Double = 0.055
+    static let elevationShadowLight: Double = 0.09
+    static let elevationContactLight: Double = 0.07
+    static let elevationShadowDark: Double = 0.06
+    static let elevationContactDark: Double = 0
     static let weightRegular: Font.Weight = .regular
     static let weightMedium: Font.Weight = .medium
     static let weightStrong: Font.Weight = .semibold
@@ -145,7 +153,7 @@ enum DesignTokens {
     static let windowBaseLight: UInt32 = 0xffffff
     static let panelLight: UInt32 = 0xffffff
     static let detailWindowLight: UInt32 = 0xfbfcfc
-    static let detailCardLight: UInt32 = 0xf1f1f1
+    static let detailCardLight: UInt32 = 0xffffff
     static let formSurfaceLight: UInt32 = 0xf7f7f7
     static let surfaceStrongLight: UInt32 = 0xe9e9eb
     static let solidLight: UInt32 = 0xf7f7f8

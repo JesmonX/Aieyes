@@ -100,18 +100,24 @@ function configuredHosts(settings = state.settings) {return [...(settings?.local
 function monitoredHosts(settings = state.settings) {return configuredHosts(settings).map((host) => ({ ...host, enabled: host.id === 'local' ? host.enabled !== false : host.monitoringEnabled !== false }));}
 function refreshIndicator(key) {return `<button type="button" class="heading-refresh" data-refresh-status="${key}" aria-haspopup="dialog" aria-expanded="false" aria-controls="refresh-status-popover" aria-label="${AieyesI18n.t("{0}状态", refreshLabels[key])}" title="${AieyesI18n.t("{0}状态", refreshLabels[key])}"><span aria-hidden="true">${uiIcon('refresh')}</span></button>`;}
 // Runs every monitoring cycle: only changed values are written, so idle cycles cause no DOM mutations.
+// Which refresh kinds were busy at the last update, so a finished refresh is noticed once.
+const refreshBusy = new Map();
 function updateHeadingIndicators() {
   const set = (el, name, value) => {if (el.dataset[name] !== value) el.dataset[name] = value;};
+  const finished = new Set();
   for (const el of document.querySelectorAll('[data-refresh-status]')) {
     const r = state.refreshState[el.dataset.refreshStatus] ?? {};
     set(el, 'busy', String(Boolean(r.busy || el.dataset.refreshStatus === 'scan' && state.dashboardPending)));
     set(el, 'error', String(Boolean(r.error || el.dataset.refreshStatus === 'scan' && state.dashboardError)));
+    if (refreshBusy.get(el.dataset.refreshStatus) && el.dataset.busy !== 'true' && el.dataset.error !== 'true') finished.add(el);
     const label = AieyesI18n.t("{0}状态 · {1}；点击查看详情", refreshLabels[el.dataset.refreshStatus] ?? AieyesI18n.t("刷新"), el.dataset.busy === 'true' ? AieyesI18n.t("进行中") : el.dataset.error === 'true' ? AieyesI18n.t("部分失败") : r.success ? AieyesI18n.t("已更新 · {0}", timeLabel(r.success)) : AieyesI18n.t("尚未刷新"));
     if (el.getAttribute('aria-label') !== label) {el.title = label;el.setAttribute('aria-label', label);}
     // A sync mark (spinning while busy), never a "verified" check; problems use the warning triangle.
     set(el, 'never', String(!r.success && el.dataset.busy !== 'true' && el.dataset.error !== 'true'));
     const icon = el.dataset.error === 'true' ? 'warning' : 'refresh';if (el.dataset.icon !== icon) {el.dataset.icon = icon;el.firstElementChild.innerHTML = uiIcon(icon);}
   }
+  for (const el of document.querySelectorAll('[data-refresh-status]')) refreshBusy.set(el.dataset.refreshStatus, el.dataset.busy === 'true');
+  for (const el of finished) window.AieyesMotion?.settle(el);
 }
 function openRefreshStatus(key) {
   let pop = document.querySelector('#refresh-status-popover');if (!pop) {pop = document.createElement('div');pop.id = 'refresh-status-popover';pop.setAttribute('popover', 'auto');pop.setAttribute('role', 'dialog');pop.setAttribute('aria-labelledby', 'refresh-status-title');pop.tabIndex = -1;pop.addEventListener('toggle', () => {if (!pop.matches(':popover-open')) {pop.replaceChildren();document.querySelectorAll('[data-refresh-status][aria-expanded=true]').forEach((b) => b.setAttribute('aria-expanded', 'false'));}});document.body.append(pop);}
@@ -127,7 +133,7 @@ function openRefreshStatus(key) {
 }
 document.addEventListener('click', (event) => {const button = event.target.closest('[data-refresh-status]');if (button) {openRefreshStatus(button.dataset.refreshStatus);button.setAttribute('aria-expanded', 'true');}});
 document.addEventListener('keydown', (event) => {const pop = document.querySelector('#refresh-status-popover');if (event.key === 'Escape' && pop?.matches(':popover-open')) {event.preventDefault();event.stopImmediatePropagation();pop.hidePopover();document.querySelector('[data-refresh-status="' + pop.dataset.key + '"]')?.focus({ preventScroll: true });}}, true);
-const state = { page: 'agent', settingsTab: 'integrations', settingsAgent: 'codex', generalTab: 'appearance', priceSearch: '', settings: null, settingsDraft: null, settingsBaseline: null, settingsCommitting: false, dashboard: null, hosts: [], prices: [], provider: '', sourceId: '', accountKey: '', model: '', days: 1, dateRange: null, cost: false, busy: false, settingsSaving: false, serverBusy: false, lastScan: 0, lastMetrics: 0, lastQuota: 0, lastSuccessfulUpdate: 0, quotaBusy: false, estimateBusy: false, quotaError: '', refreshState: {}, savedAt: 0, savedSection: '', saveError: '', dashboardRequest: 0, panelOpen: false, panelPage: 'agent' };
+const state = { page: 'agent', settingsTab: 'integrations', settingsAgent: 'codex', generalTab: 'appearance', priceSearch: '', settingsSearch: '', settings: null, settingsDraft: null, settingsBaseline: null, settingsCommitting: false, dashboard: null, hosts: [], prices: [], provider: '', sourceId: '', accountKey: '', model: '', days: 1, dateRange: null, cost: false, busy: false, settingsSaving: false, serverBusy: false, lastScan: 0, lastMetrics: 0, lastQuota: 0, lastSuccessfulUpdate: 0, quotaBusy: false, estimateBusy: false, quotaError: '', refreshState: {}, savedAt: 0, savedSection: '', saveError: '', dashboardRequest: 0, panelOpen: false, panelPage: 'agent' };
 try {const provider = localStorage.getItem('aieyes.settings.agent');if (providers[provider]) state.settingsAgent = provider;} catch (_) {}
 const settingsCategory = (category) => ({ sources: 'integrations', accounts: 'integrations', codexAuth: 'integrations', servers: 'hosts', connection: 'general' })[category] ?? category;
 async function openSettings(target = {}) {
@@ -138,6 +144,7 @@ async function openSettings(target = {}) {
   if (state.settingsTab === 'integrations') window.AieyesAgentSettings.navigate(target);
   if (state.settingsTab === 'general' && target.section) state.generalTab = target.section;
   render();
+  if (state.settingsTab === 'general' && target.focus) window.AieyesSettingsPages.focusSection(target.focus);
   if (state.settingsTab === 'hosts' && (target.hostId || target.section === 'add-host')) {const host = target.hostId ? configuredHosts().find((h) => h.id === target.hostId) : undefined;if (target.hostId && !host) notify(AieyesI18n.t("此服务器已移除，请重新选择。"), 'error');else {editItem(host);if (target.section === 'shell') {const field = $('#field-shell');if (field) {field.closest('details').open = true;field.focus();}}}}
   if (state.settingsTab === 'integrations' && target.section) {const section = document.getElementById('agent-section-' + target.section);if (section) {section.open = true;section.scrollIntoView({ block: 'start' });}}
   if (state.settingsTab === 'integrations' && target.section === 'switch' && target.accountKey) window.AieyesAccountTargets.open(target.accountKey);
@@ -173,15 +180,17 @@ function syncNavigation() {
   if (!entries.includes(document.activeElement)) entries.forEach((b) => b.tabIndex = b === current ? 0 : -1);
 }
 async function navigatePage(page, context) {
-  if (!['agent', 'analysis', 'servers'].includes(page) || PANEL && page === 'analysis') return;
+  if (!['agent', 'analysis', 'servers', 'sessions'].includes(page) || PANEL && ['analysis', 'sessions'].includes(page)) return;
   rememberPage();viewPreferences.save(dashboardScope(), state);
   captureSettingsForms();state.page = page;
+  // The sessions page reads the live snapshot; it has no dashboard scope of its own.
+  if (page === 'sessions') {state.restorePosition = viewKey();render();return;}
   if (page !== 'servers') {
     currentDashboardScope = PANEL ? 'panel' : page === 'analysis' ? 'analysis' : 'overview';
     Object.assign(state, viewPreferences.read(dashboardScope()), context ? AieyesViewState.normalize({ ...viewPreferences.read(dashboardScope()), ...context }) : {});
     viewPreferences.save(dashboardScope(), state);state.dashboard = dashboardCache.get(dashboardScope()) ?? null;state.appliedFilters = appliedFilterCache.get(dashboardScope()) ?? filterSnapshot();state.dashboardError = '';state.restorePosition = viewKey();
     render();try {await loadDashboard();} catch (_) {}
-  } else {render();void sample();}
+  } else {render();void sample();void window.AieyesHostTrend?.refresh(true);}
   if (PANEL) window.__TAURI__.core.invoke('desktop_panel_page', { page }).catch((error) => notify(String(error), 'error'));
 }
 function openAnalysis(accountKey = state.accountKey, provider = state.provider) {
@@ -191,6 +200,39 @@ function openAnalysis(accountKey = state.accountKey, provider = state.provider) 
 }
 function openDetail() {
   return window.__TAURI__.core.invoke('desktop_detail', { view: { page: state.page === 'servers' ? 'servers' : 'agent' } }).catch((e) => notify(String(e), 'error'));
+}
+// Panel → main window, straight to one account: the overview opens that account's card, scrolls
+// to it and outlines it once. The request waits for the overview's dashboard and ends without a
+// scroll when the overview has no card for the account.
+let accountFocus = null;
+async function showAccount(key) {
+  if (!key) return;
+  if (PANEL) return window.__TAURI__.core.invoke('desktop_detail', { view: { page: 'agent', focusAccount: key } }).catch((e) => notify(String(e), 'error'));
+  accountFocus = { key, until: Date.now() + 10000 };
+  await navigatePage('agent');
+  revealAccount();
+}
+function revealAccount() {
+  if (!accountFocus) return;
+  if (Date.now() > accountFocus.until) {accountFocus = null;return;}
+  if (state.page !== 'agent' || !state.dashboard) return;
+  const { key } = accountFocus,account = quotaCardAccounts(state.dashboard.quotas).find((a) => a.provider + ':' + a.id === key);
+  if (!account) {accountFocus = null;return;}
+  // An agent or account filter that hides the card is cleared; the card arrives with the next render.
+  if (state.provider && !AieyesUI.sameAgent(account.provider, state.provider) || state.accountKey && state.accountKey !== key) {void changeFilters({ provider: '', accountKey: '', sourceId: '', model: '' });return;}
+  accountFocus = null;
+  const group = $(`.quota-group[data-provider="${CSS.escape(AieyesUI.agentProvider(account.provider))}"]`);
+  if (group && !group.open) {group.open = true;storeDisclosure(group);}
+  // Ring styles show one tile per account; the card style shows the card or its placeholder.
+  const name = CSS.escape(key),selector = [`#content .quota-rings > [data-quota-account="${name}"]`, `#content .quota-card[data-quota="${name}"]`, `#content [data-quota-placeholder="${name}"]`].find((candidate) => $(candidate));
+  if (!selector) return;
+  // The quota masonry places cards in the frame after a render; scrolling earlier lands on the pre-layout position.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const card = $(selector);
+    if (!card || state.page !== 'agent') return;
+    card.scrollIntoView({ block: 'center', behavior: 'instant' });
+    window.AieyesMotion?.highlight(selector);
+  }));
 }
 const ownedOperations = new Map(),runtimeVersions = {},querySnapshots = new Map(),snapshotStatusVersions = new Map();
 let localDataEpoch = 0,localUsageEpoch = 0,lastDashboardVersion = '';
@@ -352,14 +394,6 @@ function samplingBanner(d) {
   if (!records.length) return '';if (records.some((e) => e.status === 'pending')) return attention(AieyesI18n.t("待确认：采样需要确认用量来源"), AieyesI18n.t("管理采样"), 'sampling-attention');
   return `<div class="sampling-banner"><span class="sampling-status"><i class="status-dot" aria-hidden="true"></i><span>${AieyesI18n.t("{0} 项额度估值正在积累样本{1}", records.filter(e => e.status === 'active').length, records.some(e => e.status === 'pending') ? AieyesI18n.t(" · 有待确认项") : '')}</span></span><button type="button" class="sampling-manage" data-manage-sampling>${AieyesI18n.t("管理采样")} ${uiIcon('right')}</button></div>`;
 }
-function openSampling() {
-  if (state.estimateBusy) {notify(AieyesI18n.t("后台采样操作仍在进行，可从任务入口返回"));return;}
-  const records = [...(state.dashboard.quotaEstimates ?? []), ...(state.dashboard.creditEstimates ?? [])].filter((e) => e.status !== 'completed');
-  const rows = records.map((e, i) => '<div class="sampling-row"><strong>' + escapeHTML(historicalAccounts().find((a) => a.provider + ':' + a.id === e.accountKey)?.name ?? e.accountKey) + '</strong><span>' + (e.kind === 'credits' ? AieyesI18n.t("credit 价值") : e.valuationMode === 'fiveHour' ? AieyesI18n.t("5h / 7d 额度价值") : AieyesI18n.t("7d 整周价值")) + ' · ' + estimateStatus(e) + '</span>' + (e.reason ? '<div class="error">' + escapeHTML(AieyesI18n.message(e.reason)) + '</div>' : '') + '<div class="actions"><button data-sampling-open="' + i + `">${AieyesI18n.t("查看与管理")}</button><button data-sampling-stop="` + i + `">${AieyesI18n.t("结束采样")}</button></div></div>`).join('');
-  quotaDialog(AieyesI18n.t("管理采样"), `<p class="muted">${AieyesI18n.t("关闭窗口后继续采样，点击“结束采样”停止。")}</p>` + (rows || `<p>${AieyesI18n.t("当前没有进行中的采样")}</p>`));
-  document.querySelectorAll('[data-sampling-open]').forEach((b) => b.onclick = () => {const e = records[Number(b.dataset.samplingOpen)];openQuotaEstimate(e.accountKey, e.kind === 'credits' ? 'credits' : 'weekly', e.groupId ?? '');});
-  document.querySelectorAll('[data-sampling-stop]').forEach((b) => b.onclick = async () => {const e = records[Number(b.dataset.samplingStop)];if (await quotaAction((e.kind === 'credits' ? 'creditEstimates.' : 'quotaEstimates.') + 'stop', { id: e.id })) openSampling();});
-}
 function disclosureOpen(key, fallback = true) {try {const value = localStorage.getItem('aieyes.disclosure.v3.' + (PANEL ? 'panel.' : 'detail.') + key);return value == null ? fallback : value === 'true';} catch (_) {return fallback;}}
 function storeDisclosure(el) {try {const key = 'aieyes.disclosure.v3.' + (PANEL ? 'panel.' : 'detail.') + el.dataset.persistDisclosure;if (localStorage.getItem(key) !== String(el.open)) localStorage.setItem(key, String(el.open));} catch (_) {}}
 // Every [data-persist-disclosure] remembers its state, including disclosures mounted later (toggle does not
@@ -473,8 +507,8 @@ function quotaSection(d) {
   const visible = (a) => filtered(a) && (!PANEL || selected[a.provider]?.includes(a.provider + ':' + (a.accountId ?? a.id)));
   const accounts = eligible.filter(visible);
   const order = d.quotaOrder ?? [];accounts.sort((a, b) => (order.indexOf(a.provider + ':' + a.id) < 0 ? Infinity : order.indexOf(a.provider + ':' + a.id)) - (order.indexOf(b.provider + ':' + b.id) < 0 ? Infinity : order.indexOf(b.provider + ':' + b.id)));
-  if (!accounts.length && !eligible.some(filtered) && quotaCardAccounts(d.quotas, false).some(filtered)) return `<div class="card empty-quota" data-free-quota-hidden><h2>${AieyesI18n.t("免费账户的额度卡片已隐藏")}</h2><button type="button" data-open-advanced>${AieyesI18n.t("高级设置")}</button></div>`;
-  if (!accounts.length) return `<div class="card empty-quota"><h2>${state.provider ? AieyesI18n.t("此 Agent 暂无显示账户") : AieyesI18n.t("尚未显示账户")}</h2>${PANEL && eligible.length ? `<button type="button" data-empty-panel-accounts>${AieyesI18n.t("选择面板账户")}</button>` : `<button data-add-quota>${AieyesI18n.t("接入账户")}</button>`}</div>`;
+  if (!accounts.length && !eligible.some(filtered) && quotaCardAccounts(d.quotas, false).some(filtered)) return `<div class="card empty-quota" data-free-quota-hidden>${AieyesUI.emptyStateHTML({ icon: 'eye', title: AieyesI18n.t("免费账户的额度卡片已隐藏"), action: `<button type="button" data-open-advanced>${AieyesI18n.t("高级设置")}</button>`, compact: PANEL })}</div>`;
+  if (!accounts.length) return `<div class="card empty-quota">${AieyesUI.emptyStateHTML({ icon: 'account', title: state.provider ? AieyesI18n.t("此 Agent 暂无显示账户") : AieyesI18n.t("尚未显示账户"), action: PANEL && eligible.length ? `<button type="button" data-empty-panel-accounts>${AieyesI18n.t("选择面板账户")}</button>` : `<button data-add-quota>${AieyesI18n.t("接入账户")}</button>`, compact: PANEL })}</div>`;
   const groups = [...new Set(accounts.map((a) => AieyesUI.agentProvider(a.provider)))],rings = window.AieyesQuotaRings,ringStyle = rings?.style() ?? 'card';
   const heading = `<div class="section-head quota-heading"><h2>${AieyesI18n.t("账户额度 {0} ", refreshIndicator('quotas'))}<span class="count">${accounts.length}</span></h2><div class="section-actions">${rings?.switchHTML(ringStyle) ?? ''}<button id="order-quotas" title="${AieyesI18n.t("调整账户顺序")}" aria-label="${AieyesI18n.t("调整账户顺序")}">${uiIcon('sort')}</button><button id="read-quotas" ${state.quotaBusy || state.refreshState.quotas?.busy ? 'disabled' : ''}>${state.quotaBusy ? AieyesI18n.t("读取中…") : AieyesI18n.t("刷新额度")}</button></div></div>`;
   // Dial and tile styles list every account in one flat grid, in the same order and filters.
@@ -504,6 +538,22 @@ async function job(label, fn, refreshKey = null, refreshItem = null) {
 }
 const filterKeys = ['provider', 'accountKey', 'sourceId', 'model', 'days', 'dateRange'];
 const filterSnapshot = () => structuredClone(Object.fromEntries(filterKeys.map((k) => [k, state[k]])));
+// First paint: the last overview/panel result of this window type, shown while the first query
+// runs (the query status reads "正在更新，仍显示上一结果"), so a launch or a reopened panel does not
+// start from a blank page and then jump. Only the same filters are reused; at most 1 MB, every 30 s.
+const firstPaint = {
+  key: (scope) => 'aieyes.firstPaint.v1.' + scope,
+  written: new Map(),
+  read(scope, filters) {
+    if (!['overview', 'panel'].includes(scope)) return null;
+    try {const saved = JSON.parse(localStorage.getItem(this.key(scope)) || 'null');return saved?.filters === JSON.stringify(filters) && saved.dashboard && typeof saved.dashboard === 'object' ? saved.dashboard : null;} catch (_) {return null;}
+  },
+  write(scope, filters, dashboard) {
+    if (!['overview', 'panel'].includes(scope) || Date.now() - (this.written.get(scope) ?? 0) < 30000) return;
+    this.written.set(scope, Date.now());
+    try {const text = JSON.stringify({ filters: JSON.stringify(filters), dashboard });if (text.length <= 1024 * 1024) localStorage.setItem(this.key(scope), text);else localStorage.removeItem(this.key(scope));} catch (_) {}
+  }
+};
 function appliedScope() {const f = state.appliedFilters ?? filterSnapshot();return [rangeLabel(f), providers[f.provider] ?? AieyesI18n.t("全部 Agent"), historicalAccounts().find((a) => a.provider + ':' + a.id === f.accountKey)?.name ?? (f.accountKey === 'none' ? AieyesI18n.t("未关联账户") : AieyesI18n.t("全部账户")), state.settings.sources.find((s) => s.id === f.sourceId)?.name ?? AieyesI18n.t("全部来源"), f.model || AieyesI18n.t("全部模型")].join(' · ');}
 async function changeFilters(values = {}) {Object.assign(state, values);Object.assign(state, AieyesViewState.normalize(state, dashboardScope()));try {viewPreferences.save(dashboardScope(), state);savePanelView();await loadDashboard({ debounce: true });} catch (_) {}}
 function renderQueryStatus() {
@@ -553,12 +603,26 @@ async function loadDashboardOnce(request) {
         const status = await api('dashboard.status', Object.fromEntries(['provider', 'accountId', 'sourceId'].map((k) => [k, params[k]])));
         dashboard = { ...dashboard, ...Object.fromEntries(['quotas', 'quotaOrder', 'quotaEstimates', 'creditEstimates', 'automaticEstimateSummaries', 'sources', 'priceUpdatedAt'].filter((k) => k in status).map((k) => [k, status[k]])) };
       }
-    } else dashboard = await api('dashboard', params);
+    } else {
+      const operationId = crypto.randomUUID();state.queryOperation = operationId;
+      const unlisten = await window.__TAURI__.event.listen('operations:progress', ({payload}) => {
+        if (payload.kind !== 'dashboard.progress' || payload.operationId !== state.queryOperation || request !== state.dashboardRequest) return;
+        let bar = $('#query-progress');if (!bar) {bar = document.createElement('div');bar.id = 'query-progress';bar.className = 'query-progress';document.body.append(bar);}
+        const percent = Math.max(0, Math.min(1, payload.done / Math.max(1, payload.total)));
+        bar.innerHTML = `<span>${AieyesI18n.t("正在计算用量")}</span><progress max="1" value="${percent}"></progress><span>${Math.round(percent * 100)}%</span><button>${AieyesI18n.t("取消")}</button>`;
+        bar.querySelector('button').onclick = () => {
+          ++state.dashboardRequest;dashboardQueued = false;state.dashboardPending = false;state.dashboardError = AieyesI18n.t("查询已取消");lastDashboardVersion = dashboardVersion();state.queryOperation = null;bar.remove();renderQueryStatus();
+          void api('dashboard.cancel', {operationId}).catch(() => {});
+        };
+      });
+      try {dashboard = await api('dashboard', {...params, operationId});}
+      finally {unlisten();if (state.queryOperation === operationId) state.queryOperation = null;$('#query-progress')?.remove();}
+    }
     if (cacheable && usage === usageVersion() && version === dashboardVersion() && JSON.stringify(dashboard).length <= 2 * 1024 * 1024) {if (querySnapshots.size >= 4 && !querySnapshots.has(key)) clearUsageSnapshots();querySnapshots.set(key, dashboard);snapshotStatusVersions.set(key, version);}
     lastDashboardVersion = version;
     if (request !== state.dashboardRequest) return;
     for (const name of [...new Set([...(dashboard.modelOptions ?? []), ...(dashboard.models ?? []).map((m) => m.key), ...(dashboard.dayModels ?? []).map((r) => r.model)])].sort()) for (const preset of window.AieyesChartPalettes) color(name, preset.id);
-    dashboardCache.set(requestedScope, dashboard);appliedFilterCache.set(requestedScope, requested);state.dashboard = dashboard;state.appliedFilters = requested;state.dashboardPending = false;state.dashboardError = '';updateActivity();
+    dashboardCache.set(requestedScope, dashboard);appliedFilterCache.set(requestedScope, requested);firstPaint.write(requestedScope, requested, dashboard);state.dashboard = dashboard;state.appliedFilters = requested;state.dashboardPending = false;state.dashboardError = '';updateActivity();
     if (['agent', 'analysis'].includes(state.page)) {
       if (interactionOpen()) pendingRender = true;else render();
     }
@@ -629,6 +693,7 @@ function applyQuotaSamples(rows) {
     if ((old?.observationRevision || row.observationRevision) ? (old?.observationRevision ?? 0) > (row.observationRevision ?? 0) : old?.updatedAt > row.updatedAt) continue;
     if (row.error && old && !row.observationRevision) row = { ...old, error: row.error };
     if (JSON.stringify(row) === JSON.stringify(old)) continue;
+    if (old?.error && !row.error) void window.__TAURI__?.event?.emit?.('desktop:celebrate').catch(() => {});
     if (Boolean(row.freePlan) !== Boolean(old?.freePlan)) tierChanged = true;
     if (index >= 0) state.dashboard.quotas[index] = row;else if ((!state.provider || AieyesUI.sameAgent(state.provider, row.provider)) && (!state.accountKey || state.accountKey === key)) state.dashboard.quotas.push(row);
     changed.push(row);
@@ -653,6 +718,7 @@ let hostMonitorBusy = new Set();
 function hostRefreshBusy(id = null) {return state.hostMonitoring ? id ? hostMonitorBusy.has(id) : hostMonitorRequestBusy : Boolean(state.serverBusy || state.refreshState.hosts?.busy);}
 function applyHostMonitor(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.rows)) return;
+  void window.AieyesHostTrend?.refresh();
   if (hostMonitorVersion?.session === snapshot.sampleSession && hostMonitorVersion.version >= snapshot.version) return;
   hostMonitorVersion = { session: snapshot.sampleSession, version: snapshot.version };
   hostMonitorBusy = new Set([...(snapshot.inFlight ?? []), ...(snapshot.pending ?? [])]);
@@ -677,6 +743,7 @@ function configureHostMonitor() {
   return hostMonitorTask;
 }
 function applyHostSamples(payload) {
+  void window.AieyesHostTrend?.refresh();
   const rows = Array.isArray(payload) ? payload : payload?.rows ?? [],attemptedAt = Date.now();
   const byID = new Map(state.hosts.map((row) => [row.id, row]));let changed = false;
   for (const row of rows) {
@@ -800,6 +867,10 @@ function collectGeneralDraft(next, forms) {
     for (const key of ['needsInputTone', 'completeTone']) if (changed(key)) next.sessionSounds = { ...next.sessionSounds, [key]: values[key] };
     if (changed('soundVolume')) next.sessionSounds = { ...next.sessionSounds, volume: Math.min(100, Math.max(0, Number(values.soundVolume))) / 100 };
     for (const [field, key] of [['unexpectedResetNotification', 'unexpected'], ['naturalResetNotification', 'natural']]) if (changed(field)) next.quotaResetNotifications = { unexpected: true, natural: false, ...next.quotaResetNotifications, [key]: data.get(field) === 'true' };
+    if (['serverAlertsEnabled', 'serverAlertCpu', 'serverAlertMemory', 'serverAlertDuration'].some(changed)) {
+      const current = { enabled: false, cpuPercent: 90, memoryPercent: 90, durationSeconds: 300, ...next.serverAlerts },number = (key, fallback) => Object.hasOwn(values, key) && Number.isFinite(Number(values[key])) ? Number(values[key]) : fallback;
+      next.serverAlerts = { ...current, enabled: Object.hasOwn(values, 'serverAlertsEnabled') ? data.get('serverAlertsEnabled') === 'true' : current.enabled, cpuPercent: number('serverAlertCpu', current.cpuPercent), memoryPercent: number('serverAlertMemory', current.memoryPercent), durationSeconds: number('serverAlertDuration', current.durationSeconds) };
+    }
     if (changed('historyShowDeletedAccounts')) next.historyShowDeletedAccounts = data.get('historyShowDeletedAccounts') === 'true';
     if (changed('preciseCounting')) next.preciseCounting = data.get('preciseCounting') === 'true';
     if (changed('hideFreeQuotaCards')) next.hideFreeQuotaCards = data.get('hideFreeQuotaCards') === 'true';
@@ -888,14 +959,14 @@ function render() {
   captureSettingsForms();savePanelView();
   const nextKey = viewKey(),changing = renderedViewKey !== nextKey;
   document.querySelectorAll('[data-page]').forEach((b) => {const active = b.dataset.page === state.page;b.classList.toggle('active', active);if (active) b.setAttribute('aria-current', 'page');else b.removeAttribute('aria-current');});
-  const title = $('#title');if (title) title.textContent = { agent: AieyesI18n.t("总览"), analysis: AieyesI18n.t("用量分析"), servers: AieyesI18n.t("服务器"), settings: AieyesI18n.t("设置"), setup: AieyesI18n.t("配置向导") }[state.page];
+  const title = $('#title');if (title) title.textContent = { agent: AieyesI18n.t("总览"), analysis: AieyesI18n.t("用量分析"), servers: AieyesI18n.t("服务器"), sessions: AieyesI18n.t("会话"), settings: AieyesI18n.t("设置"), setup: AieyesI18n.t("配置向导") }[state.page];
   for (const id of ['live-sessions']) {const el = $('#' + id);if (el) el.hidden = state.page !== 'agent';}
   updateActivity();if (!state.settings) return;
   window.AieyesTheme?.apply(state.settings.appearance);
-  if (state.page === 'agent') renderOverview();else if (state.page === 'analysis') renderAnalysis();else if (state.page === 'servers') renderServers();else if (state.page === 'setup') window.AieyesSetup?.render();else renderSettings();
+  if (state.page === 'agent') renderOverview();else if (state.page === 'analysis') renderAnalysis();else if (state.page === 'servers') renderServers();else if (state.page === 'sessions') window.AieyesSessionsPage.render();else if (state.page === 'setup') window.AieyesSetup?.render();else renderSettings();
   window.AieyesSetup?.returnBar();syncNavigation();const refreshMenu = document.querySelector('header .refresh-wrap');if (refreshMenu) refreshMenu.hidden = !['agent', 'analysis', 'servers'].includes(state.page);window.AieyesSessions?.visibility();
-  renderedViewKey = nextKey;if (changing || state.restorePosition === nextKey) {restoreView(viewPreferences.position(nextKey));if (state.page === 'settings' || state.page === 'servers' || state.dashboard) state.restorePosition = null;}
-  updateHeadingIndicators();
+  renderedViewKey = nextKey;if (changing || state.restorePosition === nextKey) {restoreView(viewPreferences.position(nextKey));if (['settings', 'servers', 'sessions'].includes(state.page) || state.dashboard) state.restorePosition = null;}
+  updateHeadingIndicators();revealAccount();window.AieyesWhatsNew?.sync();
 }
 function attention(reason, action, id) {return `<div class="attention" role="status">${uiIcon('attention')}<span>${escapeHTML(AieyesI18n.message(reason))}</span><button id="${id}" type="button">${action}</button></div>`;}
 function bindAttention() {if ($('#pricing-attention')) $('#pricing-attention').onclick = openPricing;if ($('#sampling-attention')) $('#sampling-attention').onclick = openSampling;}
@@ -1033,7 +1104,8 @@ function renderAnalysis() {
   window.AieyesMotion?.didRender('analysis');
 }
 function renderOverview() {
-  const d = state.dashboard;if (!d) {$('#content').innerHTML = `<p class="muted" role="status">${AieyesI18n.t("正在读取账户…")}</p>`;return;}
+  // Until the first result: the page's own outline (usage card, quota cards) so nothing jumps when it arrives.
+  const d = state.dashboard;if (!d) {$('#content').innerHTML = `<div class="overview-skeleton" role="status" aria-label="${AieyesI18n.t("正在读取账户…")}"><div class="card skeleton-usage"></div><div class="skeleton-quotas">${'<div class="card quota-placeholder"></div>'.repeat(PANEL ? 2 : 3)}</div><span class="sr-only">${AieyesI18n.t("正在读取账户…")}</span></div>`;return;}
   const view = rememberView(),s = d.summary;
   const enabledProviders = AieyesUI.overviewAgentProviders(state.settings);
   if (state.provider && !enabledProviders.includes(state.provider)) {void changeFilters({ provider: '', accountKey: '' });return;}
@@ -1060,7 +1132,7 @@ function shortenEmptyUsage(d) {
     const usage = AieyesUI.usageSources(state.settings),fresh = AieyesUI.freshness(state.settings, d),filtered = Boolean(state.provider || state.accountKey || state.sourceId || state.model),onlyQuota = state.settings.sources.every((s) => s.provider === 'deepseek');
     const title = onlyQuota ? AieyesI18n.t("此来源提供账户额度") : fresh.failed ? AieyesI18n.t("记录同步失败") : filtered ? AieyesI18n.t("没有匹配的用量记录") : !fresh.timestamp ? AieyesI18n.t("尚未同步用量记录") : AieyesI18n.t("此时间范围暂无用量");
     const description = onlyQuota ? AieyesI18n.t("连接账户查看额度与余额；添加日志目录后分析用量。") : fresh.failed ? AieyesI18n.t("请在对应来源查看错误并重试，已有记录仍保留。") : filtered ? AieyesI18n.t("尝试清除筛选或扩大时间范围。") : !fresh.timestamp ? AieyesI18n.t("来源已配置，首次同步后将显示统计。") : AieyesI18n.t("可以扩大日期范围查看历史，或同步最新日志。");
-    const empty = document.createElement('div');empty.className = 'card empty-usage';empty.innerHTML = '<h2>' + title + '</h2><p class="muted">' + description + '</p><div class="actions">' + (onlyQuota ? `<button id="empty-add-source">${AieyesI18n.t("添加日志来源")}</button>` : `<button id="empty-sync">${AieyesI18n.t("同步记录")}</button><button id="empty-range">${AieyesI18n.t("扩大到最近一年")}</button>` + (filtered ? `<button id="empty-clear">${AieyesI18n.t("清除筛选")}</button>` : '')) + '</div>';chart.replaceWith(empty);
+    const empty = document.createElement('div');empty.className = 'card empty-usage';empty.innerHTML = AieyesUI.emptyStateHTML({ icon: fresh.failed ? 'warning' : onlyQuota ? 'credit' : 'trend', tone: fresh.failed ? 'warn' : '', title, message: description, compact: PANEL, action: `<div class="actions">${onlyQuota ? `<button id="empty-add-source">${AieyesI18n.t("添加日志来源")}</button>` : `<button id="empty-sync">${AieyesI18n.t("同步记录")}</button><button id="empty-range">${AieyesI18n.t("扩大到最近一年")}</button>${filtered ? `<button id="empty-clear">${AieyesI18n.t("清除筛选")}</button>` : ''}`}</div>` });chart.replaceWith(empty);
     if ($('#empty-sync')) $('#empty-sync').onclick = () => userRefresh('scan');if ($('#empty-add-source')) $('#empty-add-source').onclick = () => openSetup();if ($('#empty-range')) $('#empty-range').onclick = () => {state.days = 365;state.dateRange = null;savePanelView();return PANEL ? openDetail() : changeFilters({ days: 365, dateRange: null });};if ($('#empty-clear')) $('#empty-clear').onclick = () => changeFilters({ provider: '', accountKey: '', sourceId: '', model: '' });
   }
   $('#cost-mode')?.closest('.section-head')?.remove();
@@ -1174,7 +1246,7 @@ function quotaSupplement(q, item = AieyesQuotaRings.models(q)[0]) {
   };
   const metric = (title, reset, resetHelp, remaining, summary = '', extraClass = '') => `<div class="supplement-period ${extraClass}"><div class="period-heading"><span>${escapeHTML(title)}</span>${reset ? `<time title="${escapeHTML(resetHelp)}">${escapeHTML(reset)}</time>` : ''}</div><strong aria-label="${escapeHTML(AieyesI18n.t("剩余 {0}",pct(remaining)))}">${pct(remaining)}</strong>${resourceBar(remaining,AieyesI18n.t("剩余 {0}",pct(remaining)),true)}${summary ? `<div class="meter-summary">${escapeHTML(summary)}</div>` : ''}</div>`;
   return `<section class="quota-supplement" data-ring-detail data-quota="${escapeHTML(key)}" data-provider="${escapeHTML(q.provider)}">
-    <div class="orb-account">${providerMark(q.provider)}<span class="supplement-identity">${escapeHTML(q.identity?.email || q.identity?.providerAccountId || q.name)}</span>${q.plan && AieyesUI.subscription(q.plan).length <= 10 ? subscriptionBadge(q.plan) : ''}${window.AieyesAccountTargets?.eligible(key) ? `<button data-switch-account="${escapeHTML(key)}" title="${AieyesI18n.t("切换账户")}" aria-label="${AieyesI18n.t("切换账户")}">${uiIcon('switch')}</button>` : ''}<details class="quota-disclosure" open><summary aria-label="${AieyesI18n.t("收起")}">⌃</summary></details></div>
+    <div class="orb-account">${providerMark(q.provider)}<span class="supplement-identity">${escapeHTML(q.identity?.email || q.identity?.providerAccountId || q.name)}</span>${q.plan && AieyesUI.subscription(q.plan).length <= 10 ? subscriptionBadge(q.plan) : ''}${window.AieyesAccountTargets?.eligible(key) ? `<button data-switch-account="${escapeHTML(key)}" title="${AieyesI18n.t("切换账户")}" aria-label="${AieyesI18n.t("切换账户")}">${uiIcon('switch')}</button>` : ''}${PANEL ? `<button data-show-account="${escapeHTML(key)}" title="${AieyesI18n.t("在主窗口中查看")}" aria-label="${AieyesI18n.t("在主窗口中查看")}">${uiIcon('expand')}</button>` : ''}<details class="quota-disclosure" open><summary aria-label="${AieyesI18n.t("收起")}">⌃</summary></details></div>
     ${group || q.plan && AieyesUI.subscription(q.plan).length > 10 ? `<div class="orb-context">${group ? `<strong>${escapeHTML(group)}</strong>` : ''}${q.plan && AieyesUI.subscription(q.plan).length > 10 ? subscriptionBadge(q.plan) : ''}</div>` : ''}
     <div class="supplement-content"><div class="supplement-primary">${windows.length ? `<div class="supplement-periods">${windows.map(w => {
       const remaining = Number.isFinite(w.usedPercent) ? resourcePercent(100 - w.usedPercent) : null;
@@ -1207,7 +1279,7 @@ function quotaCard(q, visibleAccounts = 1, ring = false) {
     const groups = new Map();for (const w of q.windows) {const group = w.groupName || w.name.split(' · ').slice(0, -1).join(' · ');if (!groups.has(group)) groups.set(group, []);groups.get(group).push(w);}
     windows = `<div class="agy-groups">${[...groups].map(([group, rows]) => `<div class="agy-group"><strong title="${escapeHTML(group)}">${escapeHTML(group)}</strong><div class="agy-windows">${rows.sort((a, b) => (a.windowMinutes ?? 0) - (b.windowMinutes ?? 0)).map((w) => windowHTML({ ...w, name: w.windowMinutes === window.AieyesContract.windows.week ? '7d' : w.windowMinutes === window.AieyesContract.windows.fiveHour ? '5h' : w.name })).join('')}</div>${estimateEntry(q, records.filter((e) => e.groupId === (rows[0]?.groupId || group)), rows[0]?.groupId || group)}</div>`).join('')}</div>`;
   }
-  return `<div class="card quota-card" tabindex="0" data-provider="${escapeHTML(q.provider)}" data-quota="${escapeHTML(key)}"${ring ? ' data-ring-detail' : ''}><details class="quota-disclosure" data-collapsible="${collapsible}" data-agent-detail="quota:${escapeHTML(key)}" ${expanded ? 'open' : ''}><summary class="quota-title"><h3>${providerMark(q.provider)}<span class="quota-heading-label"><span class="quota-name" title="${escapeHTML(q.name)}">${escapeHTML(q.name)}</span>${cardIdentity && cardIdentity !== q.name ? `<small class="quota-email" title="${escapeHTML(cardIdentity)}">${escapeHTML(cardIdentity)}</small>` : ''}</span></h3>${q.plan ? `<span class="quota-subscription">${subscriptionBadge(q.plan)}${subscriptionRemaining(q.subscriptionExpiresAt)}</span>` : ''}${q.provider === 'codex' ? `<span class="quota-collapsed-summary">${creditBalance(q, credit, true)}${q.bankReset ? `<span>${AieyesI18n.t("Bank Reset · {0} 次可用", `<strong>${escapeHTML(String(q.bankReset.availableCount))}</strong>`)}</span>` : ''}</span>` : ''}</summary></details><div class="quota-content">${window.AieyesAccountTargets?.eligible(key) ? `<div class="account-switch-row"><button class="account-switch-entry" data-switch-account="${escapeHTML(key)}">${AieyesI18n.t("{0}切换账户", uiIcon('switch'))}</button><span class="account-device-counts" data-device-counts="${escapeHTML(key)}">${window.AieyesAgentSettings?.countsHTML(key) ?? ''}</span></div>` : q.provider === 'codex' ? `<div class="account-switch-row"><span class="muted tiny">${AieyesI18n.t("暂无可用机器")}</span><button data-account-machine-settings>${AieyesI18n.t("机器设置")}</button></div>` : ''}${q.metadataError ? `<p class="tiny muted quota-identity-note">${escapeHTML(AieyesI18n.message(q.metadataError))}${q.identity?.stale && q.plan ? AieyesI18n.t(" · 显示上次订阅") : ''}</p>` : ''}${(q.balances ?? []).map((b) => `<div class="quota-window"><div class="between"><span>${AieyesI18n.t("可用余额")}</span><strong>${escapeHTML(b.currency)} ${escapeHTML(b.total)}</strong></div><div class="between tiny muted balance-detail"><span>${AieyesI18n.t("赠送 {0}", escapeHTML(b.granted))}</span><span>${AieyesI18n.t("充值 {0}", escapeHTML(b.toppedUp))}</span></div></div>`).join('')}${extraUsageHTML(q.extraUsage)}${q.isAvailable === false ? `<div class="error">${AieyesI18n.t("当前余额不足以调用 API")}</div>` : ''}${quotaMetersHTML(q)}${windows}${quotaNoticeHTML(q)}${q.error ? `<div class="error quota-error"><div class="error-detail">${AieyesUI.errorHTML(q.error, AieyesI18n.t("额度查询失败"))}</div><span class="short-error">${AieyesI18n.t("额度更新失败")}</span><button type="button" data-retry-quota="${escapeHTML(q.accountId)}">${AieyesI18n.t("重试")}</button></div>` : ''}${!quotaGroupsWindows(q) && (q.windows.some((w) => w.windowMinutes === window.AieyesContract.windows.fiveHour || w.windowMinutes === window.AieyesContract.windows.week) || latest) ? estimateEntry(q, records) : ''}${q.provider === 'codex' ? creditRow(q, credit, credits) : ''}${q.bankReset ? `<details class="bank" data-agent-detail="bank:${escapeHTML(key)}"><summary>${uiIcon("stack")}<span>Bank Reset</span><span class="bank-count">${AieyesI18n.t("{0} 次可用", q.bankReset.availableCount)}</span></summary>${(q.bankReset.credits ?? []).map((c) => `<div class="between tiny muted"><span>${escapeHTML(c.title ?? 'Reset Credit')}</span><span>${AieyesI18n.t("到期 {0}", date(c.expiresAt))}</span></div>`).join('')}</details>` : ''}<div class="quota-footer">${q.updatedAt > 0 ? `<div class="between tiny muted quota-meta"><span>${q.origin === 'log' ? AieyesI18n.t("记录") : AieyesI18n.t("更新")} ${date(q.updatedAt)}</span>${quotaAgeHTML(q)}</div>` : ''}<button class="quota-analysis" data-view-analysis="${escapeHTML(key)}">${AieyesI18n.t("查看分析 {0}", uiIcon('right'))}</button></div></div></div>`;
+  return `<div class="card quota-card" tabindex="0" data-provider="${escapeHTML(q.provider)}" data-quota="${escapeHTML(key)}"${ring ? ' data-ring-detail' : ''}><details class="quota-disclosure" data-collapsible="${collapsible}" data-agent-detail="quota:${escapeHTML(key)}" ${expanded ? 'open' : ''}><summary class="quota-title"><h3>${providerMark(q.provider)}<span class="quota-heading-label"><span class="quota-name" title="${escapeHTML(q.name)}">${escapeHTML(q.name)}</span>${cardIdentity && cardIdentity !== q.name ? `<small class="quota-email" title="${escapeHTML(cardIdentity)}">${escapeHTML(cardIdentity)}</small>` : ''}</span></h3>${q.plan ? `<span class="quota-subscription">${subscriptionBadge(q.plan)}${subscriptionRemaining(q.subscriptionExpiresAt)}</span>` : ''}${q.provider === 'codex' ? `<span class="quota-collapsed-summary">${creditBalance(q, credit, true)}${q.bankReset ? `<span>${AieyesI18n.t("Bank Reset · {0} 次可用", `<strong>${escapeHTML(String(q.bankReset.availableCount))}</strong>`)}</span>` : ''}</span>` : ''}</summary></details><div class="quota-content">${window.AieyesAccountTargets?.eligible(key) ? `<div class="account-switch-row"><button class="account-switch-entry" data-switch-account="${escapeHTML(key)}">${AieyesI18n.t("{0}切换账户", uiIcon('switch'))}</button><span class="account-device-counts" data-device-counts="${escapeHTML(key)}">${window.AieyesAgentSettings?.countsHTML(key) ?? ''}</span></div>` : q.provider === 'codex' ? `<div class="account-switch-row"><span class="muted tiny">${AieyesI18n.t("暂无可用机器")}</span><button data-account-machine-settings>${AieyesI18n.t("机器设置")}</button></div>` : ''}${q.metadataError ? `<p class="tiny muted quota-identity-note">${escapeHTML(AieyesI18n.message(q.metadataError))}${q.identity?.stale && q.plan ? AieyesI18n.t(" · 显示上次订阅") : ''}</p>` : ''}${(q.balances ?? []).map((b) => `<div class="quota-window"><div class="between"><span>${AieyesI18n.t("可用余额")}</span><strong>${escapeHTML(b.currency)} ${escapeHTML(b.total)}</strong></div><div class="between tiny muted balance-detail"><span>${AieyesI18n.t("赠送 {0}", escapeHTML(b.granted))}</span><span>${AieyesI18n.t("充值 {0}", escapeHTML(b.toppedUp))}</span></div></div>`).join('')}${extraUsageHTML(q.extraUsage)}${q.isAvailable === false ? `<div class="error">${AieyesI18n.t("当前余额不足以调用 API")}</div>` : ''}${quotaMetersHTML(q)}${windows}${quotaNoticeHTML(q)}${q.error ? `<div class="error quota-error"><div class="error-detail">${AieyesUI.errorHTML(q.error, AieyesI18n.t("额度查询失败"))}</div><span class="short-error">${AieyesI18n.t("额度更新失败")}</span><button type="button" data-retry-quota="${escapeHTML(q.accountId)}">${AieyesI18n.t("重试")}</button></div>` : ''}${!quotaGroupsWindows(q) && (q.windows.some((w) => w.windowMinutes === window.AieyesContract.windows.fiveHour || w.windowMinutes === window.AieyesContract.windows.week) || latest) ? estimateEntry(q, records) : ''}${q.provider === 'codex' ? creditRow(q, credit, credits) : ''}${q.bankReset ? `<details class="bank" data-agent-detail="bank:${escapeHTML(key)}"><summary>${uiIcon("stack")}<span>Bank Reset</span><span class="bank-count">${AieyesI18n.t("{0} 次可用", q.bankReset.availableCount)}</span></summary>${(q.bankReset.credits ?? []).map((c) => `<div class="between tiny muted"><span>${escapeHTML(c.title ?? 'Reset Credit')}</span><span>${AieyesI18n.t("到期 {0}", date(c.expiresAt))}</span></div>`).join('')}</details>` : ''}<div class="quota-footer">${q.updatedAt > 0 ? `<div class="between tiny muted quota-meta"><span>${q.origin === 'log' ? AieyesI18n.t("记录") : AieyesI18n.t("更新")} ${date(q.updatedAt)}</span>${quotaAgeHTML(q)}</div>` : ''}<span class="quota-links">${PANEL ? `<button class="quota-analysis" data-show-account="${escapeHTML(key)}" title="${AieyesI18n.t("在主窗口中查看")}">${uiIcon('expand')}${AieyesI18n.t("主窗口")}</button>` : ''}<button class="quota-analysis" data-view-analysis="${escapeHTML(key)}">${AieyesI18n.t("查看分析 {0}", uiIcon('right'))}</button></span></div></div></div>`;
 }
 
 // Round axis steps (1, 2, 2.5 or 5 × 10ⁿ) give readable ticks; the plot scales to the rounded top.
@@ -1324,18 +1396,24 @@ function resourceStrip(title, percent, detail = '', warnHigh = true) {
   const value = resourcePercent(percent),label = (detail ? detail + ' · ' : '') + (value == null ? '—' : Math.round(value) + '%');
   return `<div class="server-resource-strip" title="${escapeHTML(title + ' ' + label)}"><div class="resource-strip-heading"><span>${escapeHTML(title)}</span><strong${warnHigh && value >= 90 ? ' class="high-load"' : ''}>${warnHigh && value >= 90 ? highLoadMark() : ''}${escapeHTML(label)}</strong></div>${resourceBar(value, title + ' ' + label)}</div>`;
 }
-function resourceBlock(label, percent, detail = '', kind = 'cpu') {
+// `trend` is the tile's last hour (host-trend.js), drawn between the title and the value.
+function resourceBlock(label, percent, detail = '', kind = 'cpu', trend = '') {
   const value = resourcePercent(percent);
-  return `<div class="resource-block" data-resource="${kind}"><div class="between"><span>${escapeHTML(label)}</span>${value >= 90 ? highLoadMark() : ''}</div><strong${value >= 90 ? ' class="high-load"' : ''}>${value == null ? '—' : Math.round(value) + '%'}</strong>${resourceBar(value, label)}${detail ? `<small>${escapeHTML(detail)}</small>` : ''}</div>`;
+  return `<div class="resource-block" data-resource="${kind}"><div class="between"><span>${escapeHTML(label)}</span>${value >= 90 ? highLoadMark() : ''}${trend}</div><strong${value >= 90 ? ' class="high-load"' : ''}>${value == null ? '—' : Math.round(value) + '%'}</strong>${resourceBar(value, label)}${detail ? `<small>${escapeHTML(detail)}</small>` : ''}</div>`;
 }
 function serverSummary(host, sample) {
   const enabled = (key) => (host.metrics ?? Object.keys(groups)).includes(key),memory = sample?.memory;
   const gpus = enabled('gpu') ? hostDevices(host, 'gpu', sample?.gpu) : [],networks = enabled('network') ? hostDevices(host, 'network', sample?.network) : [];
-  const system = (enabled('cpu') ? resourceBlock('CPU', sample?.cpu?.find((c) => c.id === 'cpu')?.utilization, '', 'cpu') : '') + (
-  enabled('memory') ? resourceBlock(AieyesI18n.t("内存"), capacityPercent((memory?.used ?? usedCapacity(memory?.total, memory?.available)), memory?.total), capacityPair((memory?.used ?? usedCapacity(memory?.total, memory?.available)), memory?.total), 'memory') : '');
-  const gpuCards = gpus.map((g) => `<div class="server-gpu" data-resource="gpu" data-gpu="${escapeHTML(g.id)}"><div class="server-gpu-title"><strong>GPU ${escapeHTML(g.id)}</strong><span title="${escapeHTML(g.name ?? '—')}">${escapeHTML(g.name ?? '—')}</span></div><div class="server-gpu-metrics" data-memory="${hostShows(host, 'gpuMemory')}">${resourceStrip(AieyesI18n.t("利用率"), g.utilization, '', false)}${hostShows(host, 'gpuMemory') ? resourceStrip(AieyesI18n.t("显存"), capacityPercent(g.memoryUsedMiB, g.memoryTotalMiB), capacityPair(g.memoryUsedMiB == null ? null : g.memoryUsedMiB * 1048576, g.memoryTotalMiB == null ? null : g.memoryTotalMiB * 1048576)) : ''}</div></div>`).join('');
+  const trend = (metric) => window.AieyesHostTrend?.tile(host.id, metric) ?? '';
+  const system = (enabled('cpu') ? resourceBlock('CPU', sample?.cpu?.find((c) => c.id === 'cpu')?.utilization, '', 'cpu', trend('cpu')) : '') + (
+  enabled('memory') ? resourceBlock(AieyesI18n.t("内存"), capacityPercent((memory?.used ?? usedCapacity(memory?.total, memory?.available)), memory?.total), capacityPair((memory?.used ?? usedCapacity(memory?.total, memory?.available)), memory?.total), 'memory', trend('memory')) : '');
+  // History keeps the busiest GPU of each minute: one GPU shows it in its own header; several get
+  // a row of their own above them that stays in place, with a dash until two minutes join.
+  const reported = sample?.gpu ?? [],gpuTrend = enabled('gpu') ? trend('gpu') : '';
+  const busiest = reported.length > 1 && gpus.length && reported.some((g) => g.utilization != null) ? `<div class="host-trend-row" data-resource="gpu"><span>${AieyesI18n.t("GPU 最高利用率走势")}</span>${gpuTrend || '<span class="host-trend-empty" aria-hidden="true">—</span>'}</div>` : '';
+  const gpuCards = gpus.map((g) => `<div class="server-gpu" data-resource="gpu" data-gpu="${escapeHTML(g.id)}"><div class="server-gpu-title"><strong>GPU ${escapeHTML(g.id)}</strong><span title="${escapeHTML(g.name ?? '—')}">${escapeHTML(g.name ?? '—')}</span>${reported.length === 1 ? gpuTrend : ''}</div><div class="server-gpu-metrics" data-memory="${hostShows(host, 'gpuMemory')}">${resourceStrip(AieyesI18n.t("利用率"), g.utilization, '', false)}${hostShows(host, 'gpuMemory') ? resourceStrip(AieyesI18n.t("显存"), capacityPercent(g.memoryUsedMiB, g.memoryTotalMiB), capacityPair(g.memoryUsedMiB == null ? null : g.memoryUsedMiB * 1048576, g.memoryTotalMiB == null ? null : g.memoryTotalMiB * 1048576)) : ''}</div></div>`).join('');
   const filesystems = hostDevices(host, 'filesystems', sample?.filesystems),fsSummary = enabled('filesystems') ? `<div class="server-filesystems" data-resource="storage"><span class="muted">${AieyesI18n.t("文件系统")}</span><div class="server-filesystem-list balanced-grid">${filesystems.length ? filesystems.map((fs) => `<div data-filesystem="${escapeHTML(fs.id)}">${resourceStrip(fs.id, capacityPercent(fs.used, fs.total), capacityPair(fs.used, fs.total))}</div>`).join('') : `<span class="muted">${sample?.filesystems ? AieyesI18n.t("无已选挂载点") : '—'}</span>`}</div></div>` : '';
-  return `<div class="server-summary-metrics">${system ? `<div class="server-system-metrics">${system}</div>` : ''}${gpuCards ? `<div class="server-gpu-list balanced-grid">${gpuCards}</div>` : enabled('gpu') ? `<span class="muted">GPU ${sample?.gpu ? AieyesI18n.t("无已选设备") : '—'}</span>` : ''}${fsSummary}${enabled('network') ? `<div class="server-network-rates balanced-grid" data-resource="network">${networks.length ? networks.map((n) => `<div><span>${escapeHTML(n.id)}</span><strong>↓ ${speed(n.rxBytesPerSecond)} · ↑ ${speed(n.txBytesPerSecond)}</strong></div>`).join('') : `<span>${AieyesI18n.t("网络 —")}</span>`}</div>` : ''}<div class="server-summary-facts">${hostShows(host, 'uptime') ? `<span data-host-uptime>${AieyesI18n.t("连续运行 ")}<strong>${uptimeText(sample?.uptime)}</strong></span>` : ''}${hostShows(host, 'networkTotals') && enabled('network') ? networks.length ? networks.map((n) => `<span class="server-network-total" data-network-total="${escapeHTML(n.id)}"><span>${AieyesI18n.t("{0} 累计", escapeHTML(n.id))}</span><strong>↓ ${bytes(n.rxBytes)} · ↑ ${bytes(n.txBytes)}</strong></span>`).join('') : `<span>${AieyesI18n.t("累计流量 {0}", sample?.network ? AieyesI18n.t("无已选网卡") : '—')}</span>` : ''}<span class="server-sample-time muted">${AieyesI18n.t("采样 {0}{1}", date(sample?.timestamp), !host.enabled ? AieyesI18n.t(" · 已暂停，保留旧读数") : '')}</span></div></div>`;
+  return `<div class="server-summary-metrics">${system ? `<div class="server-system-metrics">${system}</div>` : ''}${busiest}${gpuCards ? `<div class="server-gpu-list balanced-grid">${gpuCards}</div>` : enabled('gpu') ? `<span class="muted">GPU ${sample?.gpu ? AieyesI18n.t("无已选设备") : '—'}</span>` : ''}${fsSummary}${enabled('network') ? `<div class="server-network-rates balanced-grid" data-resource="network">${networks.length ? networks.map((n) => `<div><span>${escapeHTML(n.id)}</span><strong>↓ ${speed(n.rxBytesPerSecond)} · ↑ ${speed(n.txBytesPerSecond)}</strong></div>`).join('') : `<span>${AieyesI18n.t("网络 —")}</span>`}</div>` : ''}<div class="server-summary-facts">${hostShows(host, 'uptime') ? `<span data-host-uptime>${AieyesI18n.t("连续运行 ")}<strong>${uptimeText(sample?.uptime)}</strong></span>` : ''}${hostShows(host, 'networkTotals') && enabled('network') ? networks.length ? networks.map((n) => `<span class="server-network-total" data-network-total="${escapeHTML(n.id)}"><span>${AieyesI18n.t("{0} 累计", escapeHTML(n.id))}</span><strong>↓ ${bytes(n.rxBytes)} · ↑ ${bytes(n.txBytes)}</strong></span>`).join('') : `<span>${AieyesI18n.t("累计流量 {0}", sample?.network ? AieyesI18n.t("无已选网卡") : '—')}</span>` : ''}<span class="server-sample-time muted">${AieyesI18n.t("采样 {0}{1}", date(sample?.timestamp), !host.enabled ? AieyesI18n.t(" · 已暂停，保留旧读数") : '')}</span></div></div>`;
 }
 function renderServers() {window.AieyesMotion?.captureNavigation();window.AieyesServers.render();window.AieyesSingleSelect?.mountAll($('#content'));window.AieyesMotion?.didRender('servers');}
 function serverGroupContent(key, value, host) {
@@ -1355,6 +1433,8 @@ function serverGroupContent(key, value, host) {
   return content;
 }
 function field(name, label, value = '', placeholder = '', type = 'text') {const size = type === 'number' || /^(port|.*Port|.*Seconds|.*Interval|input|output|cacheRead|cacheWrite)$/.test(name) ? 'short' : /^(username|name)$/.test(name) ? 'medium' : 'long';return `<div class="form-row" data-field-size="${size}"> <label for="field-${name}">${label}</label><input id="field-${name}" name="${name}" type="${type}" value="${escapeHTML(value)}" placeholder="${escapeHTML(placeholder)}"></div>`;}
+// A value the editor shows but cannot change: a labelled row, never a permanently disabled control.
+function readonlyRow(label, value) {return `<div class="form-row" data-field-size="readonly" data-readonly-row><span class="form-row-label">${label}</span><span class="form-row-value">${escapeHTML(value)}</span></div>`;}
 function select(name, label, entries, current) {return `<div class="form-row" data-field-size="${/Protocol$/.test(name) ? 'protocol' : 'choice'}"> <label for="field-${name}">${label}</label><select id="field-${name}" name="${name}">${entries.map(([k, v]) => option(k, v, current)).join('')}</select></div>`;}
 function textarea(name, label, value = '') {return `<div class="form-row"><label for="field-${name}">${label}</label><textarea id="field-${name}" name="${name}">${escapeHTML(value)}</textarea></div>`;}
 const PRICE_ROW_HEIGHT = 64;
@@ -1461,10 +1541,10 @@ function bindSettingsSidebar(attribute, onSelect) {
     button.onkeydown = (event) => {const index = buttons.indexOf(button),next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : ['ArrowDown', 'ArrowRight'].includes(event.key) ? (index + 1) % buttons.length : ['ArrowUp', 'ArrowLeft'].includes(event.key) ? (index + buttons.length - 1) % buttons.length : null;if (next == null) return;event.preventDefault();buttons[next].click();document.querySelector('[' + attribute + '="' + CSS.escape(buttons[next].getAttribute(attribute)) + '"]')?.focus();};
   }
 }
-const generalPageList = () => [['appearance', AieyesI18n.t("外观")], ['desktop', AieyesI18n.t("桌宠与会话")], ['network', AieyesI18n.t("网络代理")], ['refresh', AieyesI18n.t("刷新与历史")], ['notifications', AieyesI18n.t("通知")], ['advanced', AieyesI18n.t("高级")], ['updates', AieyesI18n.t("更新与关于")]];
-let generalPages = generalPageList();window.addEventListener("aieyes:language", () => {generalPages = generalPageList();});
+// The page list, its titles and the search box share settings-index.js.
+const generalPageList = () => (window.AieyesSettingsIndex?.generalPageKeys ?? []).filter((key) => window.AieyesSettingsIndex.available(key)).map((key) => [key, window.AieyesSettingsIndex.generalPageTitle(key)]);
 function settingsCategoriesHTML() {
-  return `<nav class="settings-categories" aria-label="${AieyesI18n.t("设置")}">${generalPages.map(([key, title]) => `<button type="button" data-general-page="${key}" ${key === state.generalTab ? 'class="active" aria-current="page"' : ''}>${title}</button>`).join('')}</nav>`;
+  return `<nav class="settings-categories" aria-label="${AieyesI18n.t("设置")}">${generalPageList().map(([key, title]) => `<button type="button" data-general-page="${key}" ${key === state.generalTab ? 'class="active" aria-current="page"' : ''}>${title}</button>`).join('')}</nav>`;
 }
 function secondsField(name, label, value) {
   return `<div class="form-row" data-field-size="short"><label for="field-${name}">${label}</label><div class="field-with-unit"><input id="field-${name}" name="${name}" type="number" value="${value}" aria-label="${label}"><span>${AieyesI18n.t("秒")}</span></div></div>`;
@@ -1483,7 +1563,7 @@ function trayRingSettingsHTML(s) {
   return `<h2>${AieyesI18n.t("系统状态栏 / 托盘")}</h2><div class="setting-row"><label><input id="field-menuQuotaRingEnabled" type="checkbox" role="switch" name="menuQuotaRingEnabled" ${ring.enabled !== false ? 'checked' : ''}>${AieyesI18n.t("托盘图标显示额度圆环")}</label></div>${select('menuQuotaRingFirst', AieyesI18n.t("圆环旁第一个值"), options, values[0] ?? '')}${select('menuQuotaRingSecond', AieyesI18n.t("圆环旁第二个值"), options, values[1] ?? '')}<p class="muted tiny">${AieyesI18n.t("圆环取首个账户：上半圈 5h，下半圈 7d。悬停托盘图标可查看所选的值。")}</p>`;
 }
 function generalSettingsHTML(s, tab = state.generalTab) {
-  if (!generalPages.some(([key]) => key === tab)) {tab = 'appearance';if (arguments.length < 2) state.generalTab = tab;}
+  if (!generalPageList().some(([key]) => key === tab)) {tab = 'appearance';if (arguments.length < 2) state.generalTab = tab;}
   let fields = '',body = '';
   if (tab === 'appearance') {
     fields = `<h2>${AieyesI18n.t("界面")}</h2>${select('appearanceLanguage', AieyesI18n.t('语言'), [['zh-CN','简体中文'], ['en','English']], s.appearance?.language ?? 'zh-CN')}${select('appearanceTheme', AieyesI18n.t("主题"), [['system', AieyesI18n.t("跟随系统")], ['light', AieyesI18n.t("浅色")], ['dark', AieyesI18n.t("深色")]], s.appearance?.theme ?? 'system')}${select('appearanceAccent', AieyesI18n.t("强调色"), [['system', AieyesI18n.t("默认")], ['indigo', AieyesI18n.t("靛蓝")], ['blue', AieyesI18n.t("蓝")], ['teal', AieyesI18n.t("青绿")], ['purple', AieyesI18n.t("紫")]], s.appearance?.accent ?? 'system')}${window.AieyesDesktop?.appearanceHTML() ?? ''}${quotaStyleSettingsHTML()}<h3>${AieyesI18n.t("图表")}</h3>${select('appearanceChartPalette', AieyesI18n.t("图表配色"), window.AieyesChartPalettes.map((p) => [p.id, p.name]), s.appearance?.chartPalette ?? 'classic')}${select('appearanceChartContrast', AieyesI18n.t("图表对比度"), [['high', AieyesI18n.t("高对比度")], ['low', AieyesI18n.t("柔和")]], s.appearance?.chartContrast ?? 'high')}<div id="chart-palette-preview" class="chart-palette-preview"></div>`;
@@ -1506,6 +1586,7 @@ function generalSettingsHTML(s, tab = state.generalTab) {
   }
   if (tab === 'desktop') {fields = trayRingSettingsHTML(s);body = window.AieyesDesktop?.settingsHTML() ?? '';}
   if (tab === 'updates') body = (window.AieyesUpdates?.settingsHTML() ?? `<div class="card"><p>${AieyesI18n.t("正在读取更新信息…")}</p></div>`) + `<section class="card"><h2>${AieyesI18n.t("关于")}</h2><p class="font-notice">${AieyesI18n.t("界面字体：HarmonyOS Sans SC（鸿蒙黑体）· © 2021 Huawei Device Co., Ltd. ")}<button type="button" id="font-license">${AieyesI18n.t("字体许可")}</button></p></section>`;
+  fields += window.AieyesSettingsPages.fields(tab, s);body += window.AieyesSettingsPages.body(tab, s);
   if (fields) {const form = `<form id="general-form" data-draft-key="general-form:${tab}" class="card">${fields}</form>`;body = tab === 'desktop' ? body + form : form + body;}
   return `<div class="settings-layout"><div class="settings-subpage" data-general-section="${tab}">${body}</div></div>`;
 }
@@ -1532,7 +1613,7 @@ function renderSettings(capture = true) {
   if (state.settingsTab === 'wakeups') body = window.AieyesWakeups?.html() ?? `<p>${AieyesI18n.t("正在加载…")}</p>`;else
   body = generalSettingsHTML(state.settings);
   $('#title').textContent = state.settingsTab === 'general' ? AieyesI18n.t("设置") : { integrations: AieyesI18n.t("接入与账户"), hosts: AieyesI18n.t("机器与采集"), prices: AieyesI18n.t("模型价格"), wakeups: AieyesI18n.t("定时唤醒") }[state.settingsTab] ?? AieyesI18n.t("设置");
-  $('#content').innerHTML = `${state.settingsTab === 'general' ? settingsCategoriesHTML() : ''}<div class="settings-save-bar" id="settings-save-bar"><div class="settings-draft-label" role="status"></div><button id="settings-retry-save" type="button" hidden>${AieyesI18n.t("重试保存")}</button></div><div id="settings-panel" class="settings-block" aria-label="${escapeHTML($('#title').textContent)}">${body}</div>`;
+  $('#content').innerHTML = `${window.AieyesSettingsPages.searchHTML()}${state.settingsTab === 'general' ? settingsCategoriesHTML() : ''}<div class="settings-save-bar" id="settings-save-bar"><div class="settings-draft-label" role="status"></div><button id="settings-retry-save" type="button" hidden>${AieyesI18n.t("重试保存")}</button></div><div id="settings-panel" class="settings-block" aria-label="${escapeHTML($('#title').textContent)}">${body}</div>`;
   syncNavigation();
   if (state.settings.configurationIssues?.length) $('#content').insertAdjacentHTML('afterbegin', state.settings.configurationIssues.map((v) => `<div class="error">${escapeHTML(v)}</div>`).join(''));
   const fontLicense = $('#font-license');
@@ -1541,6 +1622,7 @@ function renderSettings(capture = true) {
     catch (error) {notify(String(error), 'error');}
   };
   bindSettingsDrafts();window.AieyesDesktop?.bindSettings();window.AieyesNotifications?.bind();updateSettingsSaveBar();
+  window.AieyesSettingsPages.bind(state.settingsTab, state.generalTab);
   // Applied at once and kept out of the settings draft (the form's own listener never sees the change).
   document.querySelectorAll('[data-quota-style-setting]').forEach((control) => control.onchange = (event) => {event.stopPropagation();window.AieyesQuotaRings?.setStyle(control.dataset.quotaStyleSetting, control.value);});
   updateChartPalettePreview();
@@ -1855,7 +1937,7 @@ document.addEventListener('keydown', (event) => {
   event.preventDefault();buttons.forEach((b, i) => b.tabIndex = i === next ? 0 : -1);buttons[next].focus();buttons[next].scrollIntoView({ block: 'nearest', inline: 'nearest' });
 });
 $('#activity').onclick = () => userRefresh(state.page === 'servers' ? 'hosts' : 'scan');$('#activity').onkeydown = (e) => {if (e.key === 'Enter' || e.key === ' ') {e.preventDefault();userRefresh(state.page === 'servers' ? 'hosts' : 'scan');}};
-document.addEventListener('keydown', (e) => {if ($('#editor')?.open || $('#quota-dialog')?.open) return;const refreshKey = e.key === 'F5' || ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'r');if (refreshKey) {e.preventDefault();if (!e.repeat) userRefresh(state.page === 'servers' ? 'hosts' : 'scan');return;}if (!(e.ctrlKey || e.metaKey)) return;const pageKey = { '1': 'agent', '2': 'analysis', '3': 'servers' }[e.key];if (pageKey && !e.shiftKey && !e.altKey) {e.preventDefault();void navigatePage(pageKey);return;}if (e.key.toLowerCase() === 's' && state.page === 'settings' && !PANEL) {e.preventDefault();if (settingsFormsDirty()) job(AieyesI18n.t("保存应用配置"), () => saveAllSettings());return;}if (e.key === ',') {e.preventDefault();void openSettings({ category: 'general' }).catch((error) => notify(String(error), 'error'));}if (e.shiftKey && e.key.toLowerCase() === 'd') {e.preventDefault();if (PANEL) openDetail();else {void navigatePage('agent');}}});
+document.addEventListener('keydown', (e) => {if ($('#editor')?.open || $('#quota-dialog')?.open) return;const refreshKey = e.key === 'F5' || ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'r');if (refreshKey) {e.preventDefault();if (!e.repeat) userRefresh(state.page === 'servers' ? 'hosts' : 'scan');return;}if (!(e.ctrlKey || e.metaKey)) return;const pageKey = { '1': 'agent', '2': 'analysis', '3': 'servers', '4': 'sessions' }[e.key];if (pageKey && !e.shiftKey && !e.altKey) {e.preventDefault();void navigatePage(pageKey);return;}if (e.key.toLowerCase() === 's' && state.page === 'settings' && !PANEL) {e.preventDefault();if (settingsFormsDirty()) job(AieyesI18n.t("保存应用配置"), () => saveAllSettings());return;}if (e.key === ',') {e.preventDefault();void openSettings({ category: 'general' }).catch((error) => notify(String(error), 'error'));}if (e.shiftKey && e.key.toLowerCase() === 'd') {e.preventDefault();if (PANEL) openDetail();else {void navigatePage('agent');}}});
 // Error text remains selectable; only the explicit close control dismisses it.
 new ResizeObserver(() => {if (state.page === 'analysis') drawTrend();}).observe($('#content'));
 function syncSharedAppearance(appearance) {
@@ -1999,7 +2081,9 @@ async function boot() {
     const info = await api('hello');state.revisionEvents = Boolean(info.runtimeInvalidations);state.hostMonitoring = Boolean(info.hostMonitoring);state.chatgptWorkInstalled = info.chatgptWorkInstalled === true;const version = $('#app-version');if (version) version.textContent = info.version;
     if (info.contractHash && info.contractHash !== window.AieyesContract.contractHash) throw new Error(AieyesI18n.t("应用资源与核心版本不一致，请重新安装同一版本"));
     if (PANEL && state.revisionEvents) {const shell = await window.__TAURI__.core.invoke('desktop_info');state.panelOpen = Boolean(shell.panelOpen);state.panelPage = shell.panelPage ?? state.panelPage;}
-    state.settings = await api('settings.get');migrateProviderState();AieyesUI.observePanelAccounts(state.settings);void window.AieyesAgentSettings?.refreshStatuses(true, null, true);await loadDashboard();
+    state.settings = await api('settings.get');migrateProviderState();AieyesUI.observePanelAccounts(state.settings);void window.AieyesAgentSettings?.refreshStatuses(true, null, true);
+    if (!state.dashboard && state.page === 'agent') {const cached = firstPaint.read(dashboardScope(), filterSnapshot());if (cached) {state.dashboard = cached;state.appliedFilters = filterSnapshot();state.dashboardPending = true;}render();}
+    await loadDashboard();
     if (!PANEL) window.AieyesSetup?.maybeStart();
     // Core asks the macOS Keychain for Claude's login at most once (settings.claudeKeychain.askedAt).
     // A new grant shows the official quota now; a silent re-read at launch serves the regular refresh.
@@ -2024,7 +2108,8 @@ window.AieyesApp = {
   async openSetupInMain(kind) {if (!state.settings) await appReady;await openSetup(['hosts', 'quota'].includes(kind) ? kind : 'sources');},
   async refreshPanel() {await appReady;await refreshExternalData(true);if (state.page === 'servers' && !state.hosts.length) await sample();},
   applyHostSamples,
-  openPanelAccounts
+  openPanelAccounts,
+  showAccount
 };
 // Quota polling belongs to the native host, including while all webviews are hidden.
 let refreshTimer,refreshStopped = false;
@@ -2128,6 +2213,7 @@ function bindQuotaTools() {
   document.querySelectorAll('[data-empty-panel-accounts]').forEach((button) => button.onclick = openPanelAccounts);
   document.querySelectorAll('[data-retry-quota]').forEach((button) => button.onclick = () => quotas(button.dataset.retryQuota));
   document.querySelectorAll('[data-view-analysis]').forEach((b) => b.onclick = () => openAnalysis(b.dataset.viewAnalysis, b.dataset.viewAnalysis.split(':')[0]));
+  document.querySelectorAll('[data-show-account]').forEach((b) => b.onclick = () => showAccount(b.dataset.showAccount));
   document.querySelectorAll('[data-account-machine-settings]').forEach((b) => b.onclick = () => openSettings({ provider: 'codex', section: 'machines' }));
   // The panel does not load the credential flows; switching continues in the main window.
   document.querySelectorAll('[data-switch-account]').forEach((b) => b.onclick = () => PANEL ? openSettings({ category: 'integrations', accountKey: b.dataset.switchAccount, section: 'switch' }) : window.AieyesAccountTargets.open(b.dataset.switchAccount));
@@ -2155,39 +2241,111 @@ function bindQuotaTools() {
   document.querySelectorAll('[data-credit-estimate]').forEach((b) => b.onclick = () => openQuotaEstimate(b.dataset.creditEstimate, 'credits'));
   document.querySelectorAll('[data-estimate]').forEach((b) => b.onclick = () => openQuotaEstimate(b.dataset.estimate, "weekly", b.dataset.estimateGroup));
 }
-function openPanelAccounts() {
-  if (state.estimateBusy) {notify(AieyesI18n.t("采样操作正在保存，请稍后调整面板选择。"));return;}
-  const accounts = quotaCardAccounts(),shown = shownQuotaSettings();
-  const preference = AieyesUI.panelPreference(),selected = AieyesUI.panelAccounts(shown, state.dashboard.quotaOrder ?? [], preference);
-  const rawProviders = [...new Set([...accounts.map((a) => a.provider), ...Object.keys(preference.providers)])],groups = [...new Set(rawProviders.map((p) => AieyesUI.agentProvider(p)))];
-  const members = (provider) => rawProviders.filter((p) => AieyesUI.sameAgent(p, provider));
-  const manual = (provider) => members(provider).some((p) => preference.providers[p]?.mode === 'custom');
-  quotaDialog(AieyesI18n.t("面板显示账户"), helpHTML(AieyesI18n.t("面板账户"), AieyesI18n.t("自动显示每类前 5 个账户；新增账户默认加入。手动选择可留空、不限数量，仅影响本机面板。")) + groups.map((provider) => '<fieldset class="panel-account-group" data-account-provider="' + escapeHTML(provider) + '"><legend>' + providerIdentity(provider) + '</legend><div class="panel-account-toolbar"><span class="selected-count"></span><button type="button" data-panel-default="' + escapeHTML(provider) + `">${AieyesI18n.t("恢复自动显示")}</button></div>` + accounts.filter((a) => AieyesUI.sameAgent(a.provider, provider)).map((a) => '<label><input type="checkbox" data-panel-account="' + escapeHTML(a.provider + ':' + a.id) + '" ' + (selected[a.provider]?.includes(a.provider + ':' + a.id) ? 'checked' : '') + '><span data-user-text>' + escapeHTML(a.name) + '</span></label>').join('') + '</fieldset>').join('') + (accounts.length ? '' : `<p>${AieyesI18n.t("尚无可显示额度的账户")}</p>`) + `<div class="dialog-foot"><button type="button" id="panel-accounts-cancel">${AieyesI18n.t("取消")}</button><button type="button" class="primary" id="panel-accounts-save">${AieyesI18n.t("保存面板选择")}</button></div>`, 'selection');
-  if (PANEL) $('#quota-dialog').dataset.opener = '#panel-more > summary';
-  const update = () => {for (const group of document.querySelectorAll('[data-account-provider]')) {const inputs = [...group.querySelectorAll('input')],count = inputs.filter((i) => i.checked).length;group.querySelector('.selected-count').textContent = AieyesI18n.t(manual(group.dataset.accountProvider) ? "手动 · {0} 个" : "自动 · {0} 个", count);}};
-  document.querySelectorAll('[data-panel-account]').forEach((input) => input.onchange = () => {const provider = input.closest('[data-account-provider]').dataset.accountProvider;for (const p of members(provider)) preference.providers[p] = { mode: 'custom', keys: [] };update();});update();
-  document.querySelectorAll('[data-panel-default]').forEach((button) => button.onclick = () => {const provider = button.dataset.panelDefault;for (const p of members(provider)) preference.providers[p] = { mode: 'auto', keys: [] };const choices = AieyesUI.panelAccounts(shown, state.dashboard.quotaOrder ?? [], preference),defaults = members(provider).flatMap((p) => choices[p] ?? []);button.closest('fieldset').querySelectorAll('input').forEach((input) => input.checked = defaults.includes(input.dataset.panelAccount));update();});
-  $('#panel-accounts-cancel').onclick = () => $('#quota-dialog').close();
-  $('#panel-accounts-save').onclick = () => {for (const group of document.querySelectorAll('[data-account-provider]')) {for (const provider of members(group.dataset.accountProvider)) if (preference.providers[provider]?.mode === 'custom') preference.providers[provider].keys = [...group.querySelectorAll('input:checked')].map((i) => i.dataset.panelAccount).filter((key) => key.startsWith(provider + ':'));}try {localStorage.setItem('aieyes.panel.accounts.v2', JSON.stringify(preference));} catch (error) {$('#quota-tool-error').textContent = AieyesI18n.t("无法保存本机选择：") + String(error);$('#quota-tool-error').hidden = false;return;}$('#quota-dialog').close();render();};
-  $('#panel-accounts-cancel').focus();
+// Panel accounts, account order and background sampling are settings pages; the cards, the
+// panel menu and the task button open them through these entry points.
+function openPanelAccounts() {return openSettings({ category: 'general', section: 'panel', focus: 'accounts' });}
+function openQuotaOrder() {return openSettings({ category: 'general', section: 'panel', focus: 'order' });}
+function openSampling() {return openSettings({ category: 'general', section: 'advanced', focus: 'sampling' });}
+// A failed operation stays on its settings section across the re-render that follows it.
+const settingsSectionErrors = new Map();
+const settingsSectionError = (key) => `<div class="error" data-settings-error role="alert" ${settingsSectionErrors.has(key) ? '' : 'hidden'}>${settingsSectionErrors.has(key) ? AieyesUI.errorHTML(settingsSectionErrors.get(key), AieyesI18n.t("保存失败，输入已保留")) : ''}</div>`;
+// Runs one estimate or order operation from a settings section; collection pauses meanwhile.
+async function settingsOperation(key, action, params) {
+  if (state.estimateBusy) {notify(AieyesI18n.t("后台采样操作仍在进行，可从任务入口返回"));return false;}
+  const section = $(`[data-settings-section="${key}"]`);
+  state.estimateBusy = true;settingsSectionErrors.delete(key);section?.setAttribute('aria-busy', 'true');section?.querySelectorAll('button').forEach((button) => button.disabled = true);
+  try {await api(action, { ...params, operationId: crypto.randomUUID() });return true;}
+  catch (error) {settingsSectionErrors.set(key, error.message ?? String(error));return false;}
+  finally {state.estimateBusy = false;await loadDashboard().catch(() => {});scheduleRefreshes();if (state.page === 'settings') renderSettings(false);}
 }
-function openQuotaOrder() {
-  if (state.estimateBusy) {notify(AieyesI18n.t("后台采样操作仍在进行，可从任务入口返回"));return;}
-  let keys = [...(state.dashboard.quotaOrder ?? state.settings.accounts.map((a) => a.provider + ':' + a.id))],dragged = null;
-  quotaDialog(AieyesI18n.t("调整账户顺序"), `<p class="muted">${AieyesI18n.t("拖动账户或使用上下按钮排序，应用于所有额度面板。")}</p><div id="quota-order-list"></div><button class="primary" id="quota-order-save">${AieyesI18n.t("保存顺序")}</button>`, 'selection');
+function panelAccountGroups() {
+  const accounts = quotaCardAccounts(),preference = AieyesUI.panelPreference();
+  const raw = [...new Set([...accounts.map((a) => a.provider), ...Object.keys(preference.providers)])];
+  return { accounts, preference, groups: [...new Set(raw.map((p) => AieyesUI.agentProvider(p)))], members: (provider) => raw.filter((p) => AieyesUI.sameAgent(p, provider)) };
+}
+function panelAccountsHTML() {
+  const { accounts, preference, groups, members } = panelAccountGroups(),selected = AieyesUI.panelAccounts(shownQuotaSettings(), state.dashboard?.quotaOrder ?? [], preference);
+  const group = (provider) => {
+    const rows = accounts.filter((a) => AieyesUI.sameAgent(a.provider, provider)),shown = (a) => selected[a.provider]?.includes(a.provider + ':' + a.id),manual = members(provider).some((p) => preference.providers[p]?.mode === 'custom');
+    return `<fieldset class="panel-account-group" data-account-provider="${escapeHTML(provider)}"><legend>${providerIdentity(provider)}</legend><div class="panel-account-toolbar"><span class="selected-count">${AieyesI18n.t(manual ? "手动 · {0} 个" : "自动 · {0} 个", rows.filter(shown).length)}</span><button type="button" data-panel-default="${escapeHTML(provider)}" ${manual ? '' : 'disabled'}>${AieyesI18n.t("恢复自动显示")}</button></div>${rows.map((a) => `<label><input type="checkbox" data-panel-account="${escapeHTML(a.provider + ':' + a.id)}" ${shown(a) ? 'checked' : ''}><span data-user-text>${escapeHTML(a.name)}</span></label>`).join('')}</fieldset>`;
+  };
+  return `<section class="card panel-accounts" data-settings-section="accounts"><div class="between"><h2>${AieyesI18n.t("面板显示账户")}</h2>${helpHTML(AieyesI18n.t("面板账户"), AieyesI18n.t("自动显示每类前 5 个账户；新增账户默认加入。手动选择可留空、不限数量，仅影响本机面板。"))}</div>${groups.map(group).join('')}${accounts.length ? '' : `<p class="muted">${AieyesI18n.t("尚无可显示额度的账户")}</p>`}${settingsSectionError('accounts')}</section>`;
+}
+// Each change applies at once: the panel window follows the stored choice through its storage event.
+function bindPanelAccounts() {
+  const root = $('[data-settings-section=accounts]');if (!root) return;
+  const error = root.querySelector('[data-settings-error]');
+  // The stored choice decides every checkbox, count and button, so the page cannot drift from it.
+  const sync = () => {
+    const { preference, members } = panelAccountGroups(),selected = AieyesUI.panelAccounts(shownQuotaSettings(), state.dashboard?.quotaOrder ?? [], preference);
+    for (const group of root.querySelectorAll('[data-account-provider]')) {
+      const manual = members(group.dataset.accountProvider).some((p) => preference.providers[p]?.mode === 'custom'),inputs = [...group.querySelectorAll('[data-panel-account]')];
+      for (const input of inputs) input.checked = Object.values(selected).some((keys) => keys.includes(input.dataset.panelAccount));
+      group.querySelector('.selected-count').textContent = AieyesI18n.t(manual ? "手动 · {0} 个" : "自动 · {0} 个", inputs.filter((input) => input.checked).length);
+      group.querySelector('[data-panel-default]').disabled = !manual;
+    }
+  };
+  const store = (provider, choice) => {
+    const { preference, members } = panelAccountGroups();
+    for (const p of members(provider)) preference.providers[p] = choice(p);
+    try {localStorage.setItem('aieyes.panel.accounts.v2', JSON.stringify(preference));error.hidden = true;}
+    catch (failure) {AieyesUI.showError(error, AieyesI18n.t("无法保存本机选择：") + String(failure), AieyesI18n.t("保存失败，输入已保留"));error.hidden = false;}
+    sync();
+  };
+  root.querySelectorAll('[data-panel-account]').forEach((input) => input.onchange = () => {
+    const group = input.closest('[data-account-provider]'),checked = [...group.querySelectorAll('input:checked')].map((i) => i.dataset.panelAccount);
+    store(group.dataset.accountProvider, (p) => ({ mode: 'custom', keys: checked.filter((key) => key.startsWith(p + ':')) }));
+  });
+  root.querySelectorAll('[data-panel-default]').forEach((button) => button.onclick = () => {store(button.dataset.panelDefault, () => ({ mode: 'auto', keys: [] }));root.querySelector(`[data-account-provider="${CSS.escape(button.dataset.panelDefault)}"] [data-panel-account]`)?.focus({ preventScroll: true });});
+}
+// An unsaved order survives the live re-renders of the page until it is saved.
+let quotaOrderDraft = null;
+const savedQuotaOrder = () => [...(state.dashboard?.quotaOrder ?? state.settings.accounts.map((a) => a.provider + ':' + a.id))];
+function quotaOrderHTML() {
+  return `<section class="card quota-order" data-settings-section="order"><h2>${AieyesI18n.t("账户顺序")}</h2><p class="muted">${AieyesI18n.t("拖动账户或使用上下按钮排序，应用于所有额度面板。")}</p><div id="quota-order-list"></div><div class="actions"><button type="button" class="primary" id="quota-order-save">${AieyesI18n.t("保存顺序")}</button></div>${settingsSectionError('order')}</section>`;
+}
+function bindQuotaOrder() {
+  const list = $('#quota-order-list'),save = $('#quota-order-save');if (!list || !save) return;
+  const saved = savedQuotaOrder();
+  let keys = quotaOrderDraft ? [...quotaOrderDraft.filter((key) => saved.includes(key)), ...saved.filter((key) => !quotaOrderDraft.includes(key))] : [...saved],dragged = null;
   function draw(focus) {
-    const positions = new Map([...document.querySelectorAll('[data-order]')].map((row) => [row.dataset.order, row.getBoundingClientRect().top]));
-    $('#quota-order-list').innerHTML = keys.map((key, i) => `<div class="quota-order-row" draggable="true" data-order="${escapeHTML(key)}"><span aria-hidden="true">${uiIcon('grip')}</span><span class="order-account">${providerMark(key.split(':')[0])}${escapeHTML(historicalAccounts().find((a) => a.provider + ':' + a.id === key)?.name ?? key)}</span><button type="button" data-direction="-1" aria-label="${AieyesI18n.t("上移账户")}" ${i === 0 ? 'disabled' : ''}>${uiIcon('up')}</button><button type="button" data-direction="1" aria-label="${AieyesI18n.t("下移账户")}" ${i === keys.length - 1 ? 'disabled' : ''}>${uiIcon('down')}</button></div>`).join('');
-    for (const row of document.querySelectorAll('[data-order]')) {
-      row.ondragstart = (e) => {document.querySelectorAll('[data-order]').forEach((el) => el.getAnimations().forEach((animation) => animation.cancel()));dragged = row.dataset.order;e.dataTransfer.effectAllowed = 'move';e.dataTransfer.setData('text/plain', dragged);};row.ondragend = () => {dragged = null;document.querySelectorAll('.drop-target').forEach((el) => el.classList.remove('drop-target'));};row.ondragover = (e) => {e.preventDefault();row.classList.add('drop-target');};row.ondragleave = () => row.classList.remove('drop-target');
+    const positions = new Map([...list.querySelectorAll('[data-order]')].map((row) => [row.dataset.order, row.getBoundingClientRect().top]));
+    const changed = JSON.stringify(keys) !== JSON.stringify(saved);quotaOrderDraft = changed ? [...keys] : null;save.disabled = !changed;save.hidden = !keys.length;
+    list.innerHTML = keys.map((key, i) => `<div class="quota-order-row" draggable="true" data-order="${escapeHTML(key)}"><span aria-hidden="true">${uiIcon('grip')}</span><span class="order-account">${providerMark(key.split(':')[0])}<span data-user-text>${escapeHTML(historicalAccounts().find((a) => a.provider + ':' + a.id === key)?.name ?? key)}</span></span><button type="button" data-direction="-1" aria-label="${AieyesI18n.t("上移账户")}" ${i === 0 ? 'disabled' : ''}>${uiIcon('up')}</button><button type="button" data-direction="1" aria-label="${AieyesI18n.t("下移账户")}" ${i === keys.length - 1 ? 'disabled' : ''}>${uiIcon('down')}</button></div>`).join('') || `<p class="muted">${AieyesI18n.t("尚无可显示额度的账户")}</p>`;
+    for (const row of list.querySelectorAll('[data-order]')) {
+      row.ondragstart = (e) => {list.querySelectorAll('[data-order]').forEach((el) => el.getAnimations().forEach((animation) => animation.cancel()));dragged = row.dataset.order;e.dataTransfer.effectAllowed = 'move';e.dataTransfer.setData('text/plain', dragged);};row.ondragend = () => {dragged = null;list.querySelectorAll('.drop-target').forEach((el) => el.classList.remove('drop-target'));};row.ondragover = (e) => {e.preventDefault();row.classList.add('drop-target');};row.ondragleave = () => row.classList.remove('drop-target');
       row.ondrop = (e) => {e.preventDefault();if (!dragged || dragged === row.dataset.order) return;const to = keys.indexOf(row.dataset.order);keys.splice(keys.indexOf(dragged), 1);keys.splice(to, 0, dragged);dragged = null;requestAnimationFrame(() => draw());};
       row.querySelectorAll('button').forEach((b) => b.onclick = () => {const i = keys.indexOf(row.dataset.order),j = i + Number(b.dataset.direction);[keys[i], keys[j]] = [keys[j], keys[i]];draw({ key: row.dataset.order, direction: b.dataset.direction });});
     }
-    if (focus && !matchMedia('(prefers-reduced-motion: reduce)').matches) for (const row of document.querySelectorAll('[data-order]')) {const old = positions.get(row.dataset.order);if (old != null) row.animate([{ transform: `translateY(${old - row.getBoundingClientRect().top}px)` }, { transform: 'translateY(0)' }], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' });}
-    if (focus) {const row = [...document.querySelectorAll('[data-order]')].find((r) => r.dataset.order === focus.key);(row?.querySelector(`button[data-direction="${focus.direction}"]:not(:disabled)`) ?? row?.querySelector('button:not(:disabled)'))?.focus();}
+    if (focus && !matchMedia('(prefers-reduced-motion: reduce)').matches) for (const row of list.querySelectorAll('[data-order]')) {const old = positions.get(row.dataset.order);if (old != null) row.animate([{ transform: `translateY(${old - row.getBoundingClientRect().top}px)` }, { transform: 'translateY(0)' }], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' });}
+    if (focus) {const row = [...list.querySelectorAll('[data-order]')].find((r) => r.dataset.order === focus.key);(row?.querySelector(`button[data-direction="${focus.direction}"]:not(:disabled)`) ?? row?.querySelector('button:not(:disabled)'))?.focus();}
   }
-  draw();$('#quota-order-save').onclick = async () => {if (await quotaAction('quotas.order.set', { keys })) {$('#quota-dialog').close();flushRender();}};
+  draw();
+  save.onclick = () => void settingsOperation('order', 'quotas.order.set', { keys });
 }
+const samplingRecords = () => [...(state.dashboard?.quotaEstimates ?? []), ...(state.dashboard?.creditEstimates ?? [])].filter((e) => e.status !== 'completed');
+function samplingSettingsHTML() {
+  const rows = samplingRecords().map((e, i) => `<div class="sampling-row"><strong data-user-text>${escapeHTML(historicalAccounts().find((a) => a.provider + ':' + a.id === e.accountKey)?.name ?? e.accountKey)}</strong><span>${e.kind === 'credits' ? AieyesI18n.t("credit 价值") : e.valuationMode === 'fiveHour' ? AieyesI18n.t("5h / 7d 额度价值") : AieyesI18n.t("7d 整周价值")} · ${estimateStatus(e)}</span>${e.reason ? `<div class="error">${escapeHTML(AieyesI18n.message(e.reason))}</div>` : ''}<div class="actions"><button type="button" data-sampling-open="${i}">${AieyesI18n.t("查看与管理")}</button><button type="button" data-sampling-stop="${i}">${AieyesI18n.t("结束采样")}</button></div></div>`).join('');
+  return `<section class="card sampling-settings" data-settings-section="sampling"><h2>${AieyesI18n.t("后台采样")}</h2><p class="muted">${AieyesI18n.t("采样在后台持续进行，点击“结束采样”停止。")}</p>${rows || `<p>${AieyesI18n.t("当前没有进行中的采样")}</p>`}${settingsSectionError('sampling')}</section>`;
+}
+function bindSamplingSettings() {
+  const root = $('[data-settings-section=sampling]');if (!root) return;
+  const records = samplingRecords();
+  root.querySelectorAll('[data-sampling-open]').forEach((b) => b.onclick = () => {const e = records[Number(b.dataset.samplingOpen)];openQuotaEstimate(e.accountKey, e.kind === 'credits' ? 'credits' : 'weekly', e.groupId ?? '');});
+  root.querySelectorAll('[data-sampling-stop]').forEach((b) => b.onclick = () => {const e = records[Number(b.dataset.samplingStop)];void settingsOperation('sampling', (e.kind === 'credits' ? 'creditEstimates.' : 'quotaEstimates.') + 'stop', { id: e.id });});
+}
+window.AieyesSettingsPages?.register('panel', { body: () => (window.AieyesDesktop?.panelWidthHTML() ?? '') + panelAccountsHTML() + quotaOrderHTML(), bind() {window.AieyesDesktop?.bindPanelWidth();bindPanelAccounts();bindQuotaOrder();} });
+// Settings › 通知 › 服务器告警: the same thresholds and duration drive the system notification and
+// the webhook server alert. Saved with the page's other drafted fields.
+const SERVER_ALERT_DURATIONS = [60, 180, 300, 600, 900, 1800];
+function serverAlertFieldsHTML(s) {
+  const alerts = { enabled: false, cpuPercent: 90, memoryPercent: 90, durationSeconds: 300, ...s.serverAlerts };
+  const choices = (values, current) => [...new Set([...values, current])].filter(Number.isFinite).sort((a, b) => a - b);
+  const percents = (current) => choices(Array.from({ length: 11 }, (_, i) => 50 + i * 5), Math.round(current)).map((v) => [String(v), `${v}%`]);
+  return `<h3>${AieyesI18n.t("服务器告警")}</h3><div class="setting-row"><label><input type="checkbox" role="switch" name="serverAlertsEnabled" ${alerts.enabled ? 'checked' : ''}>${AieyesI18n.t("CPU 或内存持续偏高时发送系统通知")}</label></div>${select('serverAlertCpu', AieyesI18n.t("CPU 阈值"), percents(alerts.cpuPercent), String(Math.round(alerts.cpuPercent)))}${select('serverAlertMemory', AieyesI18n.t("内存阈值"), percents(alerts.memoryPercent), String(Math.round(alerts.memoryPercent)))}${select('serverAlertDuration', AieyesI18n.t("持续时间"), choices(SERVER_ALERT_DURATIONS, alerts.durationSeconds).map((v) => [String(v), AieyesI18n.t("{0} 分钟", Math.round(v / 60))]), String(alerts.durationSeconds))}<p class="muted tiny">${AieyesI18n.t("使用率高于阈值并持续所选时间后通知一次；回落后再次升高会重新通知。Webhook 的服务器告警使用同样的阈值，检查按服务器刷新间隔进行。")}</p>`;
+}
+window.AieyesSettingsPages?.register('notifications', { fields: serverAlertFieldsHTML });
+window.AieyesSettingsPages?.register('advanced', { body: samplingSettingsHTML, bind: bindSamplingSettings });
 async function openQuotaEstimate(key, kind = "weekly", group = "", snapshot = state.dashboard) {
   if (state.estimateBusy) {const dialog = $('#quota-dialog');if (dialog && !dialog.open) dialog.showModal();return;}
   const returnProvider = $('#quota-dialog')?.dataset.valuationProvider;

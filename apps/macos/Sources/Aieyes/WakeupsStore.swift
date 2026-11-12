@@ -94,6 +94,10 @@ struct WakeStatus: Decodable { var installed: Bool, enabled: Bool, timezone: Str
             do {
                 let next: WakeStatus = try await reader(id).call("wakeups.status", params: ["id": id])
                 guard records.contains(where: { $0.id == id }), revision == taskRevisions[id, default: 0], !Task.isCancelled else { return false }
+                if let previous = statuses[id], let last = next.history.first, last.status == "success",
+                   !previous.history.contains(where: { $0.id == last.id && $0.status == "success" }) {
+                    NotificationCenter.default.post(name: Notification.Name("aieyes.eventFeedback"), object: nil)
+                }
                 statuses[id] = next; statusErrors[id] = nil
                 operationErrors[id]?["status"] = nil
                 return true

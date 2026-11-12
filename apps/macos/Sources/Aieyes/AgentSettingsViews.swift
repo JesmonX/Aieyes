@@ -132,6 +132,7 @@ private struct AgentEntrySelector: View {
                         }.onMove { source, destination in
                             guard managementSearch.isEmpty else { return }
                             var ids = model.settingsAgentIDs; ids.move(fromOffsets: source, toOffset: destination)
+                            if ids != model.settingsAgentIDs { Haptics.step() }
                             Task { await model.orderAgents(ids) }
                         }.moveDisabled(!managementSearch.isEmpty || model.settingsSaving)
                     }

@@ -8,7 +8,8 @@ if [ "${AIEYES_SKIP_BUILD:-}" != 1 ]; then
 fi
 TEST_DATA=$(mktemp -d "$PROJECT_DIR/.build/navigation-fixture.XXXXXX")
 trap 'rm -rf "$TEST_DATA"' EXIT HUP INT TERM
-export AIEYES_DATA_DIR="$TEST_DATA" AIEYES_CORE_PATH="$PROJECT_DIR/scripts/preview-quota-core.py"
+# The multi-account scenario gives the overview enough account cards to scroll.
+export AIEYES_DATA_DIR="$TEST_DATA" AIEYES_CORE_PATH="$PROJECT_DIR/scripts/preview-quota-core.py" AIEYES_UI_SCENARIO=multi
 SPARKLE_FRAMEWORK="$PROJECT_DIR/.build/swift/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64"
 BUILD_DIR="$PROJECT_DIR/.build/swift/debug"
 set --

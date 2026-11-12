@@ -15,7 +15,9 @@ struct Registry {
 }
 struct Task {
     method: String,
+    query_id: Mutex<String>,
     cancel: AtomicBool,
+    query_cancelled: AtomicBool,
     critical: AtomicUsize,
     protected: bool,
     cancellable: bool,
@@ -70,7 +72,9 @@ pub fn enter(method: &str) -> Result<Scope> {
     );
     let task = Arc::new(Task {
         method: method.into(),
+        query_id: Mutex::new(String::new()),
         cancel: AtomicBool::new(false),
+        query_cancelled: AtomicBool::new(false),
         critical: AtomicUsize::new(0),
         protected: matches!(behavior, "finish" | "complete"),
         cancellable: behavior == "cancel",
@@ -80,6 +84,10 @@ pub fn enter(method: &str) -> Result<Scope> {
     Ok(inherit(Some(Context(task))))
 }
 pub fn check() -> Result<()> {
+    ensure!(
+        !context().is_some_and(|c| c.0.query_cancelled.load(Ordering::Acquire)),
+        "查询已取消"
+    );
     ensure!(
         !context().is_some_and(
             |c| c.0.cancel.load(Ordering::Acquire) && c.0.critical.load(Ordering::Acquire) == 0
@@ -135,5 +143,58 @@ impl Drop for Critical {
         if let Some(c) = &self.0 {
             c.0.critical.fetch_sub(1, Ordering::AcqRel);
         }
+    }
+}
+
+// Query cancellation is scoped to one caller-supplied id, including queued queries.
+pub fn identify_query(id: &str) {
+    if let Some(context) = context() {
+        *context.0.query_id.lock().unwrap() = id.to_owned();
+    }
+}
+pub fn cancel_query(id: &str) -> serde_json::Value {
+    let registry = registry().lock().unwrap();
+    let mut count = 0;
+    if !id.is_empty() {
+        for task in registry.tasks.iter().filter_map(|task| task.upgrade()) {
+            if matches!(task.method.as_str(), "dashboard" | "dashboard.summary")
+                && *task.query_id.lock().unwrap() == id
+            {
+                task.query_cancelled.store(true, Ordering::Release);
+                task.cancel.store(true, Ordering::Release);
+                count += 1;
+            }
+        }
+    }
+    serde_json::json!({"cancelled":count})
+}
+type Progress = std::sync::Arc<Mutex<Box<dyn FnMut(serde_json::Value) + Send>>>;
+thread_local! { static QUERY_PROGRESS: RefCell<Option<Progress>> = const { RefCell::new(None) }; }
+pub(crate) struct QueryProgress(Option<Progress>);
+impl Drop for QueryProgress {
+    fn drop(&mut self) {
+        QUERY_PROGRESS.with(|p| *p.borrow_mut() = self.0.take());
+    }
+}
+pub(crate) fn query_progress(callback: Progress) -> QueryProgress {
+    QueryProgress(QUERY_PROGRESS.with(|p| p.replace(Some(callback))))
+}
+pub(crate) fn report_query(done: i64, total: i64) {
+    QUERY_PROGRESS.with(|p| { if let Some(callback) = p.borrow().as_ref() {
+        callback.lock().unwrap()(serde_json::json!({"kind":"dashboard.progress","stage":format!("dashboard:{done}:{total}"),"done":done,"total":total}));
+    }});
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+    #[test]
+    fn cancellation_only_affects_the_matching_query() {
+        let _scope = enter("dashboard").unwrap();
+        identify_query("query-regression");
+        assert_eq!(cancel_query("other")["cancelled"], 0);
+        assert!(check().is_ok());
+        assert_eq!(cancel_query("query-regression")["cancelled"], 1);
+        assert!(check().is_err());
     }
 }

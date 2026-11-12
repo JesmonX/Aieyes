@@ -27,7 +27,7 @@ for scenario in ['empty','single','multi','long','failure','capacity']:
     for theme in ['light','dark']:
         for symbol in ['circle.dotted','waveform','sparkles','gearshape.2','checkmark','pause.fill','questionmark']:
             assert (root/scenario/('menu-symbol-'+symbol+'-'+theme+'.png')).stat().st_size > 1000
-        for surface in ['setup-guide', 'setup-network', 'setup-minimum', 'server-panel-folded', 'server-panel-expanded', 'server-minimum-folded', 'server-minimum-expanded', 'dashboard','menubar','low-panel','minimum-detail','increased-contrast','settings-prices','settings-general','servers']:
+        for surface in ['setup-guide', 'setup-network', 'setup-minimum', 'server-panel-folded', 'server-panel-expanded', 'server-minimum-folded', 'server-minimum-expanded', 'server-trend-panel', 'server-trend-minimum', 'dashboard','menubar','low-panel','minimum-detail','increased-contrast','settings-prices','settings-general','servers']:
             assert (root/scenario/(surface+'-'+theme+'.png')).stat().st_size > 1000
 print('Native six-state light/dark, settings, minimum size, reduced transparency and increased contrast screenshots passed')
 PY

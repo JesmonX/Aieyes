@@ -283,21 +283,36 @@ struct NeutralCard: ViewModifier {
     @Environment(\.previewAccessibleSurfaces) private var previewAccessible
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.colorScheme) private var scheme
+    private var plain: Bool { previewAccessible || reduceTransparency || contrast == .increased }
     func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Palette.radiusCard)
         content.background {
-            if previewAccessible || reduceTransparency || contrast == .increased { RoundedRectangle(cornerRadius: Palette.radiusCard).fill(Color(nsColor: .controlBackgroundColor)) }
-            else if translucentPanel { RoundedRectangle(cornerRadius: Palette.radiusCard).fill(Color(nsColor: .controlBackgroundColor).opacity(DesignTokens.panelCardOpacity)) }
+            if plain { shape.fill(Color(nsColor: .controlBackgroundColor)) }
+            else if translucentPanel { shape.fill(scheme == .light ? Color.white.opacity(0.94) : Color(nsColor: .controlBackgroundColor).opacity(DesignTokens.panelCardOpacity)) }
             // The detail page already sits on a material; a second blur under each card only muddies it.
-            else { RoundedRectangle(cornerRadius: Palette.radiusCard).fill(Palette.detailCard) }
-            RoundedRectangle(cornerRadius: Palette.radiusCard).fill(LinearGradient(colors: [tint.opacity(0.18), tint.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomTrailing))
+            // The card is lifted by its own shadow, so text inside casts none.
+            else { shape.fill(Palette.detailCard).modifier(CardElevation(dark: scheme == .dark)) }
+            shape.fill(LinearGradient(colors: [tint.opacity(0.18), tint.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomTrailing))
         }
         .overlay {
-            if !(previewAccessible || reduceTransparency || contrast == .increased) {
-                RoundedRectangle(cornerRadius: Palette.radiusCard).strokeBorder(LinearGradient(colors: [.white.opacity(DesignTokens.edgeHighlightOpacity), .clear], startPoint: .top, endPoint: .init(x: 0.5, y: 0.12)), lineWidth: DesignTokens.borderWidth).allowsHitTesting(false)
+            if !plain {
+                shape.strokeBorder(LinearGradient(colors: [.white.opacity(DesignTokens.edgeHighlightOpacity), .clear], startPoint: .top, endPoint: .init(x: 0.5, y: 0.12)), lineWidth: DesignTokens.borderWidth).allowsHitTesting(false)
             }
         }
-        .shadow(color: .black.opacity(previewAccessible || reduceTransparency || contrast == .increased ? 0 : 0.06), radius: 9, y: 3)
-        .overlay(RoundedRectangle(cornerRadius: Palette.radiusCard).strokeBorder(Palette.cardBorder.opacity(previewAccessible || contrast == .increased ? 1 : DesignTokens.cardBorderOpacity), lineWidth: previewAccessible || contrast == .increased ? 2 : DesignTokens.borderWidth))
+        // Panel cards are translucent, so the whole card keeps the soft shadow in both appearances.
+        .shadow(color: .black.opacity(!plain && translucentPanel ? (scheme == .light ? 0.035 : DesignTokens.elevationShadowDark) : 0), radius: DesignTokens.elevationShadowBlur, y: DesignTokens.elevationShadowY)
+        .overlay(shape.strokeBorder(Palette.cardBorder.opacity(previewAccessible || contrast == .increased ? 1 : DesignTokens.cardBorderOpacity), lineWidth: previewAccessible || contrast == .increased ? 2 : DesignTokens.borderWidth))
+    }
+}
+/// Card elevation on the detail page. Light cards are lighter than the page and carry a contact
+/// shadow plus a soft key shadow; dark cards are lighter by colour and keep the soft shadow alone.
+struct CardElevation: ViewModifier {
+    var dark: Bool
+    func body(content: Content) -> some View {
+        content
+            .shadow(color: .black.opacity(dark ? DesignTokens.elevationContactDark : DesignTokens.elevationContactLight), radius: DesignTokens.elevationContactBlur, y: DesignTokens.elevationContactY)
+            .shadow(color: .black.opacity(dark ? DesignTokens.elevationShadowDark : DesignTokens.elevationShadowLight), radius: DesignTokens.elevationShadowBlur, y: DesignTokens.elevationShadowY)
     }
 }
 struct RootView: View, Equatable {
@@ -306,6 +321,7 @@ struct RootView: View, Equatable {
     let model: AppModel
     @StateObject private var observation: SurfaceObservation
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.previewAccessibleSurfaces) private var previewAccessible
     var compact = true
@@ -357,13 +373,17 @@ struct RootView: View, Equatable {
     // Keep each modifier chain small enough for release-build type checking.
     private var rootLayout: some View {
         VStack(spacing: 0) {
+            QueryProgressView(activity: model.queryActivity, cancel: model.cancelDashboardQuery)
             if compact { header }
             Divider().opacity(0.55)
+            ScrollViewReader { proxy in
             ScrollView {
                 Group {
-                    if activePage == "servers" { LazyVStack(alignment: .leading, spacing: compact ? 8 : 12) { serverContent } }
-                    else { VStack(alignment: .leading, spacing: compact ? DesignTokens.panelSectionGap : DesignTokens.spaceSection) { if activePage == "analysis" { analysisContent } else { agentContent } } }
+                    if activePage == "servers" { LazyVStack(alignment: .leading, spacing: compact ? 8 : 12) { serverContent }.transition(.page(reduced: reduceMotion)) }
+                    else { VStack(alignment: .leading, spacing: compact ? DesignTokens.panelSectionGap : DesignTokens.spaceSection) { if activePage == "analysis" { analysisContent } else { agentContent } }.transition(.page(reduced: reduceMotion)) }
                 }.padding(compact ? DesignTokens.panelPadding : DesignTokens.contentPadding).background(OverlayScrollStyle()).background(ScrollMemory(key: scope + "." + activePage, ready: usageDashboard.generatedAt > 0))
+                    .background { if !compact && activePage == "agent" { AccountFocusScroller(store: model.accountFocus, proxy: proxy, reveal: revealAccount) } }
+            }
             }
             Divider().opacity(0.55)
             footer
@@ -377,7 +397,7 @@ struct RootView: View, Equatable {
         .background { rootBackground }
         .environment(\.translucentPanel, compact)
         .environment(\.surfaceActive, model.isWindowVisible(compact ? "panel" : "detail") && (compact || model.detailPage == activePage))
-        .motion(.standard, value: activePage)
+        .pageMotion(value: activePage)
         .font(AppFont.body).disabled(model.installingUpdate)
         .aieyesAccent()
     }
@@ -406,21 +426,27 @@ struct RootView: View, Equatable {
     private var header: some View { SurfaceHeader(model: model, tab: $tab, compact: compact, activePage: activePage) }
     private var footer: some View { SurfaceFooter(model: model, compact: compact, activePage: activePage) }
     @ViewBuilder private var agentContent: some View {
+        WhatsNewBanner(service: model.outbound) { model.openWhatsNew() }
         if model.settings.sources.isEmpty && model.settings.accounts.isEmpty { connectionGuide }
         // One chip row (not ViewThatFits) so the sliding selection has a single matched source.
         EdgeFadingScroller(selection: filters.provider) { HStack(spacing: 4) { agentButtons }.motion(.spring, value: filters.provider) }
         sessionStrip
         Surface(spacing: 6, padding: 12) {
             ViewThatFits(in: .horizontal) {
-                HStack(spacing:24) { todayHeading; todayMetrics; Spacer(minLength:8); analysisAction }
-                VStack(alignment:.leading,spacing:8) { HStack { todayHeading; Spacer(); analysisAction }; todayMetrics }
+                HStack(spacing:24) { todayHeading; todayReading; Spacer(minLength:8); analysisAction }
+                VStack(alignment:.leading,spacing:8) { HStack { todayHeading; Spacer(); analysisAction }; todayReading }
             }
         }
         if usageDashboard.summary.hasDisplayCredits { NativeCreditsView(usage: usageDashboard.summary, compact: true) }
         quotaSection
-        if !model.runningEstimates.isEmpty { Button(model.samplingSummary + L(" · 管理采样")) { model.showSampling?() }.font(AppFont.caption) }
+        if !model.runningEstimates.isEmpty { Button(model.samplingSummary + L(" · 管理采样")) { model.openSettings(.init(category: "general", section: "advanced")) }.font(AppFont.caption) }
     }
     private var todayHeading: some View { HStack(spacing:6) { Text(L("今日用量")).font(AppFont.caption).foregroundStyle(.secondary); RefreshIndicator(model:model,key:"scan") }.fixedSize() }
+    /// The first read has not arrived: the same row as a skeleton, so no zero shows and nothing moves when it lands.
+    @ViewBuilder private var todayReading: some View {
+        if dashboardReady { todayMetrics } else { todayMetrics.modifier(LoadingPlaceholder(active: true)) }
+    }
+    private var dashboardReady: Bool { usageDashboard.generatedAt > 0 }
     private var todayMetrics: some View {
         HStack(spacing:20) {
             FloatingTokenCard(total:usageDashboard.summary.total,tokens:usageDashboard.summary.tokens,inline:true,valueSize:compact ? DesignTokens.fontPanelOverview : DesignTokens.fontNumber)
@@ -478,9 +504,10 @@ struct RootView: View, Equatable {
             }
             if !compact { CacheSummaryCard(tokens: usageDashboard.summary.tokens) }
             if usageDashboard.summary.hasDisplayCredits { Surface { NativeCreditsView(usage: usageDashboard.summary, models: usageDashboard.models, compact: compact, modelNames: usageDashboard.modelDisplayNames ?? [:]) } }
-        } else if !model.settings.sources.isEmpty { usageEmptyState }
+        } else if !dashboardReady && !model.settings.sources.isEmpty { usageSkeleton }
+        else if !model.settings.sources.isEmpty { usageEmptyState }
         if !model.runningEstimates.isEmpty {
-            Button { model.showSampling?() } label: { HStack { Text(model.samplingSummary); Spacer(); Text(L("管理采样")); Image(systemName: "chevron.right") }.font(AppFont.secondary) }.buttonStyle(.plain).foregroundStyle(model.samplingNeedsAttention ? Palette.warn : Palette.accent)
+            Button { model.openSettings(.init(category: "general", section: "advanced")) } label: { HStack { Text(model.samplingSummary); Spacer(); Text(L("管理采样")); Image(systemName: "chevron.right") }.font(AppFont.secondary) }.buttonStyle(.plain).foregroundStyle(model.samplingNeedsAttention ? Palette.warn : Palette.accent)
         }
         if hasUsageData {
             if compact {
@@ -496,6 +523,13 @@ struct RootView: View, Equatable {
     }
     private var trendSurface: some View { Surface(title: L("每日用量")) { UsageChart(days: usageDashboard.trendDays, rows: usageDashboard.dayModels, cost: costMode, modelNames: usageDashboard.modelDisplayNames ?? [:]).equatable().frame(minHeight: DesignTokens.chartSurfaceHeight) } }
     private var modelSurface: some View { Surface(title: L("模型分布")) { ModelChart(models: usageDashboard.models, cost: costMode, modelNames: usageDashboard.modelDisplayNames ?? [:]).equatable().frame(minHeight: DesignTokens.chartSurfaceHeight) } }
+    /// Stands in for the stat cards until the first read, instead of an empty state that would be wrong.
+    private var usageSkeleton: some View {
+        HStack(spacing: 10) {
+            if compact { FloatingTokenCard(total: 0, tokens: Tokens()) } else { StatCard(title: L("总 Token"), value: "—", detail: "", icon: "sparkle", accent: Palette.accent) }
+            StatCard(title: L("API 等价成本"), value: "—", detail: "", icon: "dollarsign.circle", accent: Palette.accent)
+        }.modifier(LoadingPlaceholder(active: true))
+    }
     private var usageEmptyState: some View {
         let onlyQuota = model.settings.sources.allSatisfy { $0.provider == "deepseek" }
         let failed = usageDashboard.sources.contains { $0.enabled && $0.status?.failureReason != nil }
@@ -579,6 +613,19 @@ struct RootView: View, Equatable {
             (usageDashboard.quotaOrder?.firstIndex(of: $0.key) ?? Int.max) < (usageDashboard.quotaOrder?.firstIndex(of: $1.key) ?? Int.max)
         }
     }
+    /// Brings one account's card into the overview for `AccountFocusScroller`: widens the Agent
+    /// filter when it hides the account and opens the account's group. Returns the scroll target.
+    private func revealAccount(_ key: String) -> String? {
+        guard let account = model.quotaCardAccounts(usageDashboard.quotas).first(where: { $0.key == key }),
+              let provider = CoreContract.agentProviders.first(where: { CoreContract.sameAgent($0, account.provider) }) else { return nil }
+        if !filtered(account) { var next = filters; next.provider = "all"; model.updateFilters(next, scope: scope) }
+        guard ringStyle == nil else {
+            // Ring styles have one tile per quota group; the account's first tile is the target.
+            return usageDashboard.quotas.first { $0.id == key }.flatMap { QuotaRingModel.items($0).first?.id } ?? key
+        }
+        UserDefaults.standard.set(true, forKey: "quota.group." + scope + "." + provider)
+        return AccountFocusStore.anchor(key)
+    }
     private func quotaGroup(_ provider: String) -> some View {
         let accounts = quotaAccounts(provider)
         return QuotaGroupSection(key: "quota.group." + scope + "." + provider, model: model, provider: provider,
@@ -588,7 +635,10 @@ struct RootView: View, Equatable {
                 Group {
                 if let quota = displayedQuotas.first(where: { $0.id == account.key }) { AccountObservedQuota(model: model, quota: quota, compact: compact, defaultExpanded: false) }
                 else { QuotaAwaitingCard(model: model, account: account, provider: provider) }
-                }.modifier(AccountCardActions(model: model, account: account))
+                }.modifier(AccountCardActions(model: model, account: account, opensMainWindow: compact))
+                    .modifier(AccountFocusHighlight(store: model.accountFocus, account: compact ? "" : account.key))
+                    .modifier(ReadingHighlight(stamp: displayedQuotas.first(where: { $0.id == account.key })?.updatedAt))
+                    .id(AccountFocusStore.anchor(account.key))
                     // Collapsed cards of one group share the tallest collapsed height.
                     .environment(\.collapsedQuotaHeight, collapsedQuotaHeights[provider] ?? 0)
                     .transformPreference(CollapsedQuotaMeasurements.self) { values in values = values.values.max().map { [provider: $0] } ?? [:] }
@@ -605,7 +655,7 @@ struct RootView: View, Equatable {
                 if ringStyle != nil { QuotaRingLegend().padding(.leading, 4) }
                 Spacer()
                 QuotaStylePicker(selection: $quotaStyle)
-                Button { model.showQuotaOrder?() } label: { Image(systemName: "arrow.up.arrow.down") }.help(L("调整账户顺序")).accessibilityLabel(L("调整账户顺序"))
+                Button { model.openSettings(.init(category: "general", section: "panel")) } label: { Image(systemName: "arrow.up.arrow.down") }.help(L("调整账户顺序")).accessibilityLabel(L("调整账户顺序"))
                 QuotaRefreshButton(model: model)
             }
             if let ringStyle {
@@ -622,7 +672,7 @@ struct RootView: View, Equatable {
                 Surface { Text(L("免费账户的额度卡片已隐藏")).font(AppFont.section); Button(L("高级设置")) { model.openSettings(.init(category: "general", section: "advanced")) } }
             } else if displayedQuotaAccounts.isEmpty {
                 let candidates = !model.quotaCardAccounts(usageDashboard.quotas).isEmpty
-                Surface { Text(L("尚未显示账户")).font(AppFont.section); Button(compact && candidates ? L("选择面板账户") : L("接入账户")) { if compact && candidates { model.showPanelAccounts?() } else { model.openSettings(.init(section: "accounts")) } } }
+                Surface { Text(L("尚未显示账户")).font(AppFont.section); Button(compact && candidates ? L("选择面板账户") : L("接入账户")) { if compact && candidates { model.openSettings(.init(category: "general", section: "panel")) } else { model.openSettings(.init(section: "accounts")) } } }
             }
             QuotaErrorNotice(model: model)
         }
@@ -660,13 +710,28 @@ struct RootView: View, Equatable {
     @ViewBuilder private var serverContent: some View {
         serverSelector
         HStack { if compact { Text(L("服务器")).font(AppFont.section) }; Text(L("{0} 台主机" , model.settings.monitoredHosts.filter(\.enabled).count)).font(AppFont.secondary).foregroundStyle(.secondary); RefreshIndicator(model: model, key: "hosts"); Spacer(); Button { model.openSettings(.init(category: "servers", section: "add-host")) } label: { Image(systemName: "plus") }.help(L("添加 SSH 主机")).accessibilityLabel(L("添加 SSH 主机")) }
-        if model.settings.monitoredHosts.isEmpty { EmptyCard(icon: "server.rack", title: L("添加服务器"), subtitle: "", action: { model.openSettings(.init(category: "servers", section: "add-host")) }) }
+        if model.settings.monitoredHosts.isEmpty {
+            EmptyState(icon: "server.rack", title: L("尚未添加服务器"), message: L("通过 SSH 采集日志或监控服务器资源。"), actionTitle: L("添加服务器"),
+                       action: { model.openSettings(.init(category: "servers", section: "add-host")) }, compact: compact)
+        }
         if !model.settings.monitoredHosts.isEmpty && filteredHosts.isEmpty {
-            Surface { Text(L("当前筛选没有匹配的服务器")).foregroundStyle(.secondary); Button(L("清除筛选")) { serverView = "all" } }
+            EmptyState(icon: "line.3.horizontal.decrease.circle", title: L("当前筛选没有匹配的服务器"), actionTitle: L("清除筛选"), action: { serverView = "all" }, compact: compact)
         }
+        let trendGap = model.hostTrendGap
         ForEach(filteredHosts) { host in
-            ServerCard(host: host, result: model.hosts.first(where: { $0.id == host.id }), compact: compact, onRefresh: { Task { await model.sampleHosts(hostID: host.id) } }, onSettings: { model.openSettings(.init(category: "servers", hostID: host.id)) }).equatable()
+            ServerHistoryCard(outbound: model.outbound, host: host, result: model.hosts.first(where: { $0.id == host.id }), compact: compact, gap: trendGap, onRefresh: { Task { await model.sampleHosts(hostID: host.id) } }, onSettings: { model.openSettings(.init(category: "servers", hostID: host.id)) })
         }
+    }
+}
+
+/// A server card with its minute history. The history publishes on its own schedule, outside the
+/// surface snapshot, so this view observes the service that reads it.
+private struct ServerHistoryCard: View {
+    @ObservedObject var outbound: OutboundEventService
+    var host: Host, result: HostResult?, compact: Bool, gap: Double
+    var onRefresh: () -> Void, onSettings: () -> Void
+    var body: some View {
+        ServerCard(host: host, result: result, trend: HostTrend(minutes: outbound.history[host.id] ?? [], gap: gap), compact: compact, onRefresh: onRefresh, onSettings: onSettings).equatable()
     }
 }
 
@@ -718,7 +783,7 @@ private struct SurfaceFooter: View {
                 Button { model.showDetailPage?(activePage) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: DesignTokens.iconButtonSize, height: DesignTokens.iconButtonSize).contentShape(Rectangle()) }.help(L("打开详情")).accessibilityLabel(L("打开详情"))
                 Button { model.openSettings(.init(category: "general")) } label: { Image(systemName: "gearshape").frame(width: DesignTokens.iconButtonSize, height: DesignTokens.iconButtonSize).contentShape(Rectangle()) }.help(L("设置")).accessibilityLabel(L("设置")).keyboardShortcut(",")
                 Menu {
-                    Button(L("面板显示账户…")) { model.showPanelAccounts?() }; Button(model.isPinned ? L("取消固定面板") : L("固定面板")) { model.isPinned.toggle() }; Divider()
+                    Button(L("面板显示账户…")) { model.openSettings(.init(category: "general", section: "panel")) }; Button(model.isPinned ? L("取消固定面板") : L("固定面板")) { model.isPinned.toggle() }; Divider()
                     Button(model.networkBusy ? L("出站测试中…") : L("测试出站连接")) { Task { await model.testNetwork() } }.disabled(model.networkBusy)
                     Divider()
                     Button(L("退出 Aieyes")) { NSApplication.shared.terminate(nil) }.keyboardShortcut("q")
@@ -826,15 +891,6 @@ struct Sparkline: Shape {
         return path
     }
 }
-struct EmptyCard: View {
-    var icon: String, title: String, subtitle: String, action: () -> Void
-    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
-    var body: some View {
-        let _ = interfaceLanguage;
-        VStack(spacing: 12) { Image(systemName: icon).font(.system(size: 32, weight: .light)).foregroundStyle(Palette.accent); if !subtitle.isEmpty { Text(subtitle).font(AppFont.body).foregroundStyle(.secondary) }; Button(title, action: action).buttonStyle(.aieyesPrimary) }
-            .frame(maxWidth: .infinity).padding(.vertical, 36)
-    }
-}
 
 /// Immutable inputs shared by the plot and daily list; pointer movement never regroups data.
 private final class UsageChartData {
@@ -878,7 +934,9 @@ struct UsageChart: View, Equatable {
     var body: some View {
         let _ = interfaceLanguage
         VStack(alignment: .leading, spacing: 8) {
-            usageChart
+            // A new day range is a different chart: the old one fades out while the new one fades in.
+            // Inside one range, refreshed and filtered values ease the bars in place.
+            ZStack { usageChart.id(data.dates).transition(.opacity) }.motion(.standard, value: data.dates)
             selectedReading
             modelLegend
         }
@@ -905,6 +963,7 @@ struct UsageChart: View, Equatable {
         // Switching metric or hiding a model eases the bars and axis instead of snapping.
         .motion(.slow, value: cost)
         .motion(.slow, value: hidden)
+        .motion(.slow, value: rows)
         .focusable()
         .onKeyPress(.leftArrow) { move(-1); return .handled }
         .onKeyPress(.rightArrow) { move(1); return .handled }
@@ -1088,6 +1147,7 @@ struct ModelChart: View, Equatable {
         HStack(alignment: .top, spacing: 16) {
             Chart(slices) { item in SectorMark(angle: .value(cost ? "USD" : "Token", value(item)), innerRadius: .ratio(DesignTokens.modelChartInnerRatio), angularInset: DesignTokens.modelChartAngularInset).foregroundStyle(color(item.key, ring: ringKeys)).cornerRadius(DesignTokens.modelChartCorner).accessibilityLabel(Text(modelNames[item.key] ?? item.key)) }.frame(width: DesignTokens.modelChartSize, height: DesignTokens.modelChartHeight)
                 .motion(.slow, value: cost)
+                .motion(.slow, value: models)
                 .chartBackground { _ in VStack { Text("\(models.count)").font(.system(size: DesignTokens.fontPanelOverview, weight: DesignTokens.weightStrong)).monospacedDigit().numericTransition(value: models.count); Text(L("模型")).font(AppFont.secondary) } }.accessibilityLabel(L("前五模型与其他；完整数值见列表"))
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(showAll ? ranked : Array(ranked.prefix(5))) { item in
@@ -1215,8 +1275,32 @@ struct AnnualUsageTable: View {
 private struct QuotaRefreshButton: View {
     @SurfaceModel var model: AppModel
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    /// A refresh that just succeeded shows "已更新" for a moment before the action returns.
+    @State private var confirmed: Date?
+    private enum Phase: Equatable { case idle, busy, done }
     var body: some View {
-        let _ = interfaceLanguage; Button(model.quotaBusy ? L("读取中…") : L("刷新额度")) { Task { await model.refreshQuotas() } }.font(AppFont.caption).disabled(model.quotaBusy) }
+        let _ = interfaceLanguage
+        let phase: Phase = model.quotaBusy ? .busy : confirmed != nil ? .done : .idle
+        Button { Task { await model.refreshQuotas() } } label: {
+            // Every label is laid out, so the button keeps one width through the swap.
+            ZStack {
+                Text(L("刷新额度")).hidden(); Text(L("读取中…")).hidden(); done.hidden()
+                switch phase {
+                case .busy: Text(L("读取中…")).transition(.opacity)
+                case .done: done.transition(.opacity)
+                case .idle: Text(L("刷新额度")).transition(.opacity)
+                }
+            }.motion(.fast, value: phase)
+        }.font(AppFont.caption).disabled(model.quotaBusy)
+            .onChange(of: model.refreshStates["quotas"]?.succeededAt) { _, time in
+                guard let time else { return }
+                confirmed = time
+                Task { try? await Task.sleep(for: .seconds(AccountFocusStore.hold)); if confirmed == time { confirmed = nil } }
+            }
+    }
+    private var done: some View {
+        HStack(spacing: 3) { Image(systemName: "checkmark").foregroundStyle(Palette.ok).accessibilityHidden(true); Text(L("已更新")) }
+    }
 }
 private struct QuotaErrorNotice: View {
     @SurfaceModel var model: AppModel
@@ -1389,6 +1473,7 @@ struct AccountObservedQuota: View {
             creditHistory: model.dashboard.presentationEstimates(account: quota.id, credits: true),
             onAnalysis: { model.openAnalysis(from: compact ? "panel" : "overview", account: quota.id, provider: quota.provider) },
             onRetry: { Task { await model.refreshQuotas(accountID: quota.accountId) } },
+            onDetail: compact ? { model.showAccount(quota.id) } : nil,
             actionOwner: ObjectIdentifier(model)).equatable()
     }
 }
@@ -1408,6 +1493,8 @@ struct QuotaCard: View, Equatable {
     var creditHistory: [QuotaEstimate] = []
     var onAnalysis: (() -> Void)?
     var onRetry: (() -> Void)?
+    /// Panel cards: open this account's card in the main window.
+    var onDetail: (() -> Void)?
     private var actionOwner: ObjectIdentifier?
     static func == (lhs: Self, rhs: Self) -> Bool {
         // Opt in only where actions capture the same retained model and quota.
@@ -1419,6 +1506,7 @@ struct QuotaCard: View, Equatable {
             && lhs.deviceCounts == rhs.deviceCounts && (lhs.onSwitch == nil) == (rhs.onSwitch == nil)
             && (lhs.onEstimate == nil) == (rhs.onEstimate == nil) && (lhs.onCredits == nil) == (rhs.onCredits == nil)
             && (lhs.onAnalysis == nil) == (rhs.onAnalysis == nil) && (lhs.onRetry == nil) == (rhs.onRetry == nil)
+            && (lhs.onDetail == nil) == (rhs.onDetail == nil)
     }
     private var bestCredit: QuotaEstimate? { EstimatePresentation.credit(creditHistory) ?? EstimatePresentation.canonical([creditEstimate].compactMap { $0 }).first }
     private var defaultExpanded: Bool
@@ -1427,9 +1515,9 @@ struct QuotaCard: View, Equatable {
     @Environment(\.collapsedQuotaHeight) private var collapsedHeight
     private var measuring: QuotaCard { var copy = self; copy.isMeasurement = true; return copy }
     private var expanded: Bool { !isMeasurement && (!collapsible || (storedExpanded ?? defaultExpanded)) }
-    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, defaultExpanded: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, deviceCounts: AccountDeviceCounts? = nil, onSwitch: (() -> Void)? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = [], onAnalysis: (() -> Void)? = nil, onRetry: (() -> Void)? = nil, actionOwner: ObjectIdentifier? = nil) {
+    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, defaultExpanded: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, deviceCounts: AccountDeviceCounts? = nil, onSwitch: (() -> Void)? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = [], onAnalysis: (() -> Void)? = nil, onRetry: (() -> Void)? = nil, onDetail: (() -> Void)? = nil, actionOwner: ObjectIdentifier? = nil) {
         self.actionOwner = actionOwner
-        self.defaultExpanded = defaultExpanded; self.onAnalysis = onAnalysis; self.onRetry = onRetry
+        self.defaultExpanded = defaultExpanded; self.onAnalysis = onAnalysis; self.onRetry = onRetry; self.onDetail = onDetail
         self.deviceCounts = deviceCounts; self.onSwitch = onSwitch
         self.quotaHistory = quotaHistory; self.creditHistory = creditHistory
         self.collapsible = collapsible; self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits; self.creditEstimate = creditEstimate
@@ -1455,8 +1543,8 @@ struct QuotaCard: View, Equatable {
         if let wallet = quota.extraUsage {
             VStack(alignment: .leading, spacing: 8) {
                 ViewThatFits(in: .horizontal) {
-                    HStack { Text(L("额外用量余额")).font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(); Spacer(); Text(wallet.amount(wallet.balance)).font(AppFont.section).monospacedDigit().fixedSize() }
-                    VStack(alignment: .leading, spacing: 4) { Text(L("额外用量余额")).font(AppFont.secondary).foregroundStyle(.secondary); Text(wallet.amount(wallet.balance)).font(AppFont.section).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
+                    HStack { Text(L("额外用量余额")).font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(); Spacer(); Text(wallet.amount(wallet.balance)).font(AppFont.section).monospacedDigit().fixedSize().numericTransition(value: wallet.balance) }
+                    VStack(alignment: .leading, spacing: 4) { Text(L("额外用量余额")).font(AppFont.secondary).foregroundStyle(.secondary); Text(wallet.amount(wallet.balance)).font(AppFont.section).monospacedDigit().fixedSize(horizontal: false, vertical: true).numericTransition(value: wallet.balance) }
                 }
                 if expanded {
                     Text(L("钱包总额 ") + wallet.amount(wallet.total)).font(AppFont.secondary).foregroundStyle(.secondary)
@@ -1468,7 +1556,7 @@ struct QuotaCard: View, Equatable {
         }
         if let balances = quota.balances { ForEach(balances) { balance in
             VStack(alignment: .leading, spacing: 8) {
-                HStack { Text(L("可用余额")).font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Text(balance.currency + " " + balance.total).font(AppFont.section).monospacedDigit() }
+                HStack { Text(L("可用余额")).font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Text(balance.currency + " " + balance.total).font(AppFont.section).monospacedDigit().numericTransition(value: balance.total) }
                 if expanded { HStack { Text(L("赠送 ") + balance.granted); Spacer(); Text(L("充值 ") + balance.toppedUp) }.font(AppFont.secondary).foregroundStyle(.secondary) }
             }
         } }
@@ -1490,7 +1578,7 @@ struct QuotaCard: View, Equatable {
             if stacked {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(L(meter.label)).foregroundStyle(.secondary)
-                    Text(quota.meterSummary(meter)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.75)
+                    Text(quota.meterSummary(meter)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.75).numericTransition(value: quota.meterSummary(meter))
                 }.font(AppFont.secondary).frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 ViewThatFits(in: .horizontal) {
@@ -1598,6 +1686,7 @@ struct QuotaCard: View, Equatable {
         if let age = quota.snapshotAge { SurfaceTimeline(interval: 60) { context in Text(staleLabel(age, now: context.date)).font(AppFont.caption).foregroundStyle(quota.isStale ? Palette.warn : .secondary).help(Format.date(age)) } }
     }
     @ViewBuilder private var analysisButton: some View {
+        if let onDetail { Button(L("主窗口"), systemImage: "macwindow", action: onDetail).font(AppFont.caption).tint(.primary).help(L("在主窗口中查看")) }
         if let onAnalysis { Button(L("查看分析"), systemImage: "arrow.up.right", action: onAnalysis).font(AppFont.caption).tint(.primary) }
     }
     private var fullCard: some View {
@@ -1670,7 +1759,7 @@ struct QuotaCard: View, Equatable {
             if quota.updatedAt > 0 || onAnalysis != nil {
                 ViewThatFits(in: .horizontal) {
                     HStack { quotaTimestamp; Spacer(minLength: 8); analysisButton }
-                    VStack(alignment: .leading, spacing: 4) { quotaTimestamp; analysisButton }
+                    VStack(alignment: .leading, spacing: 4) { quotaTimestamp; HStack(spacing: 8) { analysisButton } }
                 }
             }
             if !quota.hasQuotaContent && quota.error == nil { Text(L("暂无额度数据")).font(AppFont.secondary).foregroundStyle(.secondary) }
@@ -1680,13 +1769,15 @@ struct QuotaCard: View, Equatable {
 }
 
 struct ServerCard: View, Equatable {
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.host == rhs.host && lhs.result == rhs.result && lhs.compact == rhs.compact }
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.host == rhs.host && lhs.result == rhs.result && lhs.compact == rhs.compact && lhs.trend == rhs.trend }
     var host: Host, result: HostResult?, compact: Bool
+    /// Minute history behind the sparklines; empty until the first read.
+    var trend = HostTrend()
     var onRefresh: () -> Void = {}
     var onSettings: () -> Void = {}
     @AppStorage private var expanded: Bool
-    init(host: Host, result: HostResult?, compact: Bool, onRefresh: @escaping () -> Void = {}, onSettings: @escaping () -> Void = {}) {
-        self.host = host; self.result = result; self.compact = compact; self.onRefresh = onRefresh; self.onSettings = onSettings
+    init(host: Host, result: HostResult?, trend: HostTrend = HostTrend(), compact: Bool, onRefresh: @escaping () -> Void = {}, onSettings: @escaping () -> Void = {}) {
+        self.host = host; self.result = result; self.trend = trend; self.compact = compact; self.onRefresh = onRefresh; self.onSettings = onSettings
         _expanded = AppStorage(wrappedValue: false, NativePanelKey.expansion(.server, id: host.id, compact: compact))
     }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
@@ -1740,7 +1831,7 @@ struct ServerCard: View, Equatable {
             }
                 Button(L("监控设置"), action: onSettings).font(AppFont.secondary).accessibilityLabel((host.name.isEmpty ? host.target : host.name) + L("的监控设置"))
             }
-            ServerResourceSummary(host: host, sample: result?.sample, expanded: expanded)
+            ServerResourceSummary(host: host, sample: result?.sample, trend: trend, expanded: expanded)
                 .opacity(host.enabled ? 1 : 0.65)
             if !expanded, let error = result?.error { Label(L(error), systemImage: "exclamationmark.triangle").font(AppFont.caption).foregroundStyle(Palette.warn).lineLimit(2).help(L(error)) }
             if !expanded, let sample = result?.sample, !sample.errors.isEmpty { Label(L("部分资源采集失败"), systemImage: "exclamationmark.triangle").font(AppFont.caption).foregroundStyle(Palette.warn) }
@@ -1844,12 +1935,14 @@ struct MetricHeading: View {
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
-        HStack(spacing: 8) { Image(systemName: icon).frame(width: 15).foregroundStyle(.secondary); Text(title); Spacer(); Text(value).monospacedDigit().foregroundStyle(.secondary) }.font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium))
+        HStack(spacing: 8) { Image(systemName: icon).frame(width: 15).foregroundStyle(.secondary); Text(title); Spacer(); Text(value).monospacedDigit().foregroundStyle(.secondary).numericTransition(value: value) }.font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium))
     }
 }
 
 struct ServerResourceSummary: View {
     var host: Host, sample: MetricSample?
+    /// Minute history behind the sparklines.
+    var trend = HostTrend()
     var expanded = false
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
@@ -1858,21 +1951,31 @@ struct ServerResourceSummary: View {
             Grid(alignment: .topLeading, horizontalSpacing: 10) {
                 GridRow {
                     if host.metrics.contains("cpu") {
-                        ResourceBlock(title: "CPU", percent: sample?.cpu?.first { $0.id == "cpu" }?.utilization, category: "cpu")
+                        ResourceBlock(title: "CPU", percent: sample?.cpu?.first { $0.id == "cpu" }?.utilization, category: "cpu", trend: trend.series(.cpu))
                     }
                     if host.metrics.contains("memory") {
-                        ResourceBlock(title: L("内存"), percent: Format.capacityPercent(sample?.memory?.used, sample?.memory?.total), category: "memory", detail: sample?.memory == nil ? "" : Format.capacityPair(sample?.memory?.used, sample?.memory?.total))
+                        ResourceBlock(title: L("内存"), percent: Format.capacityPercent(sample?.memory?.used, sample?.memory?.total), category: "memory", detail: sample?.memory == nil ? "" : Format.capacityPair(sample?.memory?.used, sample?.memory?.total), trend: trend.series(.memory))
                     }
                 }
             }.fixedSize(horizontal: false, vertical: true)
             if host.metrics.contains("gpu") {
                 let gpus = host.selectedDevices("gpu", sample?.gpu)
+                // History keeps the busiest GPU of each minute. A host with one GPU shows that as
+                // the GPU's own trend; with several it is a row of its own above them.
+                let reported = sample?.gpu ?? []
+                let gpuTrend = trend.series(.gpu)
+                if reported.count > 1, !gpus.isEmpty, reported.contains(where: { $0.utilization != nil }) { busiestGPUTrend(gpuTrend) }
                 BalancedGridLayout(minimumWidth: 290, spacing: 10) {
                     ForEach(gpus) { gpu in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
                                 Text("GPU " + gpu.id).fontWeight(.medium).fixedSize()
                                 Text(gpu.name ?? "—").foregroundStyle(.secondary).lineLimit(1).help(gpu.name ?? "—")
+                                if reported.count == 1, gpuTrend.hasLine {
+                                    Spacer(minLength: 0)
+                                    // Centred on the text line, so the header keeps its height.
+                                    TrendLine(series: gpuTrend, tint: Palette.category("gpu")).frame(width: 96).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+                                }
                             }.font(AppFont.secondary)
                             // The full label first, then the short one; narrow cards stack the strips instead of truncating.
                             ViewThatFits(in: .horizontal) {
@@ -1898,7 +2001,7 @@ struct ServerResourceSummary: View {
                 let networks = host.selectedDevices("network", sample?.network)
                 BalancedGridLayout(minimumWidth: 290, spacing: 9) {
                     ForEach(networks) { net in
-                        HStack { Text(net.id).lineLimit(1); Spacer(); Text("↓ " + Format.speed(net.rxBytesPerSecond) + " · ↑ " + Format.speed(net.txBytesPerSecond)).monospacedDigit() }.font(AppFont.caption).padding(10).background(Palette.category("network").opacity(Palette.tintSurfaceOpacity), in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
+                        HStack { Text(net.id).lineLimit(1); Spacer(); let speed = "↓ " + Format.speed(net.rxBytesPerSecond) + " · ↑ " + Format.speed(net.txBytesPerSecond); Text(speed).monospacedDigit().numericTransition(value: speed) }.font(AppFont.caption).padding(10).background(Palette.category("network").opacity(Palette.tintSurfaceOpacity), in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
                     }
                 }
             }
@@ -1920,6 +2023,15 @@ struct ServerResourceSummary: View {
                 }
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+    /// The row keeps its place from the first sample on; a dash stands in until two minutes join.
+    private func busiestGPUTrend(_ series: TrendSeries) -> some View {
+        HStack(spacing: 8) {
+            Text(L("GPU 最高利用率走势")).font(AppFont.caption).foregroundStyle(.secondary).fixedSize()
+            Spacer(minLength: 4)
+            if series.hasLine { TrendLine(series: series, tint: Palette.category("gpu")).frame(minWidth: 44, maxWidth: 180).layoutPriority(1) }
+            else { Text("—").font(AppFont.caption).foregroundStyle(.tertiary) }
+        }.frame(height: TrendLine.compactHeight)
     }
     private func gpuUtilization(_ gpu: DeviceMetric, title: String) -> some View {
         ResourceStrip(title: title, percent: gpu.utilization, tint: Palette.category("gpu"), warnHigh: false, accessibilityTitle: L("利用率"))
@@ -1947,23 +2059,32 @@ struct ServerResourceSummary: View {
 struct ResourceBlock: View {
     var title: String, percent: Double?, category: String
     var detail = ""
+    /// The last hour of this reading, drawn between the title and the value.
+    var trend: TrendSeries? = nil
     private var value: Double? { percent.flatMap { $0.isFinite ? min(100, max(0, $0)) : nil } }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(title).font(AppFont.caption)
-                if let value, value >= 90 { Image(systemName: "exclamationmark.triangle").font(AppFont.caption).foregroundStyle(Palette.danger).help(L("高负载")).accessibilityLabel(L("高负载")) }
-                Spacer(minLength: 4)
-                valueText
-            }
+            if let trend, trend.hasLine {
+                // The widest sparkline that leaves the title and the value whole; none on a tile too narrow for one.
+                ViewThatFits(in: .horizontal) { header(trend, width: 120); header(trend, width: 76); header(trend, width: 44); header(nil, width: 0) }
+            } else { header(nil, width: 0) }
             ResourceBar(percent: value, tint: Palette.category(category))
-            if !detail.isEmpty { Text(detail).font(AppFont.caption).foregroundStyle(.secondary).monospacedDigit() }
+            if !detail.isEmpty { Text(detail).font(AppFont.caption).foregroundStyle(.secondary).monospacedDigit().numericTransition(value: detail) }
         }.padding(.horizontal, 10).padding(.vertical, 8).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Palette.category(category).opacity(Palette.tintSurfaceOpacity), in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
             .overlay(RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay).strokeBorder(Palette.category(category).opacity(DesignTokens.controlBorderOpacity)))
             .accessibilityElement(children: .combine)
+    }
+    private func header(_ trend: TrendSeries?, width: CGFloat) -> some View {
+        HStack(spacing: 6) {
+            Text(title).font(AppFont.caption).lineLimit(1).fixedSize()
+            if let value, value >= 90 { Image(systemName: "exclamationmark.triangle").font(AppFont.caption).foregroundStyle(Palette.danger).help(L("高负载")).accessibilityLabel(L("高负载")) }
+            Spacer(minLength: 4)
+            if let trend { TrendLine(series: trend, tint: Palette.category(category), height: TrendLine.tileHeight).frame(width: width) }
+            valueText
+        }
     }
     /// A missing sample is a placeholder dash in a quiet tone, not a reading in the category color.
     @ViewBuilder private var valueText: some View {
@@ -1994,7 +2115,7 @@ struct ResourceStrip: View {
                 Text(title).font(AppFont.secondary).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 0)
                 if highLoad { Image(systemName: "exclamationmark.triangle").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(Palette.danger) }
-                Text(label).font(.system(size: DesignTokens.fontCaption)).monospacedDigit().lineLimit(1).fixedSize().foregroundStyle(highLoad ? Palette.danger : Color.primary)
+                Text(label).font(.system(size: DesignTokens.fontCaption)).monospacedDigit().lineLimit(1).fixedSize().foregroundStyle(highLoad ? Palette.danger : Color.primary).numericTransition(value: label)
             }.frame(height: 17)
             ResourceBar(percent: value, tint: tint)
         }.frame(maxWidth: .infinity, alignment: .leading).help(fullTitle + " " + label)
@@ -2081,6 +2202,8 @@ struct RefreshIndicator: View {
     @SurfaceModel var model: AppModel
     let key: String
     @State private var showing = false
+    @State private var completions = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var failures: [ActionFailure] { model.actionFailures.filter { !$0.dismissed && ($0.action == key || (key == "scan" && $0.action == "prices")) } }
     private var hasError: Bool { model.actionFailures.contains { $0.action == key || (key == "scan" && $0.action == "prices") } || (key == "scan" && model.dashboardError != nil) }
     private var statusLabel: String {
@@ -2093,9 +2216,12 @@ struct RefreshIndicator: View {
             ZStack {
                 if model.refreshStates[key]?.busy == true || (key == "scan" && model.dashboardPending) { ProgressView().controlSize(.mini) }
                 // A sync mark rather than a "verified" check; problems use the warning triangle (Web shares the rule).
-                else { Image(systemName: hasError ? "exclamationmark.triangle" : "arrow.triangle.2.circlepath").contentTransition(.symbolEffect(.replace)).foregroundStyle(hasError ? Palette.warn : Color.secondary).opacity(hasError || model.refreshStates[key]?.succeededAt != nil ? 1 : 0.6) }
+                else { Image(systemName: hasError ? "exclamationmark.triangle" : "arrow.triangle.2.circlepath").contentTransition(.symbolEffect(.replace)).foregroundStyle(hasError ? Palette.warn : Color.secondary).opacity(hasError || model.refreshStates[key]?.succeededAt != nil ? 1 : 0.6)
+                    // One bounce when a refresh finishes, so a completed refresh is visible without reading the time.
+                    .symbolEffect(.bounce, value: completions) }
             }.frame(width: 22, height: 22).motion(.standard, value: hasError)
         }.buttonStyle(.plain).help(statusLabel).accessibilityLabel(statusLabel)
+        .onChange(of: model.refreshStates[key]?.succeededAt) { old, new in if old != nil, new != nil, !reduceMotion { completions += 1 } }
         .popover(isPresented: $showing) {
             VStack(alignment: .leading, spacing: 12) {
                 Text(model.refreshLabel(key) + L("状态")).font(AppFont.section)
@@ -2228,10 +2354,16 @@ private struct SessionStrip: View {
 struct AccountCardActions: ViewModifier {
     @SurfaceModel var model: AppModel
     let account: AgentAccount
+    /// Panel cards also offer the jump to the same account in the main window.
+    var opensMainWindow = false
     @State private var deleting = false
     @State private var failure: String?
     func body(content: Content) -> some View {
         content.contextMenu {
+            if opensMainWindow {
+                Button(L("在主窗口中查看")) { model.showAccount(account.key) }
+                Divider()
+            }
             Button(L("不再显示")) { update(archive: false) }
             Button(L("归档账户")) { update(archive: true) }
             Button(L("删除账户"), role: .destructive) { deleting = true }
@@ -2262,6 +2394,21 @@ struct AccountFlowNotice: View {
                     .buttonStyle(.plain).accessibilityLabel(L("关闭提示"))
             }.padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10)).padding(10)
                 .accessibilityAddTraits(.updatesFrequently)
+        }
+    }
+}
+
+private struct QueryProgressView: View {
+    @ObservedObject var activity: QueryActivity
+    var cancel: () -> Void
+    var body: some View {
+        if let progress = activity.progress {
+            HStack {
+                Text(L("正在计算用量"))
+                ProgressView(value: progress).frame(maxWidth: 160)
+                Text(progress, format: .percent.precision(.fractionLength(0))).monospacedDigit()
+                Button(L("取消"), action: cancel)
+            }.font(AppFont.secondary).padding(8)
         }
     }
 }

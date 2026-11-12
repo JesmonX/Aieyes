@@ -221,6 +221,9 @@ struct MenuRingSnapshot: Equatable {
 
 /// Balance composition is a share of current funds, not a quota remaining percentage.
 struct RingBalanceComposition {
+    /// Granted funds are the second series beside the provider-coloured paid funds. A share of a
+    /// balance is not a health state, so it takes the neutral series colour rather than the status green.
+    static var grantedTint: Color { Palette.neutralTint }
     var granted: String
     var paid: String
     var share: Double
@@ -235,6 +238,8 @@ struct RingBalanceComposition {
 
 /// The ring itself: top half the short window, bottom half the long one. Colored arcs are
 /// the remaining share; both start at the left and grow right, mirroring each other.
+/// A new reading sweeps the arcs to their new length, and a completed refresh lights the ring
+/// once. Both stay still under Reduce Motion.
 struct QuotaRingView: View {
     var kind: QuotaRingKind
     var healthy: Color
@@ -242,6 +247,56 @@ struct QuotaRingView: View {
     var composition: RingBalanceComposition? = nil
     var gap: CGFloat = 2
     var track: Color = Color.primary.opacity(0.13)
+    /// Time of the account's reading. A newer one after the first paint lights the ring once.
+    var refreshedAt: Double? = nil
+    /// Static renderers may opt out; live menu and panel rings animate value changes.
+    var animated = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var flashes = 0
+    var body: some View {
+        let shares = QuotaRingShares(kind: kind, composition: composition)
+        QuotaRingCanvas(kind: kind, healthy: healthy, lineWidth: lineWidth, composition: composition, gap: gap, track: track, shares: shares)
+            .animation(animated ? Motion.slow.animation(reduced: reduceMotion) : nil, value: shares)
+            .keyframeAnimator(initialValue: 0.0, trigger: flashes) { ring, glow in
+                ring.overlay {
+                    if glow > 0 {
+                        Circle().inset(by: lineWidth / 2).stroke(healthy.opacity(0.4 * glow), lineWidth: lineWidth)
+                            .scaleEffect(1 + 0.07 * glow).allowsHitTesting(false)
+                    }
+                }
+            } keyframes: { _ in
+                LinearKeyframe(1, duration: DesignTokens.motionFast)
+                CubicKeyframe(0, duration: DesignTokens.motionSlow * 2)
+            }
+            .onChange(of: refreshedAt) { old, new in
+                guard animated, !reduceMotion, let old, let new, old > 0, new > old else { return }
+                flashes += 1
+            }
+            .accessibilityHidden(true)
+    }
+}
+
+/// The drawn lengths of a ring, in percent of remaining (and the granted share of a balance).
+struct QuotaRingShares: Equatable {
+    var top = 0.0, bottom = 0.0, share = 0.0
+    init(kind: QuotaRingKind, composition: RingBalanceComposition?) {
+        top = kind.top?.remaining ?? 0; bottom = kind.bottom?.remaining ?? 0; share = composition?.share ?? 0
+    }
+}
+
+/// Draws one frame of the ring; SwiftUI interpolates `shares` between readings.
+private struct QuotaRingCanvas: View, Animatable {
+    var kind: QuotaRingKind
+    var healthy: Color
+    var lineWidth: CGFloat
+    var composition: RingBalanceComposition?
+    var gap: CGFloat
+    var track: Color
+    var shares: QuotaRingShares
+    var animatableData: AnimatablePair<AnimatablePair<Double, Double>, Double> {
+        get { AnimatablePair(AnimatablePair(shares.top, shares.bottom), shares.share) }
+        set { shares.top = newValue.first.first; shares.bottom = newValue.first.second; shares.share = newValue.second }
+    }
     var body: some View {
         Canvas { context, size in
             let side = min(size.width, size.height), center = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -253,25 +308,27 @@ struct QuotaRingView: View {
                 path.addArc(center: center, radius: radius, startAngle: .degrees(start), endAngle: .degrees(end), clockwise: end < start)
                 return path
             }
-            func color(_ arc: QuotaRingArc) -> Color { Palette.quotaBar(arc.used, healthy: healthy) }
+            func color(_ remaining: Double) -> Color { Palette.quotaBar(100 - remaining, healthy: healthy) }
+            let top = min(100, max(0, shares.top)), bottom = min(100, max(0, shares.bottom))
             switch kind {
-            case .duo(let top, let bottom):
+            case .duo:
                 let half = Double((lineWidth / 2 + gap / 2) / radius) * 180 / .pi, span = 180 - 2 * half
                 context.stroke(arc(180 + half, 360 - half), with: .color(track), style: style)
                 context.stroke(arc(180 - half, half), with: .color(track), style: style)
-                if top.remaining > 0 { context.stroke(arc(180 + half, 180 + half + max(0.4, span * top.remaining / 100)), with: .color(color(top)), style: style) }
-                if bottom.remaining > 0 { context.stroke(arc(180 - half, 180 - half - max(0.4, span * bottom.remaining / 100)), with: .color(color(bottom)), style: style) }
-            case .single(let top):
+                if top > 0 { context.stroke(arc(180 + half, 180 + half + max(0.4, span * top / 100)), with: .color(color(top)), style: style) }
+                if bottom > 0 { context.stroke(arc(180 - half, 180 - half - max(0.4, span * bottom / 100)), with: .color(color(bottom)), style: style) }
+            case .single:
                 let circle = Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
                 context.stroke(circle, with: .color(track), style: style)
-                if top.remaining >= 99.95 { context.stroke(circle, with: .color(color(top)), style: style) }
-                else if top.remaining > 0 { context.stroke(arc(270, 270 + max(0.4, 360 * top.remaining / 100)), with: .color(color(top)), style: style) }
+                if top >= 99.95 { context.stroke(circle, with: .color(color(top)), style: style) }
+                else if top > 0 { context.stroke(arc(270, 270 + max(0.4, 360 * top / 100)), with: .color(color(top)), style: style) }
             case .coin(_, let low):
-                if let composition {
+                if composition != nil {
+                    let share = min(1, max(0, shares.share))
                     let circle = Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
                     context.stroke(circle, with: .color(healthy), lineWidth: lineWidth)
-                    if composition.share >= 1 { context.stroke(circle, with: .color(Palette.ok), lineWidth: lineWidth) }
-                    else { context.stroke(arc(270, 270 + 360 * composition.share), with: .color(Palette.ok), lineWidth: lineWidth) }
+                    if share >= 1 { context.stroke(circle, with: .color(RingBalanceComposition.grantedTint), lineWidth: lineWidth) }
+                    else { context.stroke(arc(270, 270 + 360 * share), with: .color(RingBalanceComposition.grantedTint), lineWidth: lineWidth) }
                     break
                 }
                 let tint = low ? Palette.danger : healthy
@@ -283,7 +340,6 @@ struct QuotaRingView: View {
                 context.stroke(circle, with: .color(.secondary), style: StrokeStyle(lineWidth: lineWidth * 0.72, lineCap: .round, dash: [0.01, lineWidth * 1.45]))
             }
         }
-        .accessibilityHidden(true)
     }
 }
 

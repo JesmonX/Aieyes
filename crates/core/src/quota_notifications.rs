@@ -99,6 +99,12 @@ fn eligible<'a>(settings: &'a Settings, key: &str) -> Option<&'a Account> {
     })
 }
 pub fn monitoring_enabled(settings: &Settings) -> bool {
+    if settings.webhooks.allows(crate::webhooks::Kind::QuotaReset) {
+        return settings
+            .accounts
+            .iter()
+            .any(|a| eligible(settings, &crate::accounts::key(a)).is_some());
+    }
     settings.accounts.iter().any(|a| {
         eligible(settings, &crate::accounts::key(a)).is_some() && {
             let p = a
@@ -216,7 +222,11 @@ impl Store {
                         })
                     })
                     .collect();
-                if windows.is_empty() || !preferences.allows(kind) {
+                // A webhook subscription receives every confirmed reset; the
+                // system notification still follows the account's own choice.
+                let wired = settings.webhooks.allows(crate::webhooks::Kind::QuotaReset);
+                let allowed = preferences.allows(kind);
+                if windows.is_empty() || (!allowed && !wired) {
                     continue;
                 }
                 let event = ResetEvent {
@@ -228,6 +238,20 @@ impl Store {
                     detected_at: q.updated_at,
                     windows,
                 };
+                if wired {
+                    let (title, text, data) =
+                        crate::webhooks::reset_message(&settings.appearance.language, &event);
+                    self.queue_webhook(
+                        settings,
+                        crate::webhooks::Kind::QuotaReset,
+                        title,
+                        text,
+                        data,
+                    )?;
+                }
+                if !allowed {
+                    continue;
+                }
                 let pending = Pending {
                     configuration: configuration.into(),
                     event,

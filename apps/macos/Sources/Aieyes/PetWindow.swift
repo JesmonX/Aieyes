@@ -18,7 +18,7 @@ struct PetScaleControl: View {
         let _ = interfaceLanguage;
         HStack {
             Text(L("桌宠缩放"))
-            Slider(value: Binding(get: { PetAppearance.scale(savedScale) }, set: { savedScale = $0 }), in: 0.5...2, step: 0.05)
+            Slider(value: Binding(get: { PetAppearance.scale(savedScale) }, set: { if savedScale != $0 { Haptics.step() }; savedScale = $0 }), in: 0.5...2, step: 0.05)
                 .accessibilityLabel(L("桌宠缩放")).accessibilityValue("\(Int((PetAppearance.scale(savedScale) * 100).rounded()))%")
             Text("\(Int((PetAppearance.scale(savedScale) * 100).rounded()))%").monospacedDigit().frame(width: 44, alignment: .trailing)
             Button(L("恢复 100%")) { savedScale = 1 }.disabled(savedScale == 1)
@@ -201,16 +201,26 @@ private struct PetSpriteView: View {
 private struct PetView: View {
     let model: AppModel
     @ObservedObject var live: LiveSessionState
-    init(model: AppModel) { self.model = model; live = model.live }
+    @ObservedObject var resets: QuotaNotificationService
+    init(model: AppModel) { self.model = model; live = model.live; resets = model.resetNotifications }
     @AppStorage("aieyes.pet.enabled") private var enabled = true
     @AppStorage("aieyes.pet.scale") private var savedScale = 1.0
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var celebrations = 0
     var body: some View {
         let _ = interfaceLanguage;
         let state = live.pet
         let scale = PetAppearance.scale(savedScale)
+        let playing = enabled && live.petVisible && !live.suspended
         VStack(spacing: 0) {
-            PetSpriteView(state: state, asset: live.asset, scale: scale, enabled: enabled && live.petVisible && !live.suspended)
+            PetSpriteView(state: state, asset: live.asset, scale: scale, enabled: playing)
+                .overlay { PetCelebration(trigger: celebrations, scale: scale) }
+                // A session that just finished, or a quota reset the core confirmed, gets one burst.
+                // The sprite row stays the core's choice; the burst only plays over it.
+                .onChange(of: state) { old, new in if new.behavior == "success", old.behavior != "success" { celebrate(playing) } }
+                .onChange(of: resets.confirmedResets) { _, _ in celebrate(playing) }
+                .onReceive(NotificationCenter.default.publisher(for: Notification.Name("aieyes.eventFeedback"))) { _ in celebrate(playing) }
             Text(L(state.label)).font(.system(size: max(11,12 * scale), weight: .medium))
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 .contentTransition(.opacity).motion(.standard, value: state.label)
@@ -220,6 +230,42 @@ private struct PetView: View {
         }.frame(width: 144 * scale, height: PetAppearance.height(state,scale:scale))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Aieyes · " + L(state.label)).accessibilityHint(L("单击打开面板，拖动移动，右键菜单"))
+    }
+    private func celebrate(_ playing: Bool) { if playing && !reduceMotion { celebrations += 1 } }
+}
+
+/// A one-shot ring of sparkles that spreads from the pet and fades. Nothing is drawn at rest.
+private struct PetCelebration: View {
+    let trigger: Int
+    let scale: Double
+    private struct Burst { var spread = 0.0, opacity = 0.0 }
+    nonisolated private static let count = 7
+    var body: some View {
+        Color.clear.keyframeAnimator(initialValue: Burst(), trigger: trigger) { content, burst in
+            content.overlay {
+                if burst.opacity > 0 {
+                    ZStack {
+                        ForEach(0..<Self.count, id: \.self) { index in
+                            let angle = (Double(index) / Double(Self.count) - 0.25) * 2 * .pi
+                            let distance = (26 + 30 * burst.spread) * scale
+                            Image(systemName: index.isMultiple(of: 2) ? "sparkle" : "circle.fill")
+                                .font(.system(size: (index.isMultiple(of: 2) ? 11 : 4) * scale, weight: .semibold))
+                                .foregroundStyle(Palette.ok)
+                                .scaleEffect(0.6 + 0.4 * burst.spread)
+                                .offset(x: cos(angle) * distance, y: sin(angle) * distance * 0.8)
+                        }
+                    }.opacity(burst.opacity)
+                }
+            }
+        } keyframes: { _ in
+            KeyframeTrack(\.spread) { CubicKeyframe(1, duration: DesignTokens.motionSlow * 3) }
+            KeyframeTrack(\.opacity) {
+                LinearKeyframe(1, duration: DesignTokens.motionFast)
+                LinearKeyframe(1, duration: DesignTokens.motionSlow)
+                LinearKeyframe(0, duration: DesignTokens.motionSlow * 2 - DesignTokens.motionFast)
+            }
+        }
+        .allowsHitTesting(false).accessibilityHidden(true)
     }
 }
 private final class PetPanel: NSPanel { override var canBecomeKey: Bool { false } }
@@ -465,6 +511,8 @@ private final class PetHost: NSHostingView<PetView> {
     /// Returns the final origin, which is what gets saved (the frame is still moving).
     static func settle(_ window: NSWindow, preferredPoint: NSPoint) -> NSPoint {
         let origin = PetWindowGeometry.origin(frame: window.frame, areas: NSScreen.screens.map(\.visibleFrame), snap: true, preferredPoint: preferredPoint)
+        // Settling against an edge is felt on the trackpad; a drop inside the screen is not a snap.
+        if origin != PetWindowGeometry.origin(frame: window.frame, areas: NSScreen.screens.map(\.visibleFrame), snap: false, preferredPoint: preferredPoint) { Haptics.alignment() }
         guard origin != window.frame.origin else { return origin }
         if Motion.reduced { window.setFrameOrigin(origin); return origin }
         NSAnimationContext.runAnimationGroup { context in

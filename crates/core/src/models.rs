@@ -427,6 +427,10 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claude_keychain: Option<crate::claude_keychain::Consent>,
     pub quota_reset_notifications: crate::quota_notifications::Preferences,
+    /// Optional outbound notifications; off until an address is added and enabled.
+    pub webhooks: crate::webhooks::Preferences,
+    /// Sustained CPU or memory load on a monitored machine.
+    pub server_alerts: crate::host_history::AlertPreferences,
     pub codex_apis: Vec<crate::codex_api::Connection>,
     #[serde(skip_deserializing)]
     pub configuration_issues: Vec<String>,
@@ -465,6 +469,8 @@ impl Default for Settings {
             native_connections: vec![],
             claude_keychain: None,
             quota_reset_notifications: Default::default(),
+            webhooks: Default::default(),
+            server_alerts: Default::default(),
             codex_apis: vec![],
             configuration_issues: vec![],
             deleted_accounts: vec![],

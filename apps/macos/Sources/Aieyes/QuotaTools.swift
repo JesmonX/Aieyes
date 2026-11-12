@@ -47,38 +47,36 @@ private struct AutomaticValuationSourceControls: View {
     }
 }
 
+/// Running samples, in Settings → Advanced. Sampling keeps going in the background until ended here.
 struct SamplingManagementView: View {
     @SurfaceModel var model: AppModel
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(L("后台采样")).font(AppFont.title)
-                Text(L("关闭窗口后继续采样，点击“结束采样”停止。")).font(AppFont.secondary).foregroundStyle(.secondary)
-                if model.runningEstimates.isEmpty { Text(L("当前没有进行中的采样")).foregroundStyle(.secondary) }
-                ForEach(model.runningEstimates, id: \.recordKey) { estimate in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text(model.settings.accounts.first { $0.key == estimate.accountKey }?.name ?? estimate.accountKey).font(AppFont.section)
-                            Spacer(); Text(estimate.statusLabel).foregroundStyle(estimate.status == "pending" ? Palette.warn : Palette.ok)
-                        }
-                        Text(L(estimate.calculationNote)).font(AppFont.secondary)
-                        if !estimate.reason.isEmpty { Text(L(estimate.reason)).foregroundStyle(Palette.warn) }
-                        if let error = model.estimateErrors[estimate.accountKey] { ErrorNotice(message: error).foregroundStyle(Palette.warn) }
-                        if model.estimateBusy.contains(estimate.accountKey) { TimelineView(.periodic(from: .now, by: 1)) { context in
-                            Text((model.estimateStages[estimate.accountKey] ?? L("准备同步")) + " · " + String(Int(context.date.timeIntervalSince(model.estimateStartedAt[estimate.accountKey] ?? context.date))) + L(" 秒")).font(AppFont.secondary)
-                        } }
-                        HStack {
-                            Button(L("查看与管理")) { Task { await model.openEstimate(estimate) } }
-                            Spacer()
-                            Button(L("结束采样")) { Task { _ = await model.performEstimate("stop", accountKey: estimate.accountKey, params: ["id": estimate.id], credits: estimate.kind == "credits") } }
-                                .disabled(model.estimateBusy.contains(estimate.accountKey))
-                        }
-                    }.padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
-                }
-            }.padding(DesignTokens.dialogPadding).frame(maxWidth: .infinity, alignment: .leading)
-        }.aieyesAccent().font(AppFont.body).disabled(model.installingUpdate)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L("采样在后台持续进行，点击“结束采样”停止。")).font(AppFont.secondary).foregroundStyle(.secondary)
+            if model.runningEstimates.isEmpty { Text(L("当前没有进行中的采样")).foregroundStyle(.secondary) }
+            ForEach(model.runningEstimates, id: \.recordKey) { estimate in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(model.settings.accounts.first { $0.key == estimate.accountKey }?.name ?? estimate.accountKey).font(AppFont.section)
+                        Spacer(); Text(estimate.statusLabel).foregroundStyle(estimate.status == "pending" ? Palette.warn : Palette.ok)
+                    }
+                    Text(L(estimate.calculationNote)).font(AppFont.secondary)
+                    if !estimate.reason.isEmpty { Text(L(estimate.reason)).foregroundStyle(Palette.warn) }
+                    if let error = model.estimateErrors[estimate.accountKey] { ErrorNotice(message: error).foregroundStyle(Palette.warn) }
+                    if model.estimateBusy.contains(estimate.accountKey) { TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text((model.estimateStages[estimate.accountKey] ?? L("准备同步")) + " · " + String(Int(context.date.timeIntervalSince(model.estimateStartedAt[estimate.accountKey] ?? context.date))) + L(" 秒")).font(AppFont.secondary)
+                    } }
+                    HStack {
+                        Button(L("查看与管理")) { Task { await model.openEstimate(estimate) } }
+                        Spacer()
+                        Button(L("结束采样")) { Task { _ = await model.performEstimate("stop", accountKey: estimate.accountKey, params: ["id": estimate.id], credits: estimate.kind == "credits") } }
+                            .disabled(model.estimateBusy.contains(estimate.accountKey))
+                    }
+                }.padding(12).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -168,100 +166,114 @@ struct AgentValuationView: View {
     }
 }
 
+/// Account order, in Settings → Panel. Each move is saved at once and applies to every quota surface.
 struct QuotaOrderView: View {
     @SurfaceModel var model: AppModel
-    var onClose: (() -> Void)? = nil
-    var onDirtyChange: ((Bool) -> Void)? = nil
-    @Environment(\.dismiss) private var dismiss
     @State private var keys: [String] = []
-    @State private var initialKeys: [String] = []
     @State private var saving = false
     @State private var error: String?
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    private var current: [String] { model.dashboard.quotaOrder ?? model.quotaAccounts.map(\.key) }
+    private var listHeight: CGFloat { CGFloat(keys.count) * 36 + 8 }
     var body: some View {
         let _ = interfaceLanguage;
-        VStack(alignment: .leading, spacing: 16) {
-            Text(L("调整账户顺序")).font(AppFont.title)
-            Text(L("拖动账户或使用上下按钮排序，应用于所有额度面板。")).foregroundStyle(.secondary)
-            List {
-                ForEach(keys, id: \.self) { key in
-                    HStack {
-                        Image(systemName: "line.3.horizontal").foregroundStyle(.secondary)
-                        ProviderMark(provider: key.components(separatedBy: ":").first ?? "custom")
-                        Text(model.settings.accounts.first { $0.key == key }?.name ?? key)
-                        Spacer()
-                        Button { move(key, -1) } label: { Image(systemName: "arrow.up") }.disabled(keys.first == key).accessibilityLabel(L("上移账户"))
-                        Button { move(key, 1) } label: { Image(systemName: "arrow.down") }.disabled(keys.last == key).accessibilityLabel(L("下移账户"))
-                    }.buttonStyle(.borderless).padding(.vertical, 4)
-                }.onMove { from, to in withMotion(.spring) { keys.move(fromOffsets: from, toOffset: to) } }
-            }.frame(minHeight: 150, maxHeight: 300)
-            if let error { ErrorNotice(message: error) }
-            HStack { Spacer(); Button(L("取消")) { close() }.keyboardShortcut(.cancelAction); Button(saving ? L("保存中…") : L("保存顺序")) {
-                Task { await saveOrder() }
-            }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction) }.disabled(saving)
-        }.aieyesAccent().font(AppFont.body).padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogSelectionWidth).onAppear { keys = model.dashboard.quotaOrder ?? model.quotaAccounts.map(\.key); initialKeys = keys }
-        .onChange(of: keys != initialKeys) { _, dirty in onDirtyChange?(dirty) }
-        .updateDraftGuard(L("账户顺序"), snapshot: draftSnapshot(keys), dirty: keys != initialKeys, saving: saving, save: { await saveOrder() }, discard: close)
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L("拖动账户或使用上下按钮排序，应用于所有额度面板。")).font(AppFont.secondary).foregroundStyle(.secondary)
+            if keys.isEmpty { Text(L("尚无可显示额度的账户")).foregroundStyle(.secondary) }
+            else {
+                List {
+                    ForEach(keys, id: \.self) { key in
+                        HStack {
+                            Image(systemName: "line.3.horizontal").foregroundStyle(.secondary)
+                            ProviderMark(provider: key.components(separatedBy: ":").first ?? "custom")
+                            Text(model.settings.accounts.first { $0.key == key }?.name ?? key)
+                            Spacer()
+                            Button { move(key, -1) } label: { Image(systemName: "arrow.up") }.disabled(keys.first == key).accessibilityLabel(L("上移账户"))
+                            Button { move(key, 1) } label: { Image(systemName: "arrow.down") }.disabled(keys.last == key).accessibilityLabel(L("下移账户"))
+                        }.buttonStyle(.borderless).padding(.vertical, 4)
+                    }.onMove { from, to in apply { $0.move(fromOffsets: from, toOffset: to) } }
+                }
+                .frame(height: min(324, listHeight)).scrollDisabled(listHeight <= 324).disabled(saving)
+            }
+            if let error { ErrorNotice(message: error).foregroundStyle(Palette.warn) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { keys = current }
+        .onChange(of: current) { _, value in if !saving { keys = value } }
     }
-    @discardableResult private func saveOrder() async -> Bool {
-        saving = true; error = nil; defer { saving = false }
-        do { try await model.saveQuotaOrder(keys); close(); return true } catch { self.error = error.localizedDescription; return false }
-    }
-    private func close() { if let onClose { onClose() } else { dismiss() } }
     private func move(_ key: String, _ offset: Int) {
         guard let i = keys.firstIndex(of: key), keys.indices.contains(i + offset) else { return }
-        withMotion(.spring) { keys.swapAt(i, i + offset) }
+        apply { $0.swapAt(i, i + offset) }
+    }
+    private func apply(_ change: (inout [String]) -> Void) {
+        var next = keys; change(&next)
+        guard next != keys else { return }
+        withMotion(.spring) { keys = next }
+        Haptics.step()
+        Task { await save(next) }
+    }
+    private func save(_ order: [String]) async {
+        saving = true; error = nil; defer { saving = false }
+        do { try await model.saveQuotaOrder(order) } catch { self.error = error.localizedDescription; withMotion(.spring) { keys = current } }
     }
 }
 
+/// Accounts shown in the menu bar panel, in Settings → Panel. Choices apply at once and stay on this Mac.
 struct PanelAccountsView: View {
     @SurfaceModel var model: AppModel
-    var onClose: () -> Void
-    var onDirtyChange: ((Bool) -> Void)? = nil
     @AppStorage(NativePanelKey.accounts.rawValue) private var stored = "{}"
-    @State private var selected: [String: [String]] = [:]
-    @State private var automatic = Set<String>()
-    @State private var initialDraft = ""
     /// Free accounts hidden in Settings → Advanced are not offered here.
     private var accounts: [AgentAccount] { model.quotaCardAccounts(model.panelDashboard.quotas) }
     private var candidates: [AgentAccount] { model.panelCandidates(model.panelDashboard.quotas) }
-    private var draft: String { PanelAccountPreference.encode(selected, automatic: automatic) }
-    private var snapshot: String { draftSnapshot(selected) + draftSnapshot(automatic.sorted()) }
-    @FocusState private var cancelFocused: Bool
+    private var order: [String] { model.dashboard.quotaOrder ?? [] }
+    private var selected: [String: [String]] {
+        var value = PanelAccountPreference.selections(stored, accounts: candidates, order: order)
+        for (provider, choice) in PanelAccountPreference.decode(stored).providers where choice.mode == "custom" { value[provider] = choice.keys }
+        return value
+    }
+    private var automatic: Set<String> { Set(accounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }) }
     private func members(_ provider: String) -> [String] { Array(Set(accounts.map(\.provider))).filter { CoreContract.sameAgent($0, provider) } }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
+        let selected = selected, automatic = automatic
         VStack(alignment: .leading, spacing: 14) {
-            Text(L("面板显示账户")).font(AppFont.title)
-            HelpNote(title: L("面板账户"), text: L("自动显示每类前 5 个账户；新增账户默认加入。手动选择可留空、不限数量，仅影响本机面板。"))
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    ForEach(Array(Set(accounts.map { CoreContract.agentProvider($0.provider) })).sorted(), id: \.self) { provider in
-                        VStack(alignment: .leading, spacing: 8) {
-                            ProviderIdentity(provider: provider).font(AppFont.section)
-                            HStack { Text(L("· {0} 个" , members(provider).reduce(0) { $0 + (selected[$1]?.count ?? 0) })).foregroundStyle(.secondary); Spacer(); Button(members(provider).allSatisfy { automatic.contains($0) } ? L("自动选择") : L("恢复自动选择")) {
-                                let defaults = PanelAccountPreference.selections("{}", accounts: candidates, order: model.dashboard.quotaOrder ?? [])
-                                for member in members(provider) { automatic.insert(member); selected[member] = defaults[member] }
-                            }.font(AppFont.secondary) }.font(AppFont.secondary)
-                            ForEach(accounts.filter { CoreContract.sameAgent($0.provider, provider) }, id: \.key) { account in
-                                Toggle(account.name, isOn: Binding(get: { selected[account.provider]?.contains(account.key) == true }, set: { enabled in
-                                    for member in members(provider) { automatic.remove(member) }
-                                    var keys = selected[account.provider] ?? []
-                                    if enabled && !keys.contains(account.key) { keys.append(account.key) } else if !enabled { keys.removeAll { $0 == account.key } }
-                                    selected[account.provider] = keys
-                                })).toggleStyle(.checkbox).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
-                            }
+            HStack(spacing: 6) {
+                Text(L("自动显示每类前 5 个账户；手动选择仅影响本机面板。")).font(AppFont.secondary).foregroundStyle(.secondary)
+                HelpNote(title: L("面板账户"), text: L("自动显示每类前 5 个账户；新增账户默认加入。手动选择可留空、不限数量，仅影响本机面板。"))
+            }
+            ForEach(Array(Set(accounts.map { CoreContract.agentProvider($0.provider) })).sorted(), id: \.self) { provider in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        ProviderIdentity(provider: provider).font(AppFont.section)
+                        Text(L("· {0} 个" , members(provider).reduce(0) { $0 + (selected[$1]?.count ?? 0) })).font(AppFont.secondary).foregroundStyle(.secondary)
+                        Spacer()
+                        if members(provider).allSatisfy({ automatic.contains($0) }) { Text(L("自动选择")).font(AppFont.secondary).foregroundStyle(.secondary) }
+                        else {
+                            Button(L("恢复自动选择")) {
+                                let defaults = PanelAccountPreference.selections("{}", accounts: candidates, order: order)
+                                var selection = selected, auto = automatic
+                                for member in members(provider) { auto.insert(member); selection[member] = defaults[member] }
+                                stored = PanelAccountPreference.encode(selection, automatic: auto)
+                            }.font(AppFont.secondary)
                         }
                     }
-                    if accounts.isEmpty { Text(L("尚无可显示额度的账户")).foregroundStyle(.secondary) }
-                }.padding(4)
+                    ForEach(accounts.filter { CoreContract.sameAgent($0.provider, provider) }, id: \.key) { account in
+                        Toggle(account.name, isOn: Binding(get: { selected[account.provider]?.contains(account.key) == true }, set: { enabled in
+                            var selection = selected, auto = automatic
+                            for member in members(provider) { auto.remove(member) }
+                            var keys = selection[account.provider] ?? []
+                            if enabled && !keys.contains(account.key) { keys.append(account.key) } else if !enabled { keys.removeAll { $0 == account.key } }
+                            selection[account.provider] = keys
+                            stored = PanelAccountPreference.encode(selection, automatic: auto)
+                        })).toggleStyle(.checkbox).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
             }
-            HStack { Spacer(); Button(L("取消"), action: onClose).keyboardShortcut(.cancelAction).focused($cancelFocused); Button(L("保存面板选择")) { stored = PanelAccountPreference.encode(selected, automatic: automatic); onClose() }.buttonStyle(.aieyesPrimary) }
-        }.padding(DesignTokens.dialogPadding).font(AppFont.body).frame(width: DesignTokens.dialogSelectionWidth, height: 480).aieyesAccent()
-            .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}") }; automatic = Set(accounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }); selected = PanelAccountPreference.selections(stored, accounts: candidates, order: model.dashboard.quotaOrder ?? []); for (provider, choice) in PanelAccountPreference.decode(stored).providers where choice.mode == "custom" { selected[provider] = choice.keys }; initialDraft = snapshot; cancelFocused = true }
-            .onChange(of: !initialDraft.isEmpty && initialDraft != snapshot) { _, dirty in onDirtyChange?(dirty) }
-            .updateDraftGuard(L("面板显示账户"), snapshot: snapshot, dirty: !initialDraft.isEmpty && initialDraft != snapshot, saving: false, save: { stored = draft; onClose(); return true }, discard: onClose)
+            if accounts.isEmpty { Text(L("尚无可显示额度的账户")).foregroundStyle(.secondary) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}") } }
     }
 }
 

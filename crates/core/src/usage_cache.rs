@@ -307,7 +307,13 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
     let mut gaps = BTreeMap::<String, PricingGap>::new();
     let mut options = std::collections::BTreeSet::new();
     let mut pending = vec![];
+    let query_started = std::time::Instant::now();
+    let mut last_progress = query_started;
     for i in 0..=(last_day - earliest).num_days() {
+        if last_progress.elapsed().as_millis() >= 100 {
+            crate::operations::report_query(i, (last_day - earliest).num_days() + 1);
+            last_progress = std::time::Instant::now();
+        }
         crate::operations::check()?;
         let date = earliest + Duration::days(i);
         let day = date.to_string();
@@ -370,7 +376,16 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
                 shared_json,
                 f.usage_provider_alias()
             ])?;
+            let mut checked = 0_u64;
             while let Some(row) = rows.next()? {
+                checked += 1;
+                if checked.is_multiple_of(256) {
+                    crate::operations::check()?;
+                    if last_progress.elapsed().as_millis() >= 100 {
+                        crate::operations::report_query(i, (last_day - earliest).num_days() + 1);
+                        last_progress = std::time::Instant::now();
+                    }
+                }
                 let mut e: UsageEvent = serde_json::from_str(&row.get::<_, String>(0)?)?;
                 if !crate::native_credits::prepare_view(store, &mut e, f.source_id.as_deref())? {
                     continue;

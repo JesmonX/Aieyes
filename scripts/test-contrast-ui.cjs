@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const { chromium } = require('../apps/desktop/node_modules/playwright');
 const { createPreviewServer } = require('./desktop-preview/server.cjs');
-const PAGES = ['[data-page=agent]', '[data-page=analysis]', '[data-page=servers]', '[data-settings-tab=integrations]', '[data-settings-tab=hosts]', '[data-settings-tab=prices]', '[data-settings-tab=wakeups]', '[data-page=settings]'];
+const PAGES = ['[data-page=agent]', '[data-page=analysis]', '[data-page=servers]', '[data-page=sessions]', '[data-settings-tab=integrations]', '[data-settings-tab=hosts]', '[data-settings-tab=prices]', '[data-settings-tab=wakeups]', '[data-page=settings]'];
 const SIZES = { windows: [1294, 840], linux: [1120, 800] };
 
 function measure() {

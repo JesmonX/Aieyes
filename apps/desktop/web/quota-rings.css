@@ -161,9 +161,10 @@ button.quota-tile:is(:hover,:focus-visible) .ring-swap-time { display:none; }
 .quota-rings > .quota-supplement { box-sizing:border-box; width:100%; container-type:inline-size; font-size:var(--font-secondary); font-weight:var(--weight-medium); }
 .quota-supplement small,.supplement-period time { font-size:var(--font-caption); font-weight:var(--weight-medium); }
 .ring-paid { stroke:var(--accent); }
-.ring-granted { stroke:var(--ok); }
+/* Granted balance is a data series, not a status: neutral, as on macOS. */
+.ring-granted { stroke:var(--faint); }
 .balance-paid { color:var(--accent-text); }
-.balance-granted { color:var(--ok); }
+.balance-granted { color:var(--muted); }
 .quota-tile[data-style=tile] .ring[data-kind=coin]:has(.ring-granted) { --ring-size:72px !important; }
 .quota-tile[data-style=tile] .ring[data-kind=coin] .ring-num { font-size:var(--font-caption); }
 .qoder-credit-value { max-width:100%; }

@@ -35,7 +35,7 @@ struct QuotaNotificationSettingsView: View {
                 HelpNote(title: L("会话提示音"), text: L("仅在新状态发生时播放；关闭面板后仍有效。音量相对于系统输出，0% 为静音。"))
                 Spacer()
                 Slider(value: Binding(get: { Double((model.settingsDraft.sessionSounds ?? SessionSoundSettings()).playbackVolume) }, set: { value in
-                    var preferences = model.settingsDraft.sessionSounds ?? SessionSoundSettings(); preferences.volume = value; model.settingsDraft.sessionSounds = preferences
+                    var preferences = model.settingsDraft.sessionSounds ?? SessionSoundSettings(); if Int(preferences.playbackVolume * 10) != Int(value * 10) { Haptics.step() }; preferences.volume = value; model.settingsDraft.sessionSounds = preferences
                 }), in: 0...1, step: 0.01).frame(maxWidth: 220).accessibilityLabel(L("提示音音量"))
                 Text("\(Int(((model.settingsDraft.sessionSounds ?? SessionSoundSettings()).playbackVolume * 100).rounded()))%")
                     .monospacedDigit().frame(width: 44, alignment: .trailing)

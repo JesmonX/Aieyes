@@ -40,6 +40,7 @@
 
 - [三端控件与样式规格](ui-control-spec.md)，设计数据：`ui-design-tokens.json`、`ui-phase-colors.json`、`chart-palettes.json`
 - [图表预置配色](chart-palettes.md) · [Agent 图标](provider-icons.md)
+- [工作台体验与系统集成](workbench-experience.md)：会话页、设置搜索、动效、登录启动、应用链接、Webhook、服务器走势与告警、本次更新
 - [Windows / Linux 桌面版](windows-linux.md) · [Windows 外观与交互](windows-appearance.md)
 - [官网](website.md)
 

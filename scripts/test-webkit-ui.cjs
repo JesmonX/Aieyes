@@ -6,7 +6,7 @@ const { webkit } = require('../apps/desktop/node_modules/playwright');
 const { createPreviewServer } = require('./desktop-preview/server.cjs');
 const pages = [
   ['overview', '[data-page=agent]'], ['analysis', '[data-page=analysis]'],
-  ['servers', '[data-page=servers]'], ['integrations', '[data-settings-tab=integrations]'],
+  ['servers', '[data-page=servers]'], ['sessions', '[data-page=sessions]'], ['integrations', '[data-settings-tab=integrations]'],
   ['hosts', '[data-settings-tab=hosts]'], ['prices', '[data-settings-tab=prices]'],
   ['wakeups', '[data-settings-tab=wakeups]'], ['settings', '[data-page=settings]'],
 ];

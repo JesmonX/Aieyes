@@ -65,14 +65,15 @@ const { fixture } = require('./workspace-ui-fixture.cjs');
       await page.screenshot({path:path.join(out,`${platform}-machine-menu.png`)});
       await menu.locator('summary').focus();await page.keyboard.press('ArrowDown');assert.equal(await menu.locator('button').first().evaluate(el=>el===document.activeElement),true);
       await page.keyboard.press('Escape');assert.equal(await menu.getAttribute('open'),null);
-      await page.evaluate(()=>{state.settings.accounts[0].name='Long-account-name-'.repeat(12);openPanelAccounts();});
+      // Panel accounts are a settings page; a long account name wraps inside its group.
+      await page.evaluate(async()=>{state.settings.accounts[0].name='Long-account-name-'.repeat(12);await openPanelAccounts();});
       for(const width of [450,760]) {
         await page.setViewportSize({width,height:720});
         const overflow=await page.locator('.panel-account-group').first().evaluate(el=>el.scrollWidth-el.clientWidth);assert(overflow<=1,`Account picker overflow: ${overflow} `+JSON.stringify(await page.locator('.panel-account-group').first().evaluate(el=>{const b=el.getBoundingClientRect();return {width:b.width,client:el.clientWidth,scroll:el.scrollWidth,items:[...el.querySelectorAll('*')].map(c=>({tag:c.tagName,cls:c.className,w:c.getBoundingClientRect().width,right:c.getBoundingClientRect().right-b.right})).filter(c=>c.right>0)}})));
-        await page.locator('[data-panel-account]').last().scrollIntoViewIfNeeded();assert(await page.locator('[data-panel-account]').last().isVisible());await page.locator('.quota-dialog-body').evaluate(el=>el.scrollTop=0);
-        await page.locator('#quota-dialog').screenshot({path:path.join(out,`${platform}-panel-accounts-${width}.png`)});
+        await page.locator('[data-panel-account]').last().scrollIntoViewIfNeeded();assert(await page.locator('[data-panel-account]').last().isVisible());
+        await page.locator('[data-settings-section=accounts]').screenshot({path:path.join(out,`${platform}-panel-accounts-${width}.png`)});
       }
-      await page.locator('#panel-accounts-cancel').click();assert.deepEqual(errors,[]);await page.close();
+      assert.equal(await page.locator('#quota-dialog[open]').count(),0);assert.deepEqual(errors,[]);await page.close();
     }
     console.log('Desktop tables, heatmap alignment, menus, account picker and GPU warning semantics passed');
   } finally {await browser?.close();server.close();}

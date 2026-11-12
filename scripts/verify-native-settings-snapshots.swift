@@ -33,10 +33,12 @@ for scenario in ["empty", "single", "multi", "long", "failure", "capacity"] {
         precondition(guide.contains("你想用Aieyes做什么") && guide.contains("调整刷新频率"), "Setup guide must show user goals and refresh help")
         let network = try recognizedText(root.appendingPathComponent(scenario + "/setup-network-" + theme + ".png"))
         precondition(network.contains("前置命令") && network.contains("服务器代理配置示例"), "Setup network help must expose the account command and folded proxy examples")
-        for page in ["appearance", "desktop", "network", "refresh", "notifications", "advanced", "updates"] {
+        for page in ["appearance", "panel", "desktop", "system", "network", "refresh", "notifications", "webhooks", "advanced", "updates"] {
             let settingsFile = root.appendingPathComponent(scenario + "/settings-general-" + page + "-" + theme + ".png")
             precondition(FileManager.default.fileExists(atPath: settingsFile.path), "Missing settings subpage: " + settingsFile.path)
         }
+        let sessions = try recognizedText(root.appendingPathComponent(scenario + "/sessions-" + theme + ".png"))
+        precondition(sessions.contains("会话") && !sessions.contains("账户额度"), "Sessions screenshot did not render the sessions page")
     }
 }
-print("Native snapshots render server controls and cover all seven general settings subpages")
+print("Native snapshots render server controls, the sessions page and all ten general settings subpages")

@@ -70,6 +70,7 @@ pub(crate) fn setup(db: &Connection) -> Result<()> {
         ("estimates", "estimates", "1"),
         ("prices", "price_history", "1"),
         ("notifications", "quota_reset_notifications", "1"),
+        ("webhooks", "webhook_events", "1"),
         ("sources", "source_status", "1"),
         ("sources", "kv", "{row}.key LIKE 'automatic-status:%'"),
     ] {
@@ -123,7 +124,7 @@ pub(crate) fn revision(db: &Connection, domain: &str) -> Result<i64> {
 }
 pub fn revisions(db: &Connection) -> Result<Value> {
     let mut result = serde_json::Map::new();
-    let mut query = db.prepare_cached("SELECT substr(key,18),CAST(value AS INTEGER) FROM kv WHERE key IN ('runtime.revision:settings','runtime.revision:pets','runtime.revision:accounts','runtime.revision:quotas','runtime.revision:estimates','runtime.revision:prices','runtime.revision:notifications','runtime.revision:sources')")?;
+    let mut query = db.prepare_cached("SELECT substr(key,18),CAST(value AS INTEGER) FROM kv WHERE key IN ('runtime.revision:settings','runtime.revision:pets','runtime.revision:accounts','runtime.revision:quotas','runtime.revision:estimates','runtime.revision:prices','runtime.revision:notifications','runtime.revision:webhooks','runtime.revision:sources')")?;
     for row in query.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
         let (key, value) = row?;
         result.insert(key, json!(value));

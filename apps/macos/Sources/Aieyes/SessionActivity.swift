@@ -327,8 +327,8 @@ struct MenuActivityLabel: View {
                 if value.phase == nil || value.phase == .idle { BrandMark(template: true) }
                 else { MenuActivityIndicator(phase: value.phase, enabled: value.animationEnabled) }
             }
-            if let label = value.ring?.label, !label.isEmpty { Text(label).monospacedDigit() }
-            if !value.text.isEmpty { Text(value.text).monospacedDigit() }
+            if let label = value.ring?.label, !label.isEmpty { Text(label).monospacedDigit().numericTransition(value: label) }
+            if !value.text.isEmpty { Text(value.text).monospacedDigit().numericTransition(value: value.text) }
         }.font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium)).padding(.horizontal, 5)
     }
 }

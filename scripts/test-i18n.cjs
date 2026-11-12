@@ -135,11 +135,10 @@ function populate() {
       assert.equal(await page.locator('#field-path').inputValue(), '/资料/代码');
       await audit('open directory editor', '#editor');
       await page.evaluate(() => document.querySelector('#editor').close());
-      // A user label identical to a catalog key must remain user text in a modal.
-      await page.evaluate(() => {state.settings.accounts[0].name = '设置';openPanelAccounts();});
+      // A user label identical to a catalog key must remain user text in a settings list.
+      await page.evaluate(async () => {state.settings.accounts[0].name = '设置';await openPanelAccounts();});
       await page.evaluate(() => setLanguage('zh-CN'));await page.evaluate(() => setLanguage('en'));
       assert.equal(await page.locator('[data-panel-account="codex:a0"]').locator('..').innerText(), '设置');
-      await page.locator('#quota-close').click();
       const panel = await context.newPage();await panel.setViewportSize({width: 360, height: 720});
       await panel.goto(origin + '/floating.html');await panel.evaluate(() => AieyesApp.ready);
       await page.evaluate(() => AieyesApp.openSettings({category: 'general', section: 'network'}));

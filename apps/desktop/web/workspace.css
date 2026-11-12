@@ -158,6 +158,8 @@ body:not(:has(#panel)) .quota-group[data-single-account=true] > .quotas { grid-t
 .quota-disclosure:not([open]) + .quota-content .agy-group { margin-top:6px; }
 .quota-disclosure:not([open]) + .quota-content { gap:8px; }
 .quota-analysis { justify-self:start; color:var(--ink); }
+.quota-links { display:inline-flex; align-items:center; flex-wrap:wrap; gap:4px 8px; }
+.quota-links > button { display:inline-flex; align-items:center; gap:4px; }
 .overview-usage { margin-top:14px; padding:12px 14px; container:usage / inline-size; display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px 24px; }
 .usage-heading { display:contents; }
 .usage-title { display:flex; align-items:center; gap:6px; white-space:nowrap; }
@@ -187,6 +189,35 @@ body:not(:has(#panel)) .quota-group[data-single-account=true] > .quotas { grid-t
 .resource-block .between { font-size:var(--font-caption); justify-content:flex-start; gap:6px; }
 .resource-block > .resource-bar { grid-column:1 / -1; margin:0; }
 .resource-block small { grid-column:1 / -1; color:var(--muted); font-size:var(--font-caption); line-height:var(--line-caption); }
+/* Server trend lines (host-trend.js): 1.5 px round-capped line at 75% of the category colour over a
+   14% wash, a dot on the current reading. Drawn at 20 px inside headers that are taller, so a
+   trend never changes a header's height. */
+.host-trend { display:block; flex:0 1 120px; min-width:0; height:20px; overflow:visible; color:var(--category,var(--accent)); }
+.host-trend-area { fill:color-mix(in srgb,currentColor 14%,transparent); stroke:none; }
+.host-trend-line { fill:none; stroke:color-mix(in srgb,currentColor 75%,transparent); stroke-width:1.5px; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+.host-trend-dot { fill:none; stroke:currentColor; stroke-width:4px; stroke-linecap:round; vector-effect:non-scaling-stroke; }
+.resource-block > .between { min-width:0; }
+.resource-block > .between > .host-trend { margin-left:auto; }
+.server-gpu-title > .host-trend { flex-basis:96px; margin-left:auto; align-self:center; }
+.host-trend-row { display:flex; align-items:center; gap:8px; height:20px; margin-bottom:6px; color:var(--muted); font-size:var(--font-caption); }
+.host-trend-row > span:first-child { flex:none; }
+.host-trend-row > .host-trend { flex:0 1 180px; min-width:44px; margin-left:auto; }
+.host-trend-empty { margin-left:auto; color:var(--muted); }
+/* 本次更新 banner above the overview and the notes under Settings › 更新与关于. */
+.whats-new-banner { display:flex; align-items:center; gap:8px; margin:0 0 var(--space-card-content); padding:8px 12px; border-radius:var(--radius-overlay); background:color-mix(in srgb,var(--accent) calc(var(--control-tint-opacity) * 100%),transparent); font-size:var(--font-secondary); }
+.whats-new-banner > .ui-icon { flex:none; color:var(--accent-text); }
+.whats-new-banner > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.whats-new-banner > [data-whats-new-open] { flex:none; border:0; background:transparent; box-shadow:none; color:var(--accent-text); padding-inline:4px; }
+.whats-new-banner > .icon-button { display:grid; place-items:center; flex:none; width:var(--icon-button-size); height:var(--icon-button-size); padding:0; border:0; background:transparent; box-shadow:none; color:var(--muted); }
+.release-notes-items { display:grid; gap:8px; margin:12px 0; padding-left:20px; }
+.release-notes-items li::marker { color:var(--accent); }
+.release-notes code { font-family:var(--font-code); font-size:var(--font-secondary); }
+/* Overview outline before the first result (no motion: it is replaced within moments). */
+.overview-skeleton { display:grid; gap:var(--space-section); }
+.overview-skeleton > .card { margin:0; }
+.skeleton-usage { min-height:96px; }
+.skeleton-quotas { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; }
+.skeleton-quotas > .quota-placeholder { min-height:150px; margin:0; }
 .server-gpu,.server-filesystems,.server-network-rates { padding:10px 12px; border-radius:var(--radius-overlay); }
 .server-network-rates { display:grid; gap:7px; font-size:var(--font-caption); }
 .server-network-rates > div { display:flex; flex-wrap:wrap; gap:6px; justify-content:space-between; }
@@ -331,6 +362,7 @@ html:not(:has(#panel,body[data-platform=windows])) { scrollbar-gutter:stable; }
   .agent-selector button[aria-pressed=true] { forced-color-adjust:none; color:HighlightText; background:Highlight; }
   .resource-block > strong { color:CanvasText; }
   .session-counts .phase-dot { forced-color-adjust:none; background:CanvasText; }
+  .host-trend { color:CanvasText; }
 }
 
 .quota-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:4px 12px; }
@@ -357,4 +389,96 @@ html:not(:has(#panel,body[data-platform=windows])) { scrollbar-gutter:stable; }
 .account-settings-group > .card + .card { border-top:1px solid var(--border); }
 .account-settings-group :is(input,select,textarea) { max-width:100%; }
 .account-settings-group .list-row { min-width:0; overflow-wrap:anywhere; }
+/* Light-mode elevation: on the light detail window a top-level card sits on the window with a hairline
+   shadow; nested and borderless cards stay flat. Dark mode separates by fill, forced colours by border
+   (both tokens resolve --shadow-xs to the right value). */
+:root:not([data-theme=dark]) #content :is(.card,.stat):not(:is(.card,.settings-disclosure,.settings-section-body,.account-settings-group,.setup-guide) *) { box-shadow:var(--shadow-xs); }
+}
+
+@layer components {
+/* One empty-state language for every page: a symbol on concentric rings (the quota-ring
+   motif), a title, one line of guidance and at most one action. */
+.empty-state { --empty-tint:var(--accent-text); display:grid; justify-items:center; gap:14px; padding:36px 16px; text-align:center; }
+.empty-state[data-compact] { gap:10px; padding:20px 16px; }
+.empty-state[data-tone=warn] { --empty-tint:var(--warn); }
+.empty-state-mark { position:relative; display:grid; place-items:center; width:76px; height:76px; color:var(--empty-tint); }
+.empty-state[data-compact] .empty-state-mark { width:56px; height:56px; }
+.empty-state-mark > svg { position:absolute; inset:0; width:100%; height:100%; overflow:visible; fill:none; }
+.empty-state-ring { stroke:color-mix(in srgb,var(--empty-tint) 12%,transparent); stroke-width:1; }
+.empty-state-arc { stroke:color-mix(in srgb,var(--empty-tint) 40%,transparent); stroke-width:2; stroke-linecap:round; stroke-dasharray:34 66; stroke-dashoffset:-6; }
+.empty-state-disc { display:grid; place-items:center; width:66%; height:66%; border-radius:50%; background:color-mix(in srgb,var(--empty-tint) calc(var(--control-tint-opacity) * 100%),transparent); }
+.empty-state-disc .ui-icon { width:23px; height:23px; flex-basis:23px; }
+.empty-state[data-compact] .empty-state-disc .ui-icon { width:17px; height:17px; flex-basis:17px; }
+.empty-state-text { display:grid; gap:4px; max-width:46ch; }
+.empty-state-text h2 { margin:0; font-size:var(--font-section); line-height:var(--line-section); }
+.empty-state-text p { margin:0; color:var(--muted); font-size:var(--font-secondary); line-height:var(--line-secondary); }
+.empty-state > button { min-height:var(--control-md); }
+.empty-state > .actions { flex-wrap:wrap; justify-content:center; }
+.empty-state > .actions > button { min-height:var(--control-md); }
+/* A card that only holds an empty state uses the empty state's own spacing. */
+.card:has(> .empty-state:only-child) { padding-block:0; }
+
+/* Sessions page: filter chips, three summary tiles, then running and recently ended lists. */
+.session-page,.session-page > [data-session-body] { display:grid; gap:var(--space-section); min-width:0; }
+.session-page :is(.card,.stats) { margin-bottom:0; }
+.agent-selector.session-selector { margin-bottom:0; max-width:100%; justify-self:start; }
+.session-stats { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.stat[data-session-tile=waiting] .stat-label b { color:var(--warn); }
+.stat[data-session-tile=ended] .stat-label b { color:var(--ok); }
+.session-list > h2 { margin:0 0 4px; }
+.session-list > .muted { margin:var(--space-card-content) 0 0; font-size:var(--font-secondary); }
+.session-list > .live-row:last-child { border-bottom:0; padding-bottom:0; }
+.session-row .session-info strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--font-body); }
+.live-row > .session-state { display:grid; flex:0 0 auto; justify-items:end; gap:3px; text-align:right; }
+.session-state .session-timing { font-variant-numeric:tabular-nums; white-space:nowrap; }
+/* The phase label is text in ink; the row's phase mark carries the phase colour (graphics need 3:1, text 4.5:1). */
+.session-state > .session-phase-label { color:var(--ink); white-space:nowrap; }
+.session-focus { display:grid; place-items:center; flex:0 0 auto; width:var(--icon-button-size); height:var(--icon-button-size); padding:0; border:0; background:transparent; box-shadow:none; color:var(--accent-text); }
+.session-focus:hover { background:var(--control-hover); }
+.session-unavailable,.session-failure { display:flex; align-items:flex-start; gap:8px; color:var(--warn); }
+.session-failure { margin:8px 0 0; font-size:var(--font-secondary); overflow-wrap:anywhere; user-select:text; }
+.session-failure > .ui-icon,.session-unavailable > .ui-icon { margin-top:3px; }
+@container (max-width:520px) { .session-stats { grid-template-columns:1fr; } }
+
+/* Settings search: while a query is active its results stand in for the page below. */
+.settings-search { display:grid; gap:8px; margin:0 0 16px; }
+.settings-search input { width:100%; max-width:360px; }
+.settings-search-results { display:grid; gap:2px; padding:6px; border:1px solid var(--card-border); border-radius:var(--radius-card); background:var(--settings-card-fill); }
+.settings-search-results > button { display:grid; gap:2px; justify-items:start; min-height:var(--control-md); padding:8px 10px; border:0; background:transparent; box-shadow:none; text-align:left; }
+.settings-search-results > button:hover { background:var(--control-hover); }
+.settings-search-results > button small { color:var(--muted); font-size:var(--font-secondary); }
+.settings-search-results > .muted { margin:0; padding:8px 10px; }
+#content[data-settings-searching] > :is(.settings-categories,.settings-save-bar,#settings-panel) { display:none; }
+/* Settings sections that replaced dialogs: panel accounts, account order, sampling. */
+.quota-order > .actions { margin-top:var(--space-card-content); }
+.sampling-settings > .sampling-row:last-of-type { border-bottom:0; }
+.panel-accounts > .panel-account-group:last-of-type { margin-bottom:0; }
+.settings-subpage [data-settings-error]:not([hidden]) { margin-top:var(--space-card-content); }
+/* Settings › 启动与系统 and Webhook. */
+.system-launch > .error,.webhook-row > .webhook-test { margin:var(--space-card-content) 0 0; }
+.system-link-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid var(--border); }
+.system-link-row:last-child { border-bottom:0; }
+.system-link-row > code { min-width:0; overflow-wrap:anywhere; font-family:var(--font-code); font-size:var(--font-secondary); user-select:all; }
+.system-link-row > button { flex:none; min-width:64px; }
+.webhook-list { display:grid; margin:4px 0 var(--space-card-content); }
+.webhook-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:4px 12px; padding:8px 0; border-bottom:1px solid var(--border); }
+.webhook-row:last-child { border-bottom:0; }
+.webhook-row > .webhook-test { grid-column:1 / -1; }
+.webhook-target > span { display:grid; gap:2px; min-width:0; }
+.webhook-target strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
+.webhook-target small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--font-secondary); }
+.webhook-actions { display:flex; align-items:center; gap:4px; }
+.webhook-actions > .icon-button { display:grid; place-items:center; width:var(--icon-button-size); height:var(--icon-button-size); padding:0; }
+.webhook-test.ok { display:flex; align-items:center; gap:6px; color:var(--ok); font-size:var(--font-secondary); }
+.webhook-events > label + label { margin-top:8px; }
+.webhook-targets > .actions { align-items:center; flex-wrap:wrap; }
+}
+
+@layer components {
+:root[data-surface=panel][data-theme=light] #content > .card { background:#fff; box-shadow:var(--shadow-xs); }
+}
+
+@layer components {
+.query-progress { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); z-index:70; display:flex; align-items:center; gap:10px; padding:10px 14px; border:1px solid var(--border); border-radius:var(--radius-card); background:var(--solid); box-shadow:var(--shadow-overlay); }
+.query-progress progress { width:120px; }
 }

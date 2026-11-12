@@ -662,6 +662,17 @@
   },
   "methods": [
     {
+      "name": "accounts.autoScan",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
       "name": "accounts.cleanup.list",
       "lane": "configuration",
       "invalidates": [],
@@ -778,7 +789,7 @@
       "updateBehavior": "finish"
     },
     {
-      "name": "agents.set",
+      "name": "agents.manage",
       "lane": "configuration",
       "invalidates": [
         "settings",
@@ -789,7 +800,7 @@
       "updateBehavior": "finish"
     },
     {
-      "name": "agents.manage",
+      "name": "agents.set",
       "lane": "configuration",
       "invalidates": [
         "settings",
@@ -864,6 +875,14 @@
       "updateBehavior": "complete"
     },
     {
+      "name": "app.launch",
+      "lane": "main",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
       "name": "autoEstimates.configure",
       "lane": "configuration",
       "invalidates": [
@@ -873,6 +892,16 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "finish"
+    },
+    {
+      "name": "autoEstimates.rebuild",
+      "lane": "main",
+      "invalidates": [
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
     },
     {
       "name": "autoEstimates.tick",
@@ -885,11 +914,58 @@
       "updateBehavior": "cancel"
     },
     {
-      "name": "autoEstimates.rebuild",
-      "lane": "main",
+      "name": "buddyAuth.cancel",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
+    {
+      "name": "buddyAuth.logout",
+      "lane": "accounts",
       "invalidates": [
+        "settings",
         "data"
       ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "buddyAuth.start",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "buddyAuth.status",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
+    {
+      "name": "claudeAuth.keychain",
+      "lane": "quotas",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "claudeAuth.status",
+      "lane": "quotas",
+      "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
@@ -1095,6 +1171,33 @@
       "updateBehavior": "finish"
     },
     {
+      "name": "copilotAuth.cancel",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
+    {
+      "name": "copilotAuth.start",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "copilotAuth.status",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
+    {
       "name": "credentials.save",
       "lane": "main",
       "invalidates": [],
@@ -1167,6 +1270,22 @@
       "updateBehavior": "cancel"
     },
     {
+      "name": "dashboard.cancel",
+      "lane": "dashboard",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
+      "name": "dashboard.status",
+      "lane": "dashboard",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
       "name": "dashboard.summary",
       "lane": "dashboard",
       "invalidates": [],
@@ -1181,6 +1300,14 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "observe"
+    },
+    {
+      "name": "hostAlerts.take",
+      "lane": "hosts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
     },
     {
       "name": "hosts.credentials.delete",
@@ -1205,6 +1332,30 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
+    },
+    {
+      "name": "hosts.history",
+      "lane": "hosts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
+      "name": "hosts.monitor.configure",
+      "lane": "hosts",
+      "updateBehavior": "observe",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "hosts.monitor.refresh",
+      "lane": "hosts",
+      "updateBehavior": "cancel",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
     },
     {
       "name": "hosts.sample",
@@ -1319,10 +1470,9 @@
       "updateBehavior": "observe"
     },
     {
-      "name": "prices.reference",
+      "name": "prices.recalculate",
       "lane": "main",
       "invalidates": [
-        "settings",
         "data"
       ],
       "invalidateOnFailure": false,
@@ -1330,9 +1480,10 @@
       "updateBehavior": "finish"
     },
     {
-      "name": "prices.recalculate",
+      "name": "prices.reference",
       "lane": "main",
       "invalidates": [
+        "settings",
         "data"
       ],
       "invalidateOnFailure": false,
@@ -1358,6 +1509,14 @@
       "invalidateOnFailure": false,
       "refreshKey": "prices",
       "updateBehavior": "cancel"
+    },
+    {
+      "name": "qoderCli.status",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
     },
     {
       "name": "quotaEstimates.get",
@@ -1460,6 +1619,14 @@
       "updateBehavior": "observe"
     },
     {
+      "name": "sessions.focusTarget",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
       "name": "sessions.hooks.remove",
       "lane": "configuration",
       "invalidates": [],
@@ -1492,14 +1659,6 @@
       "updateBehavior": "cancel"
     },
     {
-      "name": "sessions.focusTarget",
-      "lane": "configuration",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "finish"
-    },
-    {
       "name": "settings.get",
       "lane": "configuration",
       "invalidates": [],
@@ -1530,14 +1689,6 @@
       "updateBehavior": "finish"
     },
     {
-      "name": "sources.defaultPath",
-      "lane": "configuration",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "complete"
-    },
-    {
       "name": "sources.configure",
       "lane": "configuration",
       "invalidates": [
@@ -1547,6 +1698,14 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "finish"
+    },
+    {
+      "name": "sources.defaultPath",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
     },
     {
       "name": "sources.rebind",
@@ -1608,14 +1767,6 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "finish"
-    },
-    {
-      "name": "qoderCli.status",
-      "lane": "accounts",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "observe"
     },
     {
       "name": "wakeups.delete",
@@ -1682,14 +1833,6 @@
       "updateBehavior": "cancel"
     },
     {
-      "name": "wakeups.suggest",
-      "lane": "wakeups",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "cancel"
-    },
-    {
       "name": "wakeups.remove",
       "lane": "wakeups",
       "invalidates": [
@@ -1728,123 +1871,28 @@
       "updateBehavior": "cancel"
     },
     {
-      "name": "dashboard.status",
-      "lane": "dashboard",
+      "name": "wakeups.suggest",
+      "lane": "wakeups",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
     {
-      "name": "hosts.monitor.configure",
-      "lane": "hosts",
-      "updateBehavior": "observe",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null
-    },
-    {
-      "name": "hosts.monitor.refresh",
-      "lane": "hosts",
-      "updateBehavior": "cancel",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null
-    },
-    {
-      "name": "accounts.autoScan",
-      "lane": "accounts",
-      "invalidates": [
-        "settings",
-        "data"
-      ],
-      "invalidateOnFailure": true,
-      "refreshKey": null,
-      "updateBehavior": "cancel"
-    },
-    {
-      "name": "claudeAuth.keychain",
-      "lane": "quotas",
-      "invalidates": [
-        "settings",
-        "data"
-      ],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "finish"
-    },
-    {
-      "name": "claudeAuth.status",
-      "lane": "quotas",
+      "name": "webhooks.dispatch",
+      "lane": "network",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
     {
-      "name": "copilotAuth.start",
-      "lane": "accounts",
+      "name": "webhooks.test",
+      "lane": "network",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
-    },
-    {
-      "name": "copilotAuth.status",
-      "lane": "accounts",
-      "invalidates": [
-        "settings",
-        "data"
-      ],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "complete"
-    },
-    {
-      "name": "copilotAuth.cancel",
-      "lane": "accounts",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "complete"
-    },
-    {
-      "name": "buddyAuth.start",
-      "lane": "accounts",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "finish"
-    },
-    {
-      "name": "buddyAuth.status",
-      "lane": "accounts",
-      "invalidates": [
-        "settings",
-        "data"
-      ],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "complete"
-    },
-    {
-      "name": "buddyAuth.cancel",
-      "lane": "accounts",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "complete"
-    },
-    {
-      "name": "buddyAuth.logout",
-      "lane": "accounts",
-      "invalidates": [
-        "settings",
-        "data"
-      ],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     }
   ],
   "petFrameDurations": [

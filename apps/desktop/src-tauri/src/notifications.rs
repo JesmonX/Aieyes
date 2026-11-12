@@ -44,7 +44,7 @@ fn permission(app: &tauri::AppHandle) -> Result<String, String> {
         })
         .map_err(|e| e.to_string())
 }
-fn request(app: &tauri::AppHandle) -> Result<(), String> {
+pub(crate) fn request(app: &tauri::AppHandle) -> Result<(), String> {
     if permission(app)? == "prompt" {
         app.notification()
             .request_permission()
@@ -70,7 +70,7 @@ pub fn declare_app_id(identifier: &str) {
         let _ = unsafe { windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(&id) };
     }
 }
-fn send(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), String> {
+pub(crate) fn send(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), String> {
     if permission(app)? != "granted" {
         return Err("系统通知未授权，请在系统通知设置中允许 Aieyes".into());
     }
@@ -149,7 +149,7 @@ fn content(event: &ResetEvent) -> (String, String) {
         });
     (title, format!("{name} · {}\n{windows}", event.name))
 }
-fn report(app: &tauri::AppHandle, result: Result<(), String>) {
+pub(crate) fn report(app: &tauri::AppHandle, result: Result<(), String>) {
     if let Err(error) = result {
         if let Some(state) = app.try_state::<Notifications>() {
             *state.error.lock().unwrap() = Some(error);
@@ -291,6 +291,9 @@ pub fn start(app: &tauri::AppHandle, root: &Path) {
                             Ok(value) => {
                                 if let Ok(events) = serde_json::from_value::<Vec<ResetEvent>>(value)
                                 {
+                                    if !events.is_empty() {
+                                        let _ = app.emit("desktop:celebrate", ());
+                                    }
                                     for event in events {
                                         if stop.load(Ordering::Acquire) {
                                             break;

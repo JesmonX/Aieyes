@@ -74,7 +74,6 @@ enum Palette {
         default: return nil
         }
     }
-    static var balanceBlue: Color { accent }
     static let ok = adaptive(DesignTokens.okLight, DesignTokens.okDark)
     static let warn = adaptive(DesignTokens.warnLight, DesignTokens.warnDark)
     static let danger = adaptive(DesignTokens.dangerLight, DesignTokens.dangerDark)

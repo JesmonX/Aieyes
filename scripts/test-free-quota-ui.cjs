@@ -47,7 +47,7 @@ const cards=page=>page.locator('[data-quota]:visible').evaluateAll(nodes=>nodes.
     assert.deepEqual(await cards(page),['codex:free','codex:plus'],'Off: every account keeps its card');
 
     await openGeneralPage(page,'advanced');
-    assert.deepEqual(await page.locator('[data-general-page]').allTextContents(),['外观','桌宠与会话','网络代理','刷新与历史','通知','高级','更新与关于']);
+    assert.deepEqual(await page.locator('[data-general-page]').allTextContents(),['外观','面板','桌宠与会话','启动与系统','网络代理','刷新与历史','通知','Webhook','高级','更新与关于']);
     assert.equal(await page.locator('#field-hideFreeQuotaCards').isChecked(),false);
     await page.locator('#field-hideFreeQuotaCards').check();
     await page.waitForFunction(()=>state.settings.hideFreeQuotaCards===true&&!state.settingsCommitting);
@@ -82,9 +82,8 @@ const cards=page=>page.locator('[data-quota]:visible').evaluateAll(nodes=>nodes.
     await panel.goto(`http://127.0.0.1:${server.address().port}/floating.html`);await panel.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
     assert.deepEqual(await cards(panel),['codex:plus'],'The panel hides the free account too');
     assert.deepEqual(await panel.evaluate(()=>AieyesUI.panelAccounts(shownQuotaSettings(),state.dashboard.quotaOrder??[]).codex),['codex:plus'],'Automatic panel slots skip hidden accounts');
-    await panel.evaluate(()=>openPanelAccounts());
-    assert.deepEqual(await panel.locator('[data-panel-account]').evaluateAll(nodes=>nodes.map(node=>node.dataset.panelAccount)),['codex:plus'],'The panel picker offers only shown accounts');
-    await panel.locator('#panel-accounts-cancel').click();
+    await page.evaluate(()=>openPanelAccounts());
+    assert.deepEqual(await page.locator('[data-panel-account]').evaluateAll(nodes=>nodes.map(node=>node.dataset.panelAccount)),['codex:plus'],'The panel account settings offer only shown accounts');
 
     await openGeneralPage(page,'advanced');
     await page.locator('#field-hideFreeQuotaCards').uncheck();

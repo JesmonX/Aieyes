@@ -19,6 +19,7 @@ mod native_pet;
 #[path = "linux_pet.rs"]
 mod native_pet;
 mod notifications;
+mod outbound;
 #[cfg(target_os = "windows")]
 mod passive_window;
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
@@ -26,7 +27,9 @@ mod pet_frames;
 mod phase_colors;
 mod session_focus;
 mod session_sounds;
+mod system;
 mod updates;
+mod whats_new;
 
 use aieyes_core::Engine;
 use serde_json::Value;
@@ -262,11 +265,17 @@ async fn engine_call(
             serde_json::json!({"key":key,"busy":true}),
         );
     }
+    if method == "dashboard.cancel" {
+        return Ok(aieyes_core::operations::cancel_query(
+            params["operationId"].as_str().unwrap_or(""),
+        ));
+    }
     let engine = state.engine_for(&method);
     let root = state.6.clone();
     let guarded_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _operation = aieyes_core::operations::enter(&method).map_err(|e| e.to_string())?;
+        aieyes_core::operations::identify_query(params["operationId"].as_str().unwrap_or(""));
         if guarded_app
             .state::<updates::Updates>()
             .installing
@@ -384,13 +393,13 @@ fn main() {
     let builder = if linux_bridge::child() {
         builder
     } else {
-        builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            let _ = desktop::activate_main(app);
+        builder.plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            system::second_instance(app, args);
         }))
     };
     #[cfg(not(target_os = "linux"))]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
-        let _ = desktop::activate_main(app);
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _| {
+        system::second_instance(app, args);
     }));
     let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
         engine_call,
@@ -412,6 +421,11 @@ fn main() {
         desktop::desktop_mode,
         desktop::desktop_materials,
         desktop::desktop_pet_scale,
+        desktop::desktop_panel_width,
+        system::system_info,
+        system::system_autostart,
+        whats_new::whats_new_info,
+        whats_new::whats_new_open_changelog,
         desktop::desktop_pet_uniform_timing,
         desktop::desktop_panel,
         desktop::desktop_panel_pin,
@@ -471,6 +485,20 @@ fn main() {
             app.manage(session_sounds::Sounds::default());
             notifications::start(app.handle(), &root);
             desktop::setup(app, &root)?;
+            system::setup(app.handle());
+            // Once per launch: whether this run follows an update (shows 本次更新).
+            let launch = app
+                .state::<Shared>()
+                .0
+                .lock()
+                .map_err(|_| "核心连接已断开".to_string())
+                .and_then(|mut engine| {
+                    engine
+                        .call("app.launch", serde_json::json!({}))
+                        .map_err(|e| e.to_string())
+                });
+            whats_new::setup(app.handle(), launch);
+            outbound::start(app.handle(), &root);
             let automatic_app = app.handle().clone();
             app.manage(aieyes_core::automatic::Background::start(
                 &root,
@@ -505,6 +533,9 @@ fn main() {
             #[cfg(target_os = "linux")]
             linux_bridge::stop(app);
             if let Some(state) = app.try_state::<notifications::Notifications>() {
+                state.stop();
+            }
+            if let Some(state) = app.try_state::<outbound::Outbound>() {
                 state.stop();
             }
             aieyes_core::process::terminate_query_children();

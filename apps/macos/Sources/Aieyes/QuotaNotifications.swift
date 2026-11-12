@@ -22,6 +22,8 @@ private struct QuotaResetEvent: Decodable {
     @Published private(set) var permission = L("系统通知状态未读取")
     @Published private(set) var error: String?
     @Published private(set) var testMessage: String?
+    /// Counts reset events the core confirmed since launch; the desktop pet celebrates each new one.
+    @Published private(set) var confirmedResets = 0
     private let engine = EngineClient(configurationOnly: true)
     private let since = Int(Date().timeIntervalSince1970)
     private var task: Task<Void, Never>?
@@ -87,7 +89,9 @@ private struct QuotaResetEvent: Decodable {
                     let events: [QuotaResetEvent] = try await engine.call("quotaResetNotifications.take", params: ["since":since])
                     notificationRevision = revision["notifications"] ?? 0
                     let now = Date()
-                    for event in events where !pending.contains(where: { $0.id == event.id }) { pending.append(Pending(id: event.id, title: event.title, body: event.body, queuedAt: now)) }
+                    let fresh = events.filter { event in !pending.contains { $0.id == event.id } }
+                    for event in fresh { pending.append(Pending(id: event.id, title: event.title, body: event.body, queuedAt: now)) }
+                    if !fresh.isEmpty { confirmedResets += 1 }
                     await flushPending()
                 }
             } while !stopped && !Task.isCancelled && (configurationRevision != latestRevisions["settings", default: 0] || notificationRevision != latestRevisions["notifications", default: 0])
@@ -138,6 +142,13 @@ private struct QuotaResetEvent: Decodable {
         content.title = title; content.body = body; content.sound = .default
         do { try await center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)); return true }
         catch { self.error = L("通知发送失败：") + L(error.localizedDescription); return false }
+    }
+    /// Server alerts share the permission handling and retry queue with quota resets.
+    func post(id: String, title: String, body: String) async {
+        guard started, !stopped else { return }
+        if !asked { asked = true; await authorize() }
+        if !pending.contains(where: { $0.id == id }) { pending.append(Pending(id: id, title: title, body: body, queuedAt: Date())) }
+        await flushPending()
     }
     func test() async {
         error = nil; backgroundError = false; testMessage = nil; await authorize()

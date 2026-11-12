@@ -30,8 +30,12 @@
     const effective = document.querySelector('#desktop-effective');
     if (effective) effective.textContent = effectiveText(info);
     const count = document.querySelector('#desktop-count');if (count) count.checked = !!info.showCount;
+    showPanelWidth(info.panelWidth);
     const hide = document.querySelector('#hide-ball');
     if (hide && document.activeElement !== hide) hide.textContent = info.hidden ? AieyesI18n.t("恢复显示桌宠") : AieyesI18n.t("暂时隐藏桌宠");
+  }
+  function showPanelWidth(width = 'standard') {
+    for (const button of document.querySelectorAll('[data-panel-width]')) {const on = button.dataset.panelWidth === width;button.setAttribute('aria-pressed', String(on));button.tabIndex = on ? 0 : -1;}
   }
   function effectiveText(info) {
     return AieyesI18n.message(info.reason) || AieyesI18n.t("当前使用{0}。", info.effectiveMode === 'pet' ? AieyesI18n.t("桌面宠物") : AieyesI18n.t("系统状态栏"));
@@ -66,7 +70,7 @@
       return;
     }
     if (page === 'settings' || page === 'prices') {await window.AieyesApp.openSettings(page === 'prices' ? { category: 'prices' } : { category: 'general' });return;}
-    await window.AieyesApp.navigatePage(['analysis', 'servers'].includes(page) ? page : 'agent');
+    await window.AieyesApp.navigatePage(['analysis', 'servers', 'sessions'].includes(page) ? page : 'agent');
   }
   async function bindTitlebar(info) {
     if (info.platform !== 'windows') return;
@@ -97,6 +101,21 @@
     await updateMaximized();
   }
   window.AieyesDesktop = {
+    // Settings › Panel: the panel window width, a native preference applied on the next open.
+    panelWidthHTML() {
+      const width = current?.panelWidth ?? 'standard';
+      return `<section class="card panel-width" data-settings-section="width"><h2>${AieyesI18n.t("面板宽度")}</h2><div class="segmented" role="group" aria-label="${AieyesI18n.t("面板宽度")}">${[['standard', AieyesI18n.t("标准")], ['compact', AieyesI18n.t("紧凑")]].map(([value, label]) => `<button type="button" data-panel-width="${value}" aria-pressed="${value === width}" tabindex="${value === width ? 0 : -1}">${label}</button>`).join('')}</div><p class="muted tiny">${AieyesI18n.t("紧凑宽度为 360，标准宽度为 450；屏幕放不下时面板自动收窄。")}</p></section>`;
+    },
+    bindPanelWidth() {
+      const buttons = [...document.querySelectorAll('[data-panel-width]')];
+      for (const button of buttons) button.onclick = async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        buttons.forEach((el) => el.disabled = true);showPanelWidth(button.dataset.panelWidth);
+        try {update(await invoke('desktop_panel_width', { width: button.dataset.panelWidth }));}
+        catch (error) {showPanelWidth(current?.panelWidth);notify(String(error), 'error');}
+        finally {buttons.forEach((el) => el.disabled = false);document.querySelector('[data-panel-width][aria-pressed=true]')?.focus({ preventScroll: true });}
+      };
+    },
     appearanceHTML() {
       return current?.platform === 'windows' ? ['main', 'floating'].map(surface => `<div class="form-row" data-field-size="choice"><label for="material-${surface}">${AieyesI18n.t(surface === 'main' ? "主窗口材质" : "悬浮面板材质")}<small class="material-actual muted" id="material-actual-${surface}"></small></label><select id="material-${surface}">${[['default',AieyesI18n.t("默认")],['mica','Mica'],['acrylic','Acrylic'],['opaque',AieyesI18n.t("不透明")]].map(([value,label]) => `<option value="${value}">${label}</option>`).join('')}</select></div>`).join('') : '';
     },
@@ -171,7 +190,8 @@
         await window.AieyesApp?.ready;
         const view = event.payload;
         const hasFilters = ['provider', 'sourceId', 'accountKey', 'model', 'days', 'dateRange', 'cost'].some((key) => Object.hasOwn(view, key));
-        await window.AieyesApp.navigatePage(['analysis', 'servers'].includes(view.page) ? view.page : 'agent', hasFilters ? view : undefined);
+        if (typeof view.focusAccount === 'string') {await window.AieyesApp.showAccount(view.focusAccount);return;}
+        await window.AieyesApp.navigatePage(['analysis', 'servers', 'sessions'].includes(view.page) ? view.page : 'agent', hasFilters ? view : undefined);
       });
       const info = await invoke('desktop_info');
       update(info);

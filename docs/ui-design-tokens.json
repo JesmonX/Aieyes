@@ -103,7 +103,11 @@
     "field-hint-width": 130,
     "field-price-width": 140,
     "field-medium-width": 320,
-    "field-choice-width": 220
+    "field-choice-width": 220,
+    "elevation-shadow-blur": 9,
+    "elevation-shadow-y": 3,
+    "elevation-contact-blur": 1,
+    "elevation-contact-y": 0.5
   },
   "numbers": {
     "card-border-opacity": 0.3,
@@ -120,7 +124,11 @@
     "chart-grid-opacity": 0.06,
     "model-chart-inner-ratio": 0.72,
     "model-chart-angular-inset": 2,
-    "heat-empty-opacity": 0.055
+    "heat-empty-opacity": 0.055,
+    "elevation-shadow-light": 0.09,
+    "elevation-contact-light": 0.07,
+    "elevation-shadow-dark": 0.06,
+    "elevation-contact-dark": 0
   },
   "weights": {
     "regular": {
@@ -208,7 +216,7 @@
       "dark": "202020"
     },
     "detail-card": {
-      "light": "f1f1f1",
+      "light": "ffffff",
       "dark": "242424"
     },
     "form-surface": {

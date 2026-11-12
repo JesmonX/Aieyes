@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic RPC fixture for native --render. No files, credentials or network reads."""
 import json
+import math
 import os
 from datetime import date, datetime, timedelta
 from copy import deepcopy
@@ -115,9 +116,19 @@ sessions=dict(sessions=[],sources=[],unavailable=scenario=='failure')
 if scenario == 'workspace':
     sessions['sessions'] = [dict(id='preview-'+p,source=p,provider=p,machine='本机',machineId='local',sourceId=p+'-source',phase=phase,updatedAt=stamp) for p,phase in [('codex','needsInput'),('claude','working')]]
 statuses = [dict(accountKey=a['provider']+':'+a['id'],sourceId=s['id'],machineId=s.get('hostId') or 'local',current=i == 0 and s.get('accountId') == a['id'],credential=s.get('accountId') == a['id'],checkedAt=stamp) for i,a in enumerate(settings['accounts']) for s in settings['sources'] if s['provider']==a['provider']]
+# One hour of minute history per server, ending at the current minute. Minutes 22 to 30 are absent
+# (a pause in sampling) and minutes 36 to 40 carry no GPU reading, so a trend line shows both as breaks.
+def host_history():
+    end = int(time.time()) // 60 * 60
+    minutes = []
+    for i in range(60):
+        if 22 <= i < 31: continue
+        cpu = 28 + 18 * math.sin(i / 6) + (max(0, i - 44) * 3.2)
+        minutes.append(dict(t=end - (59 - i) * 60, cpu=cpu, cpuMax=min(100, cpu + 14), memory=52 + i * 0.35, gpu=None if 36 <= i < 41 else 55 + 35 * math.sin(i / 4)))
+    return dict(hosts=[dict(id=h['id'], name=h['name'], minutes=minutes) for h in hosts])
 # The browser and native renderer consume exactly the same synthetic data.
 if '--fixture' in sys.argv:
-    print(json.dumps(dict(settings=settings, dashboard=dashboard, prices=[price], hosts=hosts, wakeups=wakeups, accountStatuses=statuses, network=network, scan=scan)))
+    print(json.dumps(dict(settings=settings, dashboard=dashboard, prices=[price], hosts=hosts, wakeups=wakeups, accountStatuses=statuses, network=network, scan=scan, hostHistory=host_history())))
     sys.exit(0)
 for line in sys.stdin:
     r=json.loads(line)
@@ -125,5 +136,6 @@ for line in sys.stdin:
         print(json.dumps(dict(jsonrpc='2.0', id=r['id'], error=dict(code=-32000, message='模拟筛选查询失败'))), flush=True)
         continue
     result={'accounts.status.get':statuses,'accounts.status.refresh':next((v for v in statuses if v['accountKey']==r.get('params',{}).get('accountKey') and v['sourceId']==r.get('params',{}).get('sourceId')),{}),'accounts.cleanup.list':[],'accounts.deployments.sync':{'failedTasks':[]},'accounts.deletion.preview':{'tasks':[]},'settings.get':settings,'dashboard':dashboard,'dashboard.summary':dashboard,'prices.list':[price],'sessions.list':sessions,'wakeups.list':wakeups,'sources.scan':scan,'quotas.refresh':quotas,'hosts.sample':hosts,'network.test':network,'network.status':network}.get(r['method'],{})
+    if r['method']=='hosts.history': result=host_history()
     if r['method']=='codexApi.status': result=dict(configRevision='fixture-config',defaultProvider='aieyes_api_fixture-api_fixture-revision',installed=True,ready=True)
     print(json.dumps(dict(jsonrpc='2.0',id=r['id'],result=result)),flush=True)

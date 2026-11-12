@@ -148,6 +148,12 @@ window.AieyesUI = {
     return next;
   },
   escapeHTML(value) {return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);},
+  // One empty-state language for every page: a symbol on concentric rings (the quota-ring
+  // motif), a title, one line of guidance and at most one action. `action` is button markup.
+  emptyStateHTML({ icon, title, message = '', action = '', compact = false, tone = '' }) {
+    const e = this.escapeHTML;
+    return `<div class="empty-state"${compact ? ' data-compact' : ''}${tone ? ` data-tone="${e(tone)}"` : ''}><span class="empty-state-mark" aria-hidden="true"><svg viewBox="0 0 76 76"><circle class="empty-state-ring" cx="38" cy="38" r="37.5"/><circle class="empty-state-arc" cx="38" cy="38" r="37" pathLength="100" transform="rotate(-90 38 38)"/></svg><span class="empty-state-disc">${uiIcon(icon)}</span></span><div class="empty-state-text"><h2>${e(title)}</h2>${message ? `<p>${e(message)}</p>` : ''}</div>${action}</div>`;
+  },
   normalizePanelPreference(value) {
     const next = { version: 2, providers: {} };
     const object = (row) => row && typeof row === 'object' && !Array.isArray(row);

@@ -108,6 +108,7 @@ private struct CountedWindowSurface: View {
         }
         var panels: [[String: Any]] = []
         for (index, screen) in NSScreen.screens.enumerated() {
+            for width: CGFloat in [360, 450] {
             for dark in [false, true] {
                 let anchor = NSWindow(contentRect: NSRect(x: screen.visibleFrame.midX - 225, y: screen.visibleFrame.maxY - 90, width: 450, height: 40), styleMask: [.borderless], backing: .buffered, defer: false)
                 anchor.isReleasedWhenClosed = false; anchor.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 450, height: 40))
@@ -116,12 +117,14 @@ private struct CountedWindowSurface: View {
                 let controller = PanelContainer(model: model)
                 popover.contentViewController = controller
                 model.panelHeight = min(720, screen.visibleFrame.height - 150)
-                popover.contentSize = NSSize(width: 450, height: model.panelHeight)
+                controller.prepare(size: NSSize(width: width, height: model.panelHeight))
+                popover.contentSize = NSSize(width: width, height: model.panelHeight)
                 popover.show(relativeTo: anchor.contentView!.bounds, of: anchor.contentView!, preferredEdge: .minY)
                 model.setWindowVisible(true, window: "panel")
                 guard let panel = controller.view.window else { throw ClientError.message("No native popover window") }
                 panel.appearance = anchor.appearance; panel.acceptsMouseMovedEvents = true
                 try await Task.sleep(for: .milliseconds(150))
+                precondition(abs(controller.view.bounds.width - width) < 2, "Panel width must match the selected preset")
                 let tint = controller.view.subviews.compactMap { $0 as? PanelTintView }.first!
                 let updates = tint.colorUpdates
                 for step in 0..<30 {
@@ -132,7 +135,7 @@ private struct CountedWindowSurface: View {
                     try await Task.sleep(for: .milliseconds(16))
                 }
                 precondition(tint.colorUpdates == updates, "Hover/content refresh must not rewrite the full-panel tint")
-                let name = "popover-screen\(index + 1)-\(dark ? "dark" : "light")"
+                let name = "popover-\(Int(width))-screen\(index + 1)-\(dark ? "dark" : "light")"
                 try image(controller.view, to: root.appendingPathComponent(name + "-content.png"))
                 var captured = false
                 if CGPreflightScreenCaptureAccess(),
@@ -147,9 +150,10 @@ private struct CountedWindowSurface: View {
                         try NSBitmapImageRep(cgImage: bitmap).representation(using: .png, properties: [:])!.write(to: root.appendingPathComponent(name + ".png")); captured = true
                     }
                 }
-                panels.append(["screen": index + 1, "theme": dark ? "dark" : "light", "tintUpdatesDuringHover": tint.colorUpdates - updates, "windowServerCapture": captured])
+                panels.append(["width": Int(width), "screen": index + 1, "theme": dark ? "dark" : "light", "tintUpdatesDuringHover": tint.colorUpdates - updates, "windowServerCapture": captured])
                 model.message = nil; model.setWindowVisible(false, window: "panel"); popover.close(); anchor.close()
             }
+        }
         }
         let report: [String: Any] = ["pricing": measurements, "popovers": panels, "statusNotifications": ["app": appNotifications, "changedAccount": firstNotifications, "unchangedAccount": secondNotifications], "reduceTransparency": NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
             "note": "Synthetic mouseMoved events and content refresh verify tint isolation, not physical-pointer tracking or absence of the reported intermittent seam."]

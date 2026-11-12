@@ -49,7 +49,7 @@
     dispose() {this.observer.disconnect();lists.delete(this);this.nodes.clear();}
   }
   function paintCard(card, host, result) {
-    const signature = JSON.stringify([host, result?.sampleSession && result?.sampleVersion != null ? [result.sampleSession, result.sampleVersion] : result]);if (card.signature === signature) return;
+    const signature = JSON.stringify([host, result?.sampleSession && result?.sampleVersion != null ? [result.sampleSession, result.sampleVersion] : result, window.AieyesHostTrend?.revision ?? 0]);if (card.signature === signature) return;
     card.signature = signature;
     const sample = result?.sample;
     patch(card.heading, `<div><h2 style="margin:0">${escapeHTML(host.name || host.target)}</h2><div class="sub">${escapeHTML(host.target)}</div></div><div class="server-card-actions"><button type="button" data-host-settings="${escapeHTML(host.id)}" aria-label="${AieyesI18n.t("{0}的监控设置", escapeHTML(host.name || host.target))}">${AieyesI18n.t("监控设置")}</button><button type="button" class="host-status" data-host-status="${escapeHTML(host.id)}"><i aria-hidden="true"></i><span data-host-status-label></span></button></div>`);
@@ -99,7 +99,7 @@
     {
       if (!empty) {empty = document.createElement('div');empty.className = 'card empty';root.append(empty);}
       const filtered = hosts.length > 0;
-      patch(empty, filtered ? `<p>${AieyesI18n.t("当前筛选没有匹配的服务器")}</p><button type="button" id="clear-server-filter">${AieyesI18n.t("清除筛选")}</button>` : `<p>${AieyesI18n.t("尚未添加服务器")}</p><button id="add-first-host" class="primary">${AieyesI18n.t("添加服务器")}</button>`);
+      patch(empty, AieyesUI.emptyStateHTML(filtered ? { icon: 'computer', title: AieyesI18n.t("当前筛选没有匹配的服务器"), action: `<button type="button" id="clear-server-filter">${AieyesI18n.t("清除筛选")}</button>`, compact: PANEL } : { icon: 'computer', title: AieyesI18n.t("尚未添加服务器"), action: `<button id="add-first-host" class="primary">${AieyesI18n.t("添加服务器")}</button>`, compact: PANEL }));
       if (filtered) empty.querySelector('#clear-server-filter').onclick = () => setView('all');else
       bindSetup();
     }

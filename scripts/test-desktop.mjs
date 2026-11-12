@@ -245,7 +245,7 @@ function harness(file, initial = {}) {
     });
     return elements.get(id);
   }
-  const document = {body:element('body'),documentElement:element('html'),activeElement:null,querySelector:element,listeners:new Map(),hasFocus:()=>true,
+  const document = {body:element('body'),documentElement:element('html'),activeElement:null,querySelector:element,querySelectorAll:()=>[],listeners:new Map(),hasFocus:()=>true,
     addEventListener(name, fn) { this.listeners.set(name, [...(this.listeners.get(name) || []), fn]); },
     async dispatch(name, fields = {}) { const event={defaultPrevented:false,stopped:false,preventDefault(){this.defaultPrevented=true;},stopPropagation(){},stopImmediatePropagation(){this.stopped=true;},...fields}; for(const fn of this.listeners.get(name)||[]){await fn(event);if(event.stopped)break;} },
   };
@@ -577,7 +577,7 @@ test('memory summary prefers native used memory and supports legacy Linux sample
     capacityPercent: (used, total) => used / total * 100,
     capacityPair: (used, total) => used + '/' + total,
     resourceBlock: (_label, percent, detail) => percent + '% ' + detail,
-    date: () => '', escapeHTML: value => value
+    date: () => '', escapeHTML: value => value, window: {}
   };
   vm.runInNewContext(summary, context);
   const render = memory => context.serverSummary({metrics:['memory'], enabled:true}, {memory});

@@ -25,6 +25,7 @@ struct SettingsView: View {
     @AppStorage("aieyes.pet.hideInFullscreen") private var hidePetInFullscreen = true
     @AppStorage(NativePanelKey.panelQuotaStyle.rawValue) private var panelQuotaStyle = QuotaCardStyle.card.rawValue
     @AppStorage(NativePanelKey.detailQuotaStyle.rawValue) private var detailQuotaStyle = QuotaCardStyle.card.rawValue
+    @AppStorage(NativePanelKey.panelWidth.rawValue) private var panelWidth = PanelWidth.standard.rawValue
     private func menuRingBinding(_ key: WritableKeyPath<MenuQuotaRing, Bool>) -> Binding<Bool> {
         Binding(get: { (model.settingsDraft.menuQuotaRing ?? MenuQuotaRing())[keyPath: key] },
                 set: { var ring = model.settingsDraft.menuQuotaRing ?? MenuQuotaRing(); ring[keyPath: key] = $0; model.settingsDraft.menuQuotaRing = ring })
@@ -77,8 +78,8 @@ struct SettingsView: View {
             Divider().opacity(0.5)
             if model.settingsTab == "general" {
                 FlowLayout(spacing: 8) {
-                    ForEach([( "appearance", L("外观")), ("desktop", L("桌宠与会话")), ("network", L("网络代理")), ("refresh", L("刷新与历史")), ("notifications", L("通知")), ("advanced", L("高级")), ("updates", L("更新与关于"))], id: \.0) { key, title in
-                        Button(title) { model.generalPage = key }
+                    ForEach(SettingsIndex.generalPageKeys, id: \.self) { key in
+                        Button(SettingsIndex.generalPageTitle(key)) { model.generalPage = key }
                             .buttonStyle(.chip(selected: model.generalPage == key, in: generalChips, font: AppFont.body))
                     }
                 }.motion(.spring, value: model.generalPage).padding(.horizontal, 22).padding(.vertical, 12)
@@ -334,6 +335,16 @@ struct SettingsView: View {
                 ChartPalettePreview(preset: model.settingsDraft.appearance?.chartPalette ?? "classic", contrast: model.settingsDraft.appearance?.chartContrast ?? "high")
             }
             }
+            if model.generalPage == "panel" {
+            Section(L("面板")) {
+                Picker(L("面板宽度"), selection: $panelWidth) { ForEach(PanelWidth.allCases) { Text($0.title).tag($0.rawValue) } }
+                Text(L("紧凑宽度为 360，标准宽度为 450；屏幕放不下时面板自动收窄。")).font(AppFont.secondary).foregroundStyle(.secondary)
+            }
+            Section(L("面板显示账户")) { PanelAccountsView(model: model) }
+            Section(L("账户顺序")) { QuotaOrderView(model: model) }
+            }
+            if model.generalPage == "system" { SystemIntegrationSettings() }
+            if model.generalPage == "webhooks" { WebhookSettingsView(model: model, service: model.outbound) }
             if model.generalPage == "desktop" {
             Section(L("桌面宠物")) {
                 HStack { Toggle(L("显示桌宠"), isOn: $petEnabled); HelpNote(title: L("桌面显示"), text: L("桌宠展示本机和 SSH 会话。单击打开面板，拖动移动。")) }
@@ -399,14 +410,18 @@ struct SettingsView: View {
                 }
             }
             }
-            if model.generalPage == "notifications" { QuotaNotificationSettingsView(model: model, service: model.resetNotifications) }
+            if model.generalPage == "notifications" {
+                QuotaNotificationSettingsView(model: model, service: model.resetNotifications)
+                ServerAlertSettingsSection(model: model)
+            }
             if model.generalPage == "advanced" {
             Section(L("账户额度")) {
                 Toggle(L("隐藏免费账户的额度卡片"), isOn: Binding(get: { model.settingsDraft.hideFreeQuotaCards == true }, set: { model.settingsDraft.hideFreeQuotaCards = $0 }))
                 HStack { Text(L("主窗口与面板都不显示免费账户的额度卡片")).font(AppFont.secondary).foregroundStyle(.secondary); HelpNote(title: L("隐藏免费账户的额度卡片"), text: L("适用于所有有付费套餐的 Agent。服务商返回免费套餐时隐藏该账户的额度卡片；套餐未知或读取失败时照常显示。隐藏的账户仍会查询额度，升级后自动显示。")) }
             }
+            Section(L("后台采样")) { SamplingManagementView(model: model) }
             }
-            if model.generalPage == "updates" { Section(L("更新")) { UpdateSettingsView() }; Section(L("关于")) { Text("Aieyes").font(AppFont.section); Link(L("项目主页"), destination: URL(string: "https://github.com/JesmonX/Aieyes")!) } }
+            if model.generalPage == "updates" { Section(L("更新")) { UpdateSettingsView(); if ReleaseNotes.bundled != nil { Button(L("查看本次更新")) { model.openWhatsNew() } } }; Section(L("关于")) { Text("Aieyes").font(AppFont.section); Link(L("项目主页"), destination: URL(string: "https://github.com/JesmonX/Aieyes")!) } }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).environment(\.petPreviewViewport, viewport.frame(in: .global)) }
         }.padding(.top, 12)
     }
@@ -557,13 +572,12 @@ struct SourceEditor: View {
         VStack(spacing: 0) {
             HStack { Text(L("目录设置")).font(AppFont.title); Spacer() }.padding(22)
             Form {
-                Picker("Agent", selection: $source.provider) {
-                    ForEach(CoreContract.providers, id: \.self) { provider in Text(Format.provider(provider)).tag(provider) }
-                }.disabled(true)
+                // Agent and location identify the directory and are fixed once it exists.
+                LabeledContent("Agent") { Text(Format.provider(source.provider)) }
                 if source.provider != "deepseek" {
-                    Picker(L("位置"), selection: Binding(get: { source.hostId ?? "local" }, set: { source.hostId = $0 == "local" ? nil : $0 })) {
-                        Text(L("本机")).tag("local"); ForEach(hosts) { Text($0.name.isEmpty ? $0.target : $0.name).tag($0.id) }
-                    }.disabled(true)
+                    LabeledContent(L("位置")) {
+                        Text(source.hostId.map { id in hosts.first { $0.id == id }.map { $0.name.isEmpty ? $0.target : $0.name } ?? id } ?? L("本机"))
+                    }
                 }
                 if source.subscription != nil {
                     Text(L("此来源只查询订阅；历史请在机器与采集中添加独立目录。")).font(AppFont.secondary).foregroundStyle(.secondary)

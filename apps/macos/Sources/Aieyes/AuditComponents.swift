@@ -108,7 +108,8 @@ struct CreditBalanceLabel: View {
     var body: some View {
         let _ = interfaceLanguage;
         HStack(spacing: 4) {
-            Label(L("余额"), systemImage: "c.circle").foregroundStyle(Palette.balanceBlue)
+            // A static label: the accent would read as a link.
+            Label(L("余额"), systemImage: "c.circle").foregroundStyle(.secondary)
             Text(compact ? Format.creditPrimary(balance) : String(Format.creditBalance(balance, estimate: estimate).dropFirst(L("余额 ").count)))
                 .monospacedDigit().lineLimit(compact ? 1 : nil)
         }.font(AppFont.secondary).help(Format.creditBalance(balance, estimate: estimate))

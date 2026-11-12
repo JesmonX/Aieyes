@@ -10,6 +10,8 @@ use std::{
 };
 
 type Sink = Arc<dyn Fn(Value) + Send + Sync>;
+/// Every successful sample also feeds minute history and sustained alert rules.
+pub(crate) type Observer = Arc<dyn Fn(&Host, &Value) + Send + Sync>;
 type Fetch = Arc<dyn Fn(&Host, bool) -> Result<Value> + Send + Sync>;
 struct Entry {
     host: Host,
@@ -31,6 +33,7 @@ struct State {
     version: u64,
     wake: u64,
     sink: Option<Sink>,
+    observer: Option<Observer>,
 }
 struct Shared {
     state: Mutex<State>,
@@ -87,6 +90,7 @@ impl HostMonitor {
                     version: 0,
                     wake: 0,
                     sink: None,
+                    observer: None,
                 }),
                 changed: Condvar::new(),
             }),
@@ -96,6 +100,9 @@ impl HostMonitor {
     }
     pub(crate) fn set_sink(&mut self, sink: Sink) {
         self.shared.state.lock().unwrap().sink = Some(sink);
+    }
+    pub(crate) fn set_observer(&self, observer: Observer) {
+        self.shared.state.lock().unwrap().observer = Some(observer);
     }
     pub(crate) fn configure(
         &mut self,
@@ -343,6 +350,7 @@ fn run(shared: Arc<Shared>, fetch: Fetch) {
             break;
         }
         let mut changed = false;
+        let mut observed: Vec<(Host, Value)> = Vec::new();
         while let Ok(done) = done_rx.try_recv() {
             let cancelled = state
                 .jobs
@@ -373,9 +381,11 @@ fn run(shared: Arc<Shared>, fetch: Fetch) {
                         );
                         monitoring::filter_devices(&mut display, &entry.host);
                         entry.previous = Some(raw);
+                        observed.push((entry.host.clone(), display.clone()));
                         json!({"id":entry.host.id,"name":entry.host.name,"sample":display})
                     }
                     Err(error) => {
+                        observed.push((entry.host.clone(), Value::Null));
                         entry.previous = None;
                         json!({"id":entry.host.id,"name":entry.host.name,"sample":entry.row.as_ref().and_then(|r| r.get("sample")),"error":error.to_string()})
                     }
@@ -453,6 +463,12 @@ fn run(shared: Arc<Shared>, fetch: Fetch) {
         let wake = state.wake;
         if changed {
             drop(state);
+            let observer = shared.state.lock().unwrap().observer.clone();
+            if let Some(observer) = observer {
+                for (host, sample) in &observed {
+                    observer(host, sample);
+                }
+            }
             publish(&shared);
             state = shared.state.lock().unwrap();
         }

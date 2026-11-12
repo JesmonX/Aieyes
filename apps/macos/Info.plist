@@ -11,6 +11,11 @@
 <key>CFBundleExecutable</key><string>Aieyes</string>
 <key>CFBundleIconFile</key><string>AppIcon.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleURLTypes</key><array><dict>
+<key>CFBundleURLName</key><string>app.aieyes.desktop</string>
+<key>CFBundleTypeRole</key><string>Viewer</string>
+<key>CFBundleURLSchemes</key><array><string>aieyes</string></array>
+</dict></array>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>

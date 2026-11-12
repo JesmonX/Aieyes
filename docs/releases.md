@@ -73,6 +73,7 @@ Sparkle 工具会打印公钥，Tauri 公钥在 `.pub` 文件中。私钥填写�
 - macOS 使用 Sparkle 的签名 appcast 和 EdDSA 包签名；安装器保留用户数据。更新清单和安装包通过本地传输桥复用已保存的应用代理（系统、直连或自定义）；Sparkle 继续负责验签和安装。
 - Windows 使用用户级 NSIS 更新；Linux AppImage 原位更新。DEB/RPM 验签后通过系统 `pkexec` 授权调用 apt/DNF 安装；取消授权即停止，不收集密码。无 polkit、缺少对应包管理器或包管理器忙时显示失败，修复系统条件后重试。
 - Windows/Linux 更新请求沿用应用代理设置；更新下载独立于业务引擎。安装前等待正在进行的数据操作结束，并保护未保存的设置。
+- 更新完成后首次启动，总览显示一次“本次更新”横幅，内容来自构建时内置的 `docs/release-notes/v<version>.md`：macOS 由 `scripts/build-macos.sh` 复制为 `ReleaseNotes.md` 资源，Windows/Linux 由 `build.rs` 内置。缺少该文件的版本不显示横幅，所以发布前须先写好说明文件。
 
 ## 构建、签名与发布
 

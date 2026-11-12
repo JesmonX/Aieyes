@@ -14,12 +14,19 @@ struct MainWindowView: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.previewAccessibleSurfaces) private var previewAccessible
     @State private var guideActive = false
+    @State private var settingsQuery = ""
+    @State private var sidebarReady = false
     // Both controls and native split-view changes share the persisted visibility.
     private var columnVisibility: Binding<NavigationSplitViewVisibility> {
-        Binding(get: { collapsed ? .detailOnly : .all }, set: { collapsed = $0 == .detailOnly })
+        Binding(get: { collapsed ? .detailOnly : .all }, set: { proposed in
+            // AppKit proposes .all while attaching a new split view, even when the
+            // saved binding is .detailOnly. Restoration is owned by the two buttons;
+            // native collapse gestures can still persist the hidden state.
+            if sidebarReady && proposed == .detailOnly { collapsed = true }
+        })
     }
     @State private var workspaceWidth: CGFloat = 1120
-    private var monitoring: [(String, String, String)] { [("agent", L("总览"), "square.grid.2x2"), ("analysis", L("用量分析"), "chart.xyaxis.line"), ("servers", L("服务器"), "server.rack")] }
+    private var monitoring: [(String, String, String)] { [("agent", L("总览"), "square.grid.2x2"), ("analysis", L("用量分析"), "chart.xyaxis.line"), ("servers", L("服务器"), "server.rack"), ("sessions", L("会话"), "terminal")] }
     private var configuration: [(String, String, String)] { [("integrations", L("接入与账户"), "person.crop.circle"), ("servers", L("机器与采集"), "desktopcomputer"), ("prices", L("模型价格"), "dollarsign.circle"), ("wakeups", L("定时唤醒"), "alarm")] }
     private var title: String {
         if model.detailPage == "setup" { return L("配置向导") }
@@ -35,6 +42,8 @@ struct MainWindowView: View {
                     Button(action: toggleSidebar) { BrandMark().frame(width: 30, height: 30).frame(width: 34, height: 34).contentShape(Rectangle()) }.buttonStyle(.plain).help(collapsed ? L("展开导航") : L("收起导航")).accessibilityLabel(collapsed ? L("展开导航") : L("收起导航")).accessibilityValue(collapsed ? L("已收起") : L("已展开")).accessibilityIdentifier("main.sidebarEyeToggle")
                     Text("Aieyes").font(AppFont.title); Spacer()
                 }.padding(.horizontal, 12).padding(.top, 18)
+                SearchField(prompt: L("搜索设置"), text: $settingsQuery, onSubmit: { if let first = SettingsIndex.search(settingsQuery).first { open(first) } }).padding(.horizontal, 12).accessibilityIdentifier("main.settingsSearch")
+                if settingsQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 List(selection:Binding<String?>(get:{selectedNavigation},set:{ if let value = $0 { choose(value) } })) {
                     Section { ForEach(monitoring,id:\.0) { key,title,icon in navigationRow(title,icon:icon).tag(key) } } header: { sectionHeader(L("监测")) }
                     // Monitoring and configuration both have a "servers" key; distinct row ids keep List from reusing one row.
@@ -42,6 +51,21 @@ struct MainWindowView: View {
                     navigationRow(L("设置"),icon:"gearshape").tag("settings:general")
                     navigationRow(L("配置向导"),icon:"questionmark.circle").tag("setup")
                 }.listStyle(.sidebar)
+                } else {
+                    // Results replace the navigation while a query is typed; clearing the field brings it back.
+                    let results = SettingsIndex.search(settingsQuery)
+                    List(selection: Binding<String?>(get: { nil }, set: { id in if let entry = results.first(where: { $0.id == id }) { open(entry) } })) {
+                        Section {
+                            ForEach(results) { entry in
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(L(entry.title)).lineLimit(1)
+                                    Text(entry.path).font(AppFont.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }.tag(entry.id).accessibilityElement(children: .combine)
+                            }
+                            if results.isEmpty { Text(L("没有匹配的设置")).foregroundStyle(.secondary) }
+                        } header: { sectionHeader(L("设置")) }
+                    }.listStyle(.sidebar)
+                }
             }.frame(width: 214).background {
                 if reduceTransparency || previewAccessible || contrast == .increased { Color(nsColor: .windowBackgroundColor) }
                 else { Rectangle().fill(.ultraThinMaterial) }
@@ -59,6 +83,7 @@ struct MainWindowView: View {
                     switch key {
                     case "setup": SetupGuideView(model: model) { guideActive = false; select("agent") }
                     case "settings": SettingsView(model: model)
+                    case "sessions": SessionsPage(model: model)
                     default: RootView(model: model, compact: false, page: key).equatable()
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -77,8 +102,10 @@ struct MainWindowView: View {
         }.navigationSplitViewStyle(.balanced)
         .frame(minWidth: 760, minHeight: 480).aieyesAccent()
         .background(WindowPageTitle(title:title + " — Aieyes"))
+        .background(WhatsNewPresenter(service: model.outbound))
         .environment(\.workspaceCardColumns, workspaceWidth >= 1800 ? 4 : workspaceWidth >= 1390 ? 3 : workspaceWidth >= 974 ? 2 : 1)
         .background { GeometryReader { geometry in Color.clear.onChange(of: geometry.size.width, initial: true) { _, width in workspaceWidth = width } } }
+        .task { await Task.yield(); sidebarReady = true }
         .onAppear { select(model.requestedDetailPage ?? model.detailPage); model.requestedDetailPage = nil }
         .onChange(of: model.requestedDetailPage) { _, page in if let page { select(page); model.requestedDetailPage = nil } }
         .onChange(of: model.detailPage) { _, page in select(page) }
@@ -90,6 +117,7 @@ struct MainWindowView: View {
         if value.hasPrefix("settings:") { model.openSettings(.init(category:String(value.dropFirst(9))));select("settings") }
         else { select(value) }
     }
+    private func open(_ entry: SettingsIndex.Entry) { model.openSettings(entry.destination); select("settings") }
     private func navigationRow(_ title: String, icon: String) -> some View {
         Label { Text(title).lineLimit(1) } icon: { Image(systemName: icon) }
             .accessibilityLabel(title)
@@ -98,7 +126,7 @@ struct MainWindowView: View {
         Text(title).lineLimit(1)
     }
     private func select(_ value: String) {
-        let page = ["agent", "analysis", "servers", "settings", "setup"].contains(value) ? value : "agent"
+        let page = ["agent", "analysis", "servers", "sessions", "settings", "setup"].contains(value) ? value : "agent"
         if model.detailPage != page { model.detailPage = page }
         if !CommandLine.arguments.contains("--render") { savedPage = page }
         if page == "setup" { guideActive = true; if !CommandLine.arguments.contains("--render") { UserDefaults.standard.set(true, forKey: "setup.seen.v1") } }
@@ -127,7 +155,9 @@ struct RetainedPageHost<Content: View>: NSViewRepresentable {
     @ViewBuilder var content: (String) -> Content
     func makeNSView(context: Context) -> Container { let view = Container(); view.wantsLayer = true; return view }
     func updateNSView(_ view: Container, context: Context) {
-        view.show(selection, active: active, environment: context.environment, content: content(selection), fade: !context.environment.accessibilityReduceMotion && !CommandLine.arguments.contains("--render"))
+        // Reduce Motion keeps a short cross-fade (a dissolve, no movement); snapshots swap directly.
+        let transition: Motion? = CommandLine.arguments.contains("--render") ? nil : context.environment.accessibilityReduceMotion ? .fast : .standard
+        view.show(selection, active: active, environment: context.environment, content: content(selection), transition: transition)
     }
     static func dismantleNSView(_ view: Container, coordinator: ()) { view.deactivate() }
     struct Page: View {
@@ -167,13 +197,16 @@ struct RetainedPageHost<Content: View>: NSViewRepresentable {
         private(set) var entries: [String: Entry] = [:]
         private(set) var selected: String?
         override var isFlipped: Bool { true }
-        func show(_ key: String, active: Bool, environment: EnvironmentValues, content: Content, fade: Bool = false) {
+        /// `transition`: `.standard` cross-fades and lets the incoming page rise a few points;
+        /// `.fast` is the dissolve-only form for Reduce Motion; nil swaps directly.
+        func show(_ key: String, active: Bool, environment: EnvironmentValues, content: Content, transition motion: Motion? = nil) {
             let changed = selected != key
-            // A short cross-fade on page switches; the first page and Reduce Motion appear directly.
-            if changed, fade, selected != nil, let layer {
+            // The first page appears directly; later switches share the motion tokens with the rest of the app.
+            let animated = changed && selected != nil ? motion : nil
+            if let animated, let layer {
                 let transition = CATransition()
                 transition.type = .fade
-                transition.duration = 0.15
+                transition.duration = animated.duration
                 transition.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 layer.add(transition, forKey: "page")
             }
@@ -194,6 +227,13 @@ struct RetainedPageHost<Content: View>: NSViewRepresentable {
             selected = key
             if entry.host.rootView.active != active { entry.host.rootView.active = active }
             if entry.host.superview !== self { entry.host.frame = bounds; addSubview(entry.host) }
+            if animated == .standard, let incoming = entry.host.layer {
+                let rise = CABasicAnimation(keyPath: "transform.translation.y")
+                rise.fromValue = 6; rise.toValue = 0
+                rise.duration = Motion.standard.duration
+                rise.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                incoming.add(rise, forKey: "page.rise")
+            }
             if changed, let responder = entry.responder {
                 DispatchQueue.main.async { [weak self, weak responder] in
                     guard let self, self.selected == key, let responder, responder.window === self.window else { return }

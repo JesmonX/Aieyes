@@ -252,6 +252,9 @@ body.editor-open { overflow: hidden; }
 @keyframes rise { from { opacity: 0; transform: translateY(7px); } }
 @keyframes pop-in { from { opacity: 0; transform: scale(.97); } }
 @keyframes dialog-in { from { opacity: 0; transform: scale(.985) translateY(5px); } }
+/* One-shot attention outline (AieyesMotion.highlight): holds, then fades; reduced motion keeps it still. */
+@keyframes highlight-fade { to { outline-color: transparent; } }
+[data-highlight] { outline: 2px solid var(--accent); outline-offset: -2px; animation: highlight-fade var(--motion-slow) ease-out calc(1600ms + var(--highlight-elapsed, 0ms)) both; }
 /* Live data changes must not replay page entrance motion. */
 .onboarding { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
 .onboarding h2 { font-size: var(--font-panel-title); }
@@ -568,7 +571,7 @@ html[data-theme=dark] .provider-mark .provider-dark { display:block; }
 }
 .provider-identity,.order-account { display:inline-flex; align-items:center; gap:6px; min-width:0; }
 .quota-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.credit-label { display:inline-flex; align-items:center; gap:4px; color:var(--accent-text); white-space:nowrap; }
+.credit-label { display:inline-flex; align-items:center; gap:4px; color:var(--muted); white-space:nowrap; }
 .credit-label .ui-icon { width:15px; height:15px; flex-basis:15px; }
 .credit-balance { display:inline-flex; align-items:center; gap:4px; min-width:0; }
 .credit-row .credit-balance { flex-wrap:wrap; }

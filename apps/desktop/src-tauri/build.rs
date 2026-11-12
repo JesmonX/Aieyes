@@ -21,6 +21,16 @@ fn main() {
         println!("cargo:rustc-env=TAURI_CONFIG={config}");
         println!("cargo:rerun-if-changed=../web");
     }
+    // The running version's release notes (docs/release-notes/v<version>.md) for 本次更新; an
+    // empty file when this version has none, which hides the entry points.
+    let notes = format!(
+        "../../../docs/release-notes/v{}.md",
+        std::env::var("CARGO_PKG_VERSION").unwrap()
+    );
+    println!("cargo:rerun-if-changed={notes}");
+    let staged =
+        std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("release-notes.md");
+    std::fs::write(&staged, std::fs::read_to_string(&notes).unwrap_or_default()).unwrap();
     println!("cargo:rerun-if-env-changed=AIEYES_UPDATER_PUBLIC_KEY");
     println!("cargo:rerun-if-env-changed=AIEYES_REQUIRE_UPDATER");
     if std::env::var("AIEYES_REQUIRE_UPDATER").as_deref() == Ok("1")

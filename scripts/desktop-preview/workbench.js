@@ -38,7 +38,7 @@
     const url = new URL(location.href);url.searchParams.set('platform', platform);url.searchParams.set('scenario', scenario);url.searchParams.set('surface', surface);history.replaceState(null, '', url);
   }
   function sizePreset() {
-    const size = surface === 'panel' ? [450,720] : $('#size').value === 'minimum' ? [640,440] : $('#size').value === 'wide' ? [1440,900] : platform === 'linux' ? [1120,800] : [1294,840];
+    const size = surface === 'panel' ? [model?.desktop.panelWidth === 'compact' ? 360 : 450,720] : $('#size').value === 'minimum' ? [640,440] : $('#size').value === 'wide' ? [1440,900] : platform === 'linux' ? [1120,800] : [1294,840];
     $('#width').value = size[0];$('#height').value = size[1];fit();
   }
   function fit() {

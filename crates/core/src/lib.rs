@@ -24,6 +24,7 @@ mod harness_history;
 mod history_corrections;
 mod history_counting;
 mod history_scan;
+pub mod host_history;
 mod host_monitor;
 mod host_sampling;
 pub mod import;
@@ -78,6 +79,7 @@ mod upstream;
 pub mod usage;
 mod usage_cache;
 pub mod wakeups;
+pub mod webhooks;
 mod workbuddy;
 pub mod zcode;
 mod zcode_credentials;
@@ -94,7 +96,13 @@ pub struct Engine {
     host_session: String,
     local_metrics: monitoring::LocalSampler,
     host_monitor: host_monitor::HostMonitor,
+    /// Minute history and alert state fed by foreground and background samples.
+    host_observer: std::sync::Arc<host_history::HostObserver>,
+    /// Alerts raised on monitor threads, queued for webhooks on the next call.
+    alert_webhooks: std::sync::mpsc::Receiver<host_history::AlertEvent>,
     sessions: sessions::SessionMonitor,
+    /// Last phase and turn per live session, for webhook transitions.
+    session_marks: HashMap<String, webhooks::SessionMark>,
     progress: Option<Box<dyn FnMut(Value) + Send>>,
     network_cache: HashMap<String, network::NetworkTest>,
     status_observations: Option<std::cell::RefCell<HashMap<String, Value>>>,
@@ -107,8 +115,17 @@ pub struct Engine {
 }
 impl Engine {
     pub fn open(root: &Path) -> Result<Self> {
+        let store = store::Store::open(root)?;
+        let (host_observer, alert_webhooks) = host_history::HostObserver::new();
+        let host_monitor = host_monitor::HostMonitor::default();
+        {
+            let observer = host_observer.clone();
+            host_monitor.set_observer(std::sync::Arc::new(move |host: &Host, sample: &Value| {
+                observer.observe(&host.id, &host.name, sample);
+            }));
+        }
         Ok(Self {
-            store: store::Store::open(root)?,
+            store,
             previous_metrics: HashMap::new(),
             host_generation: 0,
             host_session: format!(
@@ -120,8 +137,11 @@ impl Engine {
                     .as_nanos()
             ),
             local_metrics: monitoring::LocalSampler::default(),
-            host_monitor: host_monitor::HostMonitor::default(),
+            host_monitor,
+            host_observer,
+            alert_webhooks,
             sessions: sessions::SessionMonitor::default(),
+            session_marks: HashMap::new(),
             progress: None,
             network_cache: HashMap::new(),
             status_observations: None,
@@ -174,7 +194,9 @@ impl Engine {
         params: Value,
         progress: Box<dyn FnMut(Value) + Send>,
     ) -> Result<Value> {
-        self.progress = Some(progress);
+        let progress = std::sync::Arc::new(std::sync::Mutex::new(progress));
+        let _query_progress = operations::query_progress(progress.clone());
+        self.progress = Some(Box::new(move |value| progress.lock().unwrap()(value)));
         self.runtime_change = None;
         let changes = self.store.db.total_changes();
         let operation = params["operationId"].clone();
@@ -406,14 +428,69 @@ impl Engine {
         Ok(result)
     }
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value> {
+        self.flush_alert_webhooks();
         let result = self.dispatch(method, params);
         // Quota and identity checks may have run qodercli in this process (any lane);
         // mark those control sessions as Aieyes' own before the next session read.
         let _ = crate::subscriptions::qoder::record_internal(&self.store);
         result
     }
+    /// Monitor threads cannot write the database; their alerts are queued here.
+    fn flush_alert_webhooks(&mut self) {
+        while let Ok(event) = self.alert_webhooks.try_recv() {
+            let Ok(settings) = self.store.settings() else {
+                break;
+            };
+            let (title, text, data) =
+                webhooks::alert_message(&settings.appearance.language, &event);
+            let _ =
+                self.store
+                    .queue_webhook(&settings, webhooks::Kind::ServerAlert, title, text, data);
+        }
+    }
+    /// Keep the monitor's alert rules and host set in step with the configuration.
+    fn sync_host_observer(&self, settings: &Settings) {
+        self.host_observer
+            .set_interval(settings.server_refresh_seconds);
+        self.host_observer.configure(
+            &settings.server_alerts,
+            settings.webhooks.allows(webhooks::Kind::ServerAlert),
+        );
+        let monitored: std::collections::HashSet<String> = settings
+            .monitored_hosts()
+            .into_iter()
+            .filter(|host| host.enabled)
+            .map(|host| host.id)
+            .collect();
+        self.host_observer.retain(&monitored);
+    }
+    /// The version that ran last on this data directory; set to the current one.
+    fn launch_state(&self) -> Result<Value> {
+        use rusqlite::OptionalExtension;
+        let version = env!("CARGO_PKG_VERSION");
+        let previous: Option<String> = self
+            .store
+            .db
+            .query_row(
+                "SELECT value FROM kv WHERE key='last-run-version'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        self.store.db.execute(
+            "INSERT INTO kv(key,value) VALUES('last-run-version',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [version],
+        )?;
+        let updated = previous.as_deref().is_some_and(|p| p != version);
+        Ok(json!({"version":version,"previousVersion":previous,"updated":updated}))
+    }
     fn dispatch(&mut self, method: &str, mut params: Value) -> Result<Value> {
         match method {
+            "dashboard.cancel" => {
+                return Ok(operations::cancel_query(
+                    params["operationId"].as_str().unwrap_or(""),
+                ));
+            }
             "operations.prepareUpdate" => return Ok(operations::prepare()),
             "operations.resume" => return Ok(operations::resume()),
             "operations.status" => return Ok(operations::status()),
@@ -449,6 +526,21 @@ impl Engine {
         }
         match method {
             "methods.manifest" => Ok(serde_json::to_value(contracts::METHODS)?),
+            "app.launch" => self.launch_state(),
+            "webhooks.dispatch" => self.dispatch_webhooks(),
+            "webhooks.test" => self.test_webhook(&params),
+            "hosts.history" => {
+                let settings = self.store.settings()?;
+                self.sync_host_observer(&settings);
+                Ok(self.host_observer.history(params["hostId"].as_str()))
+            }
+            "hostAlerts.take" => {
+                let settings = self.store.settings()?;
+                self.sync_host_observer(&settings);
+                Ok(serde_json::to_value(self.host_observer.take(
+                    params["since"].as_i64().context("缺少通知会话起始时间")?,
+                ))?)
+            }
             "quotaResetNotifications.take" => {
                 Ok(serde_json::to_value(self.store.take_reset_notifications(
                     params["since"].as_i64().context("缺少通知会话起始时间")?,
@@ -501,11 +593,23 @@ impl Engine {
             )?),
             "sessions.list" => {
                 self.sessions.set_internal(self.store.internal_sessions()?);
+                let settings = self.store.settings()?;
                 let snapshot = self.sessions.read_with_usage(
-                    &self.store.settings()?,
+                    &settings,
                     std::time::SystemTime::now(),
                     &self.store,
                 );
+                for (kind, session) in
+                    webhooks::session_transitions(&mut self.session_marks, &snapshot.sessions)
+                {
+                    if session.background || !settings.webhooks.allows(kind) {
+                        continue;
+                    }
+                    let (title, text, data) =
+                        webhooks::session_message(&settings.appearance.language, kind, &session);
+                    // The session list is the primary result; a queue failure must not hide it.
+                    let _ = self.store.queue_webhook(&settings, kind, title, text, data);
+                }
                 let mut value = serde_json::to_value(&snapshot)?;
                 value["pet"] = serde_json::to_value(pets::project(&snapshot))?;
                 value["summary"] = json!(snapshot.summary());
@@ -741,6 +845,7 @@ impl Engine {
             }
             "hosts.monitor.configure" => {
                 let settings = self.store.settings()?;
+                self.sync_host_observer(&settings);
                 let seconds = params["intervalSeconds"]
                     .as_f64()
                     .unwrap_or(settings.server_refresh_seconds as f64);
@@ -748,6 +853,10 @@ impl Engine {
                     seconds.is_finite() && (1.0..=86400.0).contains(&seconds),
                     "服务器刷新间隔范围为 1–86400 秒"
                 );
+                if params["paused"].as_bool().unwrap_or(false) {
+                    self.host_observer.pause();
+                }
+                self.host_observer.set_interval(seconds.ceil() as u64);
                 Ok(self.host_monitor.configure(
                     settings.monitored_hosts(),
                     std::time::Duration::from_secs_f64(seconds),
