@@ -195,7 +195,10 @@ fn missing_turn_and_cumulative_catchup_never_prove_subscription_usage() {
     );
     let parsed=crate::usage::parse(source,&mut state,&json!({"timestamp":stamp,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"plan_type":"plus","primary":{}},"info":{"total_token_usage":{"input_tokens":100,"output_tokens":20},"last_token_usage":{"input_tokens":10,"output_tokens":2}}}})).unwrap();
     assert_eq!(parsed.billing.category, "unknown");
-    assert_eq!(parsed.turn_id, "continued");
+    assert!(
+        parsed.turn_id.is_empty(),
+        "Cross-turn catch-up cannot belong wholly to the latest turn"
+    );
 }
 
 #[test]

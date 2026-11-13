@@ -40,6 +40,34 @@ def native_rows(frames):
 
 
 class PiHistoryTests(unittest.TestCase):
+    def test_request_timing_projection_preserves_identifiers_and_times_without_content(self):
+        fixtures = SCRIPT.parents[1] / 'crates/core/tests/fixtures/native-agents'
+        for provider in ('pi', 'omp', 'kimi'):
+            with self.subTest(provider=provider), tempfile.TemporaryDirectory() as directory:
+                path = pathlib.Path(directory) / 'session.jsonl'
+                path.write_text((fixtures / (provider + '.jsonl')).read_text())
+                projected = events(collect(path, provider))
+                self.assertNotIn('PRIVATE', json.dumps(projected))
+                if provider == 'kimi':
+                    request = next(e for e in projected if e['type'] == 'llm.request')
+                    usage = next(e for e in projected if e['type'] == 'usage.record')
+                    self.assertEqual((request['agentId'], request['modelAlias'], usage['agentId']), ('main', 'qwen-test', 'main'))
+                    self.assertEqual(usage['time'] - request['time'], 2477)
+                else:
+                    response = next(e for e in projected if e.get('message', {}).get('role') == 'assistant')
+                    self.assertEqual(response['message']['stopReason'], 'stop')
+                    self.assertIsInstance(response['message']['timestamp'], int)
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'session.jsonl'
+            request = dict(type='api-request', id='r', timestamp='2026-11-13T00:00:00.125Z', messages='PRIVATE_REQUEST')
+            response = dict(type='assistant', sessionId='s', timestamp='2026-11-13T00:00:00.625Z', requestRef='r', message=dict(id='m', model='fixture', content='PRIVATE_RESPONSE', usage=dict(input_tokens=10, output_tokens=20)))
+            path.write_text(json.dumps(request) + '\n' + json.dumps(response) + '\n')
+            projected = events(collect(path, 'claude'))
+            self.assertEqual(len(projected), 2)
+            self.assertEqual(projected[0]['id'], projected[1]['requestRef'])
+            self.assertEqual(projected[0]['timestamp'], request['timestamp'])
+            self.assertNotIn('PRIVATE', json.dumps(projected))
+
     def test_bad_json_and_usage_retry_without_blocking_other_files(self):
         for newline in ('\n', '\r\n'):
             with self.subTest(newline=repr(newline)), tempfile.TemporaryDirectory() as directory:

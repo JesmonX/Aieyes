@@ -202,7 +202,7 @@ def _agy_iter(path):
                 identity = request or 'step:' + str(index)
                 duration_ms = max(_agy_stamp_ms(row, 8), _agy_stamp_ms(row, 7)) - _agy_stamp_ms(row, 1)
                 timing = dict(durationMs=duration_ms, evidence='antigravity-request-v1', requestId=f'{session}:{identity}') if duration_ms > 0 else None
-                yield {'event': dict(id=identity, sessionId=session, timestamp=end, intervalStart=start,
+                yield {'event': dict(id=identity, sessionId=session, timestamp=end, timestampMs=max(_agy_stamp_ms(row, 8), _agy_stamp_ms(row, 7)), intervalStart=start,
                                    intervalEvidence='antigravity-step-v1', requestTiming=timing, model=model, tokens=tokens,
                                    inheritance=dict(origin=f'request:{request}:{start}:{end}',inherited=False) if request else None)}
             except (ValueError, TypeError, IndexError, OverflowError) as error:
@@ -530,7 +530,7 @@ def _project(value, provider):
             data=value.get('message') if kind=='message' else value
             if isinstance(data,dict) and (kind!='message' or data.get('role') in ('user','assistant')):
                 event={k:value[k] for k in ('type','id','timestamp','parentId') if k in value}
-                fields={k:data[k] for k in ('role','model','provider','timestamp') if k in data}
+                fields={k:data[k] for k in ('role','model','provider','timestamp','stopReason') if k in data}
                 if isinstance(data.get('usage'),dict):fields['usage']={k:data['usage'][k] for k in ('input','output','cacheRead','cacheWrite','reasoning','totalTokens') if k in data['usage']}
                 if kind=='message':event['message']=fields
                 else:event.update(fields)
@@ -543,7 +543,7 @@ def _project(value, provider):
             event = {'type': 'session.usage_record', 'id': value.get('id'), 'timestamp': value.get('timestamp'), 'data': {'usage': fields}}
     elif provider == "kimi":
         if value.get('type') in ('metadata','llm.request','turn.prompt','usage.record'):
-            event={k:value[k] for k in ('type','model','provider','time','turnId') if k in value}
+            event={k:value[k] for k in ('type','agentId','model','modelAlias','provider','time','turnId','usageScope') if k in value}
             if value.get('type')=='usage.record':
                 event['usage']={k:(value.get('usage') or {}).get(k) for k in ('inputOther','output','inputCacheRead','inputCacheCreation')}
         elif (value.get('message') or {}).get('type')=='StatusUpdate':
@@ -574,8 +574,10 @@ def _project(value, provider):
             event=dict(method=value['method'],params=dict(sessionId=p.get('sessionId'),update=dict(sessionUpdate='turn_completed',prompt_id=update.get('prompt_id'),usage=dict(modelUsage=usage)),_meta={k:meta.get(k) for k in ('eventId','agentTimestampMs')}))
     elif provider in ("claude","qoder","qoder-cn"):
         message = value.get("message") or {}
-        if value.get("type") == "assistant" and (message.get("usage") or provider in ('qoder','qoder-cn') and isinstance(message.get('model'), str)):
-            event = {k: value.get(k) for k in ("type", "timestamp", "sessionId", "requestId", "uuid", "isApiErrorMessage")}
+        if provider == 'claude' and value.get('type') == 'api-request':
+            event = {k: value[k] for k in ('type', 'id', 'timestamp') if k in value}
+        elif value.get("type") == "assistant" and (message.get("usage") or provider in ('qoder','qoder-cn') and isinstance(message.get('model'), str)):
+            event = {k: value.get(k) for k in ("type", "timestamp", "sessionId", "requestId", "requestRef", "uuid", "isApiErrorMessage")}
             usage=message.get('usage') or {}
             keys=['input_tokens','output_tokens','cache_read_input_tokens','cache_creation_input_tokens']
             if provider in ('qoder','qoder-cn'):
@@ -585,7 +587,9 @@ def _project(value, provider):
             event["message"] = {k: message.get(k) for k in ("id", "model")}
             event["message"]['usage']={k:usage[k] for k in keys if k in usage}
     elif "tokens" in value:
-        event = {k: value.get(k) for k in ("id", "sessionId", "timestamp", "model", "tokens", "billing", "intervalStart", "intervalEvidence")}
+        event = {k: value.get(k) for k in ("id", "sessionId", "timestamp", "timestampMs", "model", "tokens", "billing", "intervalStart", "intervalEvidence")}
+        if isinstance(value.get('requestTiming'),dict):
+            event['requestTiming']={k:value['requestTiming'].get(k) for k in ('durationMs','evidence','requestId')}
         if isinstance(value.get('inheritance'),dict):
             event['inheritance']={k:value['inheritance'].get(k) for k in ('origin','inherited')}
     return event

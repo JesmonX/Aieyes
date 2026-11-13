@@ -118,11 +118,19 @@ pub struct LiveSession {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_start: Option<u64>,
     /// Native session id that the provider's history import also records.
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub native_session: String,
+    /// Native launcher identity, used only to select a supported session deep link.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub client: String,
     /// Native ids of this session and of merged child sessions.
     #[serde(skip)]
     pub member_sessions: Vec<String>,
+    /// Keep each member's source when a parent and its workers are configured separately.
+    #[serde(skip)]
+    pub usage_members: Vec<crate::session_usage::UsageMember>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub subagent_count: u64,
     /// Transcript files of this session (log evidence), for prompt history import.
     #[serde(skip)]
     pub log_paths: Vec<String>,
@@ -301,7 +309,38 @@ impl Snapshot {
             .filter_map(|s| s.workspace.clone().map(|w| (s.id.clone(), w)))
             .collect();
         let mut transcripts: HashMap<String, Vec<String>> = HashMap::new();
+        let mut usage_members: HashMap<String, Vec<crate::session_usage::UsageMember>> =
+            HashMap::new();
+        let mut clients: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut processes: HashMap<String, HashSet<(u32, Option<u64>)>> = HashMap::new();
         for s in &self.sessions {
+            if !s.client.is_empty() {
+                clients
+                    .entry(s.id.clone())
+                    .or_default()
+                    .insert(s.client.clone());
+            }
+            if let Some(pid) = s.pid.filter(|p| *p > 0) {
+                processes
+                    .entry(s.id.clone())
+                    .or_default()
+                    .insert((pid, s.process_start));
+            }
+            let members = usage_members.entry(s.id.clone()).or_default();
+            // finish() also runs on the combined local/SSH snapshot. Preserve earlier scopes.
+            if !s.usage_members.is_empty() {
+                members.extend(s.usage_members.iter().cloned());
+            } else {
+                members.push(crate::session_usage::UsageMember {
+                    source_id: s.source_id.clone(),
+                    native_session: s.native_session.clone(),
+                    log_paths: if s.evidence == "log" && !s.path.is_empty() {
+                        vec![s.path.clone()]
+                    } else {
+                        s.log_paths.clone()
+                    },
+                });
+            }
             if s.evidence == "log" && !s.path.is_empty() {
                 transcripts
                     .entry(s.id.clone())
@@ -420,7 +459,26 @@ impl Snapshot {
             if session.workspace.is_none() {
                 session.workspace = workspaces.get(&session.id).cloned();
             }
+            // Lifecycle evidence can win without carrying the log's desktop identity or
+            // process association. Preserve only unambiguous metadata of this same session.
+            if session.client.is_empty()
+                && let Some(values) = clients.remove(&session.id)
+                && values.len() == 1
+            {
+                session.client = values.into_iter().next().unwrap();
+            }
+            if session.pid.is_none()
+                && let Some(values) = processes.remove(&session.id)
+                && values.len() == 1
+            {
+                (session.pid, session.process_start) = values
+                    .into_iter()
+                    .next()
+                    .map(|(pid, start)| (Some(pid), start))
+                    .unwrap();
+            }
             session.log_paths = transcripts.remove(&session.id).unwrap_or_default();
+            session.usage_members = usage_members.remove(&session.id).unwrap_or_default();
         }
         let mut roots: HashMap<String, Vec<LiveSession>> = HashMap::new();
         for session in unique.values() {
@@ -452,6 +510,10 @@ impl Snapshot {
             .map(|(id, members)| {
                 let mut main = unique[&id].clone();
                 for member in &members {
+                    if member.id != id {
+                        main.usage_members
+                            .extend(member.usage_members.iter().cloned());
+                    }
                     if !member.native_session.is_empty()
                         && !main.member_sessions.contains(&member.native_session)
                     {
@@ -468,6 +530,9 @@ impl Snapshot {
                 {
                     main.member_sessions.insert(0, main.native_session.clone());
                 }
+                main.usage_members.sort();
+                main.usage_members.dedup();
+                main.subagent_count = main.member_sessions.len().saturating_sub(1) as u64;
                 let active = members
                     .iter()
                     .filter(|s| s.id != id && s.phase.active())
@@ -983,6 +1048,7 @@ impl Reader {
                     .then_some(cursor.activity.at),
                 workspace,
                 native_session: session.clone(),
+                client: cursor.activity.originator.clone(),
                 pid: (source.host_id.is_none() && cursor.activity.pid > 0 && alive != Some(false))
                     .then_some(cursor.activity.pid),
                 process_start: (source.host_id.is_none()
@@ -2285,7 +2351,60 @@ pub fn focus_target(pid: u32, process_start: u64) -> serde_json::Value {
     if ancestors.is_empty() {
         return json!({"status":"exited"});
     }
-    json!({"status":"found","ancestors":ancestors})
+    let observed_start = ancestors[0]["start"].as_u64().unwrap_or(process_start);
+    let tty = process_tty(pid);
+    if !process_matches(pid, observed_start) {
+        return json!({"status":"exited"});
+    }
+    json!({"status":"found","ancestors":ancestors,"tty":tty})
+}
+
+/// The controlling terminal, not stdin (which may be a pipe). Read only this scalar from ps.
+#[cfg(unix)]
+fn process_tty(pid: u32) -> Option<String> {
+    let mut command = std::process::Command::new("/bin/ps");
+    command.args(["-p", &pid.to_string(), "-o", "tty="]);
+    let output = crate::process::run(command, vec![], Duration::from_secs(2)).ok()?;
+    let tty = String::from_utf8(output).ok()?;
+    let tty = tty.trim();
+    if tty.is_empty()
+        || tty == "?"
+        || tty == "??"
+        || !tty
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'/' | b'_' | b'-'))
+    {
+        return None;
+    }
+    let path = if tty.starts_with("/dev/") {
+        tty.to_string()
+    } else {
+        format!("/dev/{tty}")
+    };
+    (path.starts_with("/dev/tty") || path.starts_with("/dev/pts/")).then_some(path)
+}
+#[cfg(not(unix))]
+fn process_tty(_pid: u32) -> Option<String> {
+    None
+}
+
+/// Only desktop-originated Codex sessions have a proven app-level thread route.
+pub fn session_deep_link(provider: &str, client: &str, native_session: &str) -> Option<String> {
+    let desktop = provider == "chatgpt-work"
+        || provider == "codex"
+            && matches!(
+                client,
+                "codex_desktop" | session_events::CODEX_WORK_ORIGINATOR
+            );
+    let uuid = native_session.len() == 36
+        && native_session.bytes().enumerate().all(|(i, c)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                c == b'-'
+            } else {
+                c.is_ascii_hexdigit()
+            }
+        });
+    (desktop && uuid).then(|| format!("codex://threads/{native_session}"))
 }
 #[cfg(target_os = "macos")]
 fn parent_pid(pid: u32) -> Option<u32> {
@@ -2603,6 +2722,91 @@ mod tests {
         );
         assert_eq!(focus_target(u32::MAX - 7, 0)["status"], "exited");
         assert!(process_matches(pid, start) && !process_matches(pid, start + 1));
+    }
+    #[test]
+    fn hook_lifecycle_keeps_unambiguous_focus_metadata_without_borrowing_another_session() {
+        let log = LiveSession {
+            id: "desktop".into(),
+            native_session: "01234567-89ab-4cde-8f01-23456789abcd".into(),
+            provider: "codex".into(),
+            client: "codex_desktop".into(),
+            evidence: "log".into(),
+            phase: Phase::Working,
+            pid: Some(42),
+            process_start: Some(100),
+            event_at: 1_000,
+            ..Default::default()
+        };
+        let hook = LiveSession {
+            evidence: "hook".into(),
+            client: String::new(),
+            phase: Phase::NeedsInput,
+            pid: None,
+            process_start: None,
+            event_at: 2_000,
+            ..log.clone()
+        };
+        for rows in [
+            vec![log.clone(), hook.clone()],
+            vec![hook.clone(), log.clone()],
+        ] {
+            let mut snapshot = Snapshot {
+                sessions: rows,
+                ..Default::default()
+            };
+            for _ in 0..2 {
+                snapshot.finish();
+                let merged = &snapshot.sessions[0];
+                assert_eq!(merged.phase, Phase::NeedsInput);
+                assert_eq!((merged.pid, merged.process_start), (Some(42), Some(100)));
+                assert!(
+                    session_deep_link(&merged.provider, &merged.client, &merged.native_session)
+                        .is_some()
+                );
+            }
+        }
+        let mut snapshot = Snapshot {
+            sessions: vec![
+                log.clone(),
+                LiveSession {
+                    pid: Some(43),
+                    client: "codex_cli_rs".into(),
+                    ..log
+                },
+                hook,
+            ],
+            ..Default::default()
+        };
+        snapshot.finish();
+        assert!(snapshot.sessions[0].client.is_empty());
+        assert!(
+            snapshot.sessions[0].pid.is_none(),
+            "Conflicting process observations cannot supply a focus target"
+        );
+    }
+    #[test]
+    fn desktop_thread_links_require_native_desktop_identity_and_an_exact_uuid() {
+        let id = "01234567-89ab-4cde-8f01-23456789abcd";
+        for (provider, client) in [
+            ("chatgpt-work", ""),
+            ("codex", "codex_desktop"),
+            ("codex", session_events::CODEX_WORK_ORIGINATOR),
+        ] {
+            assert_eq!(
+                session_deep_link(provider, client, id),
+                Some(format!("codex://threads/{id}"))
+            );
+        }
+        assert!(session_deep_link("codex", "codex_cli_rs", id).is_none());
+        assert!(session_deep_link("claude", "codex_desktop", id).is_none());
+        for id in [
+            "",
+            "../new",
+            "01234567-89ab-4cde-8f01-23456789abcd?prompt=bad",
+            "01234567-89ab-4cde-8f01-23456789abcz",
+        ] {
+            assert!(session_deep_link("chatgpt-work", "", id).is_none());
+        }
     }
     #[test]
     fn the_session_capability_matches_the_providers_the_monitor_reads() {
@@ -4254,10 +4458,13 @@ mod codex_source_tests {
         assert!(!snapshot.summary().contains("失败"));
         let wire = serde_json::to_string(&snapshot).unwrap();
         assert!(!wire.contains("PRIVATE_"));
-        assert!(
-            !wire.contains("sessionSource") && !wire.contains("originator"),
-            "Creation metadata stays internal"
-        );
+        let public = serde_json::to_value(&snapshot).unwrap();
+        for session in public["sessions"].as_array().unwrap() {
+            assert!(
+                session.get("sessionSource").is_none() && session.get("originator").is_none(),
+                "Raw creation metadata stays internal; nativeSession/client are explicit fields"
+            );
+        }
     }
     #[test]
     fn chatgpt_work_keeps_codex_identity_for_hooks_and_subagents() {
@@ -4303,6 +4510,7 @@ mod codex_source_tests {
                 LiveSession {
                     evidence: "hook".into(),
                     provider: "codex".into(),
+                    client: String::new(),
                     ..work.clone()
                 },
                 work.clone(),
@@ -4312,6 +4520,7 @@ mod codex_source_tests {
         monitor.finish();
         assert_eq!(monitor.sessions.len(), 1);
         assert_eq!(monitor.sessions[0].provider, "chatgpt-work");
+        assert_eq!(monitor.sessions[0].client, "codex_work_desktop");
     }
     #[test]
     fn work_live_forks_inherit_originator_without_changing_whitelist_or_codex_ids() {

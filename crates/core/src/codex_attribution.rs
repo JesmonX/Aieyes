@@ -510,6 +510,7 @@ mod tests {
             session_id: "thread".into(),
             model: "model".into(),
             timestamp: 1015,
+            timestamp_ms: None,
             tokens: Tokens {
                 input: 100,
                 ..Default::default()

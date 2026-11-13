@@ -62,6 +62,7 @@ pub fn event(source: &Source, row: &Value) -> Result<UsageEvent> {
     let mut event = usage::parse_normalized(source, &mut ParseState::default(), &normalized)
         .context("ZCode 用量格式无效")?;
     event.attribution = "zcode-local".into();
+    event.timestamp_ms = row["completed"].as_u64();
     event.turn_id = row["turn"].as_str().unwrap_or("").into();
     event.inheritance = Some(UsageInheritance {
         origin: format!("request:{}:{}", row["id"], row["completed"]),

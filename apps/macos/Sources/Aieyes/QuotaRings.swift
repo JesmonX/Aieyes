@@ -72,9 +72,6 @@ private struct QuotaRingDetail: View {
                 if model.canSwitchAccount(quota.id) {
                     Button { model.showAccountSwitch?(quota.id) } label: { Image(systemName: "arrow.left.arrow.right") }.help(L("切换账户")).accessibilityLabel(L("切换账户"))
                 }
-                if compact {
-                    Button { model.showAccount(quota.id) } label: { Image(systemName: "macwindow") }.help(L("在主窗口中查看")).accessibilityLabel(L("在主窗口中查看"))
-                }
                 Button(action: close) { Image(systemName: "chevron.up") }.help(L("收起")).accessibilityLabel(L("收起"))
             }.buttonStyle(.plain)
             if group != nil || quota.plan.map({ Format.subscription($0).count > 10 }) == true {

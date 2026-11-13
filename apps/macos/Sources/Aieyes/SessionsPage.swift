@@ -8,6 +8,7 @@ struct SessionsPage: View {
     @AppStorage("detail.sessions.provider") private var provider = "all"
     @State private var focusMessage: String?
     @State private var focusGeneration = 0
+    @State private var focusingID: String?
     @Namespace private var chips
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     @MainActor init(model: AppModel) {
@@ -135,11 +136,8 @@ struct SessionsPage: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(session.project ?? Format.provider(session.provider)).font(AppFont.section).lineLimit(1).truncationMode(.middle)
                     .help(session.workspace ?? "")
-                Text(Format.provider(session.provider) + " · " + session.machine).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1)
-                if let usage = session.usageText {
-                    Text(usage).font(AppFont.secondary).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
-                        .help(L("输出 Token ÷ 模型请求耗时（含首字等待，不含工具执行和用户等待）"))
-                }
+                Text([Format.provider(session.provider), session.machine, session.shortIdentity.map { "#" + $0 }].compactMap { $0 }.joined(separator: " · ")).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).help(session.nativeSession ?? "")
+                SessionUsageLine(session: session)
             }
             Spacer(minLength: 12)
             VStack(alignment: .trailing, spacing: 3) {
@@ -151,7 +149,8 @@ struct SessionsPage: View {
             // SSH sessions are information only: no local window owns them.
             if session.focusable {
                 Button { focus(session) } label: { Image(systemName: "arrow.up.forward.app") }
-                    .buttonStyle(.borderless).help(L("切换到会话所在的终端或 IDE")).accessibilityLabel(L("切换到会话所在的终端或 IDE"))
+                    .buttonStyle(.borderless).help(session.focusHelp).accessibilityLabel(session.focusHelp)
+                    .disabled(focusingID == session.id)
             }
         }
         .padding(.vertical, 10).contentShape(Rectangle())
@@ -166,10 +165,13 @@ struct SessionsPage: View {
     }
 
     private func focus(_ session: LiveSession) {
+        guard focusingID == nil else { return }
+        focusingID = session.id
         focusGeneration += 1
         let generation = focusGeneration
         Task { @MainActor in
             let outcome = await SessionFocus.focus(session, engine: SessionFocus.engine)
+            focusingID = nil
             guard generation == focusGeneration else { return }
             withMotion(.expand) { focusMessage = SessionFocus.message(outcome) }
             try? await Task.sleep(for: .seconds(5))

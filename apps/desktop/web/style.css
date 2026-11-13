@@ -158,6 +158,8 @@ canvas { display:block; width:100%; height:var(--chart-height); }
 .live-row[data-focus-session]:hover { background:var(--control-hover); }
 .live-row[data-focus-session]:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
 .live-row small.session-usage { font-variant-numeric:tabular-nums; }
+.session-jump-mark { display:flex; flex:0 0 auto; color:var(--muted); }
+.live-row .session-jump-mark svg { width:14px; height:14px; }
 .live-row strong { font-weight:var(--weight-medium); overflow-wrap: anywhere; }
 .live-row small { display: block; color: var(--muted); font-size: var(--font-caption); }
 .phase-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--surface-sunken); color: var(--muted); transition: color var(--t-base) var(--ease), background var(--t-base) var(--ease); }

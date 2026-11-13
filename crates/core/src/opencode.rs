@@ -84,6 +84,7 @@ pub fn event(source: &Source, id: &str, session: &str, data: &Value) -> Result<U
         .context("OpenCode 用量格式无效")?;
     parsed.attribution = format!("{}-local", source.provider);
     parsed.usage_version = usage::parser_version(&source.provider);
+    parsed.timestamp_ms = data["completed"].as_u64();
     parsed.billing.evidence = data["provider"].as_str().unwrap_or("").into();
     parsed.inheritance = Some(UsageInheritance {
         origin: format!("message:{id}:{}", data["completed"]),

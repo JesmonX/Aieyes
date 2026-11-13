@@ -3,8 +3,8 @@
 //! The join uses the native session id that both the live monitor and the history import record
 //! (see `docs/changes.md` for the per-Agent list), restricted to the session's own source. The
 //! current turn is matched by the native turn id where the import records it (Codex, DeepSeek
-//! Harness); otherwise by explicit millisecond bounds of the turn. Output speed is reported only
-//! when every recorded request of the turn carries model request timing evidence.
+//! Harness, Pi, Oh My Pi); otherwise by explicit millisecond bounds of the turn. A whole-turn
+//! output speed requires complete timing evidence; partial measurements carry explicit coverage.
 use crate::{
     models::{OutputTiming, Settings, Source, Tokens},
     sessions::{LiveSession, Snapshot},
@@ -31,11 +31,31 @@ pub struct SessionUsage {
     /// Output tokens ÷ model request time (including first-token wait), excluding tools/user waits.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_tokens_per_second: Option<f64>,
+    /// Same basis, limited to requests with verified timing. Never presented as a whole-turn rate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub measured_output_tokens_per_second: Option<f64>,
+    pub timed_output_tokens: u64,
+    pub timed_requests: u64,
+    /// Untimed request identities; falls back to output records when identity is unavailable.
+    pub untimed_requests: u64,
+    /// Components use the same inclusive total as history; reasoning is already in output.
+    pub session: Tokens,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn: Option<Tokens>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct UsageMember {
+    pub source_id: String,
+    pub native_session: String,
+    pub log_paths: Vec<String>,
 }
 
 /// Providers whose imported usage records the same native turn id as the live session.
 fn native_turns(provider: &str) -> bool {
-    matches!(provider, "codex" | "deepseek-harness")
+    matches!(provider, "codex" | "deepseek-harness" | "pi" | "omp")
 }
 /// Monitor-generated turn ids ("<ms>-<generation>") are not native and never match history.
 fn synthetic_turn(turn: &str) -> bool {
@@ -86,7 +106,10 @@ pub(crate) fn history_ids(provider: &str, session: &LiveSession) -> Vec<String> 
 #[serde(rename_all = "camelCase", default)]
 #[derive(Default)]
 struct Row {
+    id: String,
+    session_id: String,
     turn_id: String,
+    timestamp_ms: Option<u64>,
     tokens: Tokens,
     output_timing: Option<OutputTiming>,
 }
@@ -96,22 +119,44 @@ fn aggregate(provider: &str, session: &LiveSession, rows: &[(i64, Row)]) -> Opti
     if rows.is_empty() {
         return None;
     }
+    let mut session_tokens = Tokens::default();
+    for (_, row) in rows {
+        session_tokens.add(&row.tokens);
+    }
     let mut usage = SessionUsage {
         session_tokens: rows.iter().map(|(_, r)| r.tokens.total()).sum(),
+        session: session_tokens,
+        updated_at_ms: rows
+            .iter()
+            .filter_map(|(s, r)| {
+                r.timestamp_ms
+                    .or_else(|| u64::try_from(*s).ok()?.checked_mul(1000))
+            })
+            .max(),
         ..Default::default()
     };
     let by_turn =
         native_turns(provider) && !session.turn_id.is_empty() && !synthetic_turn(&session.turn_id);
     let in_turn = |stamp: i64, row: &Row| {
-        if by_turn {
+        if by_turn && (row.session_id.is_empty() || row.session_id == session.native_session) {
             return row.turn_id == session.turn_id;
         }
-        // Seconds-resolution records count only when the whole second lies inside the turn.
+        // Workers have their own native turn IDs. Include their usage during the parent's turn.
+        // Legacy seconds-only records count only when that entire second lies inside the bounds.
+        let Some(lower) = row
+            .timestamp_ms
+            .or_else(|| u64::try_from(stamp).ok()?.checked_mul(1000))
+        else {
+            return false;
+        };
+        let upper = if row.timestamp_ms.is_some() {
+            lower
+        } else {
+            lower.saturating_add(999)
+        };
         session.turn_started_at > 0
-            && stamp.saturating_mul(1000) >= session.turn_started_at as i64
-            && session
-                .turn_ended_at
-                .is_none_or(|end| stamp.saturating_mul(1000) <= end as i64)
+            && lower >= session.turn_started_at
+            && session.turn_ended_at.is_none_or(|end| upper <= end)
     };
     let turn: Vec<&Row> = rows
         .iter()
@@ -124,16 +169,38 @@ fn aggregate(provider: &str, session: &LiveSession, rows: &[(i64, Row)]) -> Opti
     let output: u64 = turn.iter().map(|r| r.tokens.output).sum();
     usage.turn_tokens = Some(turn.iter().map(|r| r.tokens.total()).sum());
     usage.turn_output_tokens = Some(output);
-    // Every request that produced output needs its own timing; one untimed request hides the rate.
+    let mut components = Tokens::default();
+    for row in &turn {
+        components.add(&row.tokens);
+    }
+    usage.turn = Some(components);
+    // Every output record needs timing for a whole-turn rate; partial rates disclose coverage.
     let producing: Vec<&&Row> = turn.iter().filter(|r| r.tokens.output > 0).collect();
     let expected = format!("{provider}-request-v1");
-    let timed = producing.iter().all(|r| {
-        r.output_timing
-            .as_ref()
-            .is_some_and(|t| t.duration_ms > 0 && t.evidence == expected)
-    });
+    let supported = matches!(
+        provider,
+        "codex" | "claude" | "antigravity" | "deepseek-harness" | "pi" | "omp" | "kimi"
+    );
+    let verified = |r: &&Row| {
+        supported
+            && r.output_timing
+                .as_ref()
+                .is_some_and(|t| t.duration_ms > 0 && t.evidence == expected)
+    };
     let mut durations = HashMap::<String, u64>::new();
+    let mut untimed = std::collections::HashSet::new();
     for (index, row) in producing.iter().enumerate() {
+        if !verified(row) {
+            untimed.insert(
+                row.output_timing
+                    .as_ref()
+                    .filter(|t| !t.request_id.is_empty())
+                    .map(|t| t.request_id.clone())
+                    .unwrap_or_else(|| format!("record:{index}")),
+            );
+            continue;
+        }
+        usage.timed_output_tokens += row.tokens.output;
         if let Some(timing) = &row.output_timing {
             let key = if timing.request_id.is_empty() {
                 format!("record:{index}")
@@ -146,22 +213,31 @@ fn aggregate(provider: &str, session: &LiveSession, rows: &[(i64, Row)]) -> Opti
                 .or_insert(timing.duration_ms);
         }
     }
+    usage.timed_requests = durations.len() as u64;
+    usage.untimed_requests = untimed.len() as u64;
     let duration: u64 = durations.values().sum();
-    if matches!(
-        provider,
-        "codex" | "claude" | "antigravity" | "deepseek-harness"
-    ) && output > 0
-        && timed
-        && duration > 0
-    {
-        usage.output_tokens_per_second = Some(output as f64 * 1000.0 / duration as f64);
+    if duration > 0 && usage.timed_output_tokens > 0 {
+        let rate = usage.timed_output_tokens as f64 * 1000.0 / duration as f64;
+        if untimed.is_empty() {
+            usage.output_tokens_per_second = Some(rate);
+        } else {
+            usage.measured_output_tokens_per_second = Some(rate);
+        }
     }
     Some(usage)
 }
 
-type Key = (String, Vec<String>, String, u64, Option<u64>, (i64, i64));
+type Key = (
+    String,
+    Vec<UsageMember>,
+    String,
+    u64,
+    Option<u64>,
+    (i64, i64),
+);
 
 type ImportRequest = (Settings, Source, Option<Vec<PathBuf>>);
+type FileVersion = (PathBuf, u64, u128);
 struct ImportWorker {
     requests: std::sync::mpsc::SyncSender<ImportRequest>,
     completed: std::sync::mpsc::Receiver<(String, bool)>,
@@ -171,11 +247,11 @@ struct ImportWorker {
 pub struct SessionUsageReader {
     cache: HashMap<String, (Key, Option<SessionUsage>)>,
     /// Last prompt import request per source and the transcript sizes it saw.
-    imported: HashMap<String, (Instant, Vec<(PathBuf, u64)>)>,
+    imported: HashMap<String, (Instant, Vec<FileVersion>)>,
     indexed: bool,
     /// Imports run on their own connection so a busy writer never delays live status.
     worker: Option<ImportWorker>,
-    pending: HashMap<String, Vec<(PathBuf, u64)>>,
+    pending: HashMap<String, Vec<FileVersion>>,
     attempted: HashMap<String, Instant>,
 }
 
@@ -184,8 +260,26 @@ fn per_file(provider: &str) -> bool {
     matches!(provider, "codex" | "claude")
 }
 
+fn members(session: &LiveSession) -> Vec<UsageMember> {
+    if !session.usage_members.is_empty() {
+        return session.usage_members.clone();
+    }
+    let ids = if session.member_sessions.is_empty() {
+        vec![session.native_session.clone()]
+    } else {
+        session.member_sessions.clone()
+    };
+    ids.into_iter()
+        .map(|native_session| UsageMember {
+            source_id: session.source_id.clone(),
+            native_session,
+            log_paths: session.log_paths.clone(),
+        })
+        .collect()
+}
+
 impl SessionUsageReader {
-    /// Import the history of active local sessions promptly (the regular schedule can be minutes),
+    /// Import retained local sessions promptly, including their final counters after completion,
     /// then attach token totals to every session of the snapshot.
     pub fn enrich(&mut self, snapshot: &mut Snapshot, store: &Store, settings: &Settings) {
         self.import_active(snapshot, store, settings);
@@ -209,10 +303,20 @@ impl SessionUsageReader {
             let Some(source) = settings.sources.iter().find(|s| s.id == session.source_id) else {
                 continue;
             };
-            let ids = history_ids(&source.provider, session);
+            let mut members = members(session);
+            members.retain(|member| {
+                settings.sources.iter().any(|s| {
+                    s.id == member.source_id
+                        && s.provider == source.provider
+                        && s.host_id == source.host_id
+                        && settings.source_enabled(s)
+                })
+            });
+            members.sort();
+            members.dedup();
             let key: Key = (
-                session.source_id.clone(),
-                ids.clone(),
+                source.provider.clone(),
+                members.clone(),
                 session.turn_id.clone(),
                 session.turn_started_at,
                 session.turn_ended_at,
@@ -225,7 +329,7 @@ impl SessionUsageReader {
                 session.usage = usage.clone();
                 continue;
             }
-            let usage = rows(store, &session.source_id, &ids)
+            let usage = member_rows(store, &source.provider, &members)
                 .ok()
                 .and_then(|rows| aggregate(&source.provider, session, &rows));
             session.usage = usage.clone();
@@ -262,38 +366,47 @@ impl SessionUsageReader {
         for session in snapshot
             .sessions
             .iter()
-            .filter(|s| s.machine_id == "local" && s.phase.active())
+            .filter(|s| s.machine_id == "local" && !s.expired)
         {
-            let Some(source) = settings
-                .sources
-                .iter()
-                .find(|s| s.id == session.source_id && s.host_id.is_none())
-            else {
-                continue;
-            };
-            let entry = wanted
-                .entry(source.id.clone())
-                .or_insert_with(|| (source, vec![]));
-            if per_file(&source.provider) {
-                entry.1.extend(
-                    session
-                        .log_paths
-                        .iter()
-                        .map(PathBuf::from)
-                        .filter(|p| p.is_file()),
-                );
+            // Recently finished turns also need their final counters, including short turns
+            // which start and finish between polls. Import workers using their own source.
+            for member in members(session) {
+                let Some(source) = settings.sources.iter().find(|s| {
+                    s.id == member.source_id && s.host_id.is_none() && settings.source_enabled(s)
+                }) else {
+                    continue;
+                };
+                let entry = wanted
+                    .entry(source.id.clone())
+                    .or_insert_with(|| (source, vec![]));
+                if per_file(&source.provider) {
+                    entry.1.extend(
+                        member
+                            .log_paths
+                            .iter()
+                            .map(PathBuf::from)
+                            .filter(|p| p.is_file()),
+                    );
+                }
             }
         }
-        for (id, (source, paths)) in wanted {
+        for (id, (source, mut paths)) in wanted {
+            paths.sort();
+            paths.dedup();
             if per_file(&source.provider) && paths.is_empty() {
                 continue;
             }
-            let sizes: Vec<(PathBuf, u64)> = paths
+            let sizes: Vec<FileVersion> = paths
                 .iter()
                 .map(|p| {
+                    let meta = std::fs::metadata(p).ok();
                     (
                         p.clone(),
-                        std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+                        meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                        meta.and_then(|m| m.modified().ok())
+                            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_nanos())
+                            .unwrap_or(0),
                     )
                 })
                 .collect();
@@ -361,6 +474,35 @@ fn spawn_worker(root: PathBuf) -> ImportWorker {
     }
 }
 
+fn member_rows(store: &Store, provider: &str, members: &[UsageMember]) -> Result<Vec<(i64, Row)>> {
+    let mut scopes = HashMap::<String, Vec<String>>::new();
+    for member in members {
+        let ids = history_ids(
+            provider,
+            &LiveSession {
+                source_id: member.source_id.clone(),
+                native_session: member.native_session.clone(),
+                log_paths: member.log_paths.clone(),
+                ..Default::default()
+            },
+        );
+        scopes
+            .entry(member.source_id.clone())
+            .or_default()
+            .extend(ids);
+    }
+    // One physical request may be observed in two configured sources; count its event once.
+    let mut unique = HashMap::new();
+    for (source, mut ids) in scopes {
+        ids.sort();
+        ids.dedup();
+        for (stamp, row) in rows(store, &source, &ids)? {
+            unique.entry(row.id.clone()).or_insert((stamp, row));
+        }
+    }
+    Ok(unique.into_values().collect())
+}
+
 fn rows(store: &Store, source_id: &str, ids: &[String]) -> Result<Vec<(i64, Row)>> {
     let mut query = store.db.prepare_cached(
         "SELECT e.stamp,e.payload FROM events e WHERE json_extract(e.payload,'$.sessionId') IN (SELECT value FROM json_each(?2)) AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?1)",
@@ -398,6 +540,7 @@ mod tests {
                     evidence: "codex-request-v1".into(),
                     request_id: String::new(),
                 }),
+                ..Default::default()
             },
         )
     }
@@ -454,12 +597,15 @@ mod tests {
         );
     }
     #[test]
-    fn only_four_request_timing_providers_are_enabled_and_shared_request_time_is_counted_once() {
+    fn supported_request_clocks_share_time_once_and_other_providers_remain_unknown() {
         for provider in [
             "codex",
             "claude",
             "antigravity",
             "deepseek-harness",
+            "pi",
+            "omp",
+            "kimi",
             "opencode",
         ] {
             let mut rows = vec![row(20, "t", 40, Some(1000)), row(21, "t", 60, Some(2000))];
@@ -495,7 +641,7 @@ mod tests {
         let usage = aggregate("claude", &live("prompt", 20_500, Some(30_000)), &rows).unwrap();
         assert_eq!(
             usage.turn_output_tokens,
-            Some(70),
+            Some(30),
             "Only whole seconds within the bounds count"
         );
         assert_eq!(
@@ -523,6 +669,99 @@ mod tests {
             Some(120)
         );
         assert!(aggregate("claude", &live("p", 1, None), &[]).is_none());
+    }
+    #[test]
+    fn subsecond_turns_keep_exact_records_and_partial_rates_have_explicit_coverage() {
+        let mut rows = vec![
+            row(20, "", 40, Some(1000)),
+            row(20, "", 60, None),
+            row(20, "", 90, None),
+        ];
+        for ((_, row), time) in rows.iter_mut().zip([20_550, 20_750, 20_950]) {
+            row.timestamp_ms = Some(time);
+            if let Some(t) = &mut row.output_timing {
+                t.evidence = "claude-request-v1".into();
+            }
+        }
+        let usage = aggregate("claude", &live("prompt", 20_500, Some(20_800)), &rows).unwrap();
+        assert_eq!(usage.turn_output_tokens, Some(100));
+        assert_eq!(usage.turn_tokens, Some(300));
+        assert_eq!(usage.session.output, 190);
+        assert_eq!(usage.turn.as_ref().unwrap().input, 200);
+        assert_eq!(usage.output_tokens_per_second, None);
+        assert_eq!(usage.measured_output_tokens_per_second, Some(40.0));
+        assert_eq!(
+            (
+                usage.timed_output_tokens,
+                usage.timed_requests,
+                usage.untimed_requests
+            ),
+            (40, 1, 1)
+        );
+        assert_eq!(usage.updated_at_ms, Some(20_950));
+    }
+    #[test]
+    fn workers_use_their_own_sources_and_native_turns_without_duplicate_or_foreign_usage() {
+        use serde_json::json;
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).unwrap();
+        let sources: Vec<Source> = ["parent-source", "worker-source", "other-machine"]
+            .into_iter()
+            .map(|id| Source {
+                id: id.into(),
+                provider: "codex".into(),
+                account_id: "shared-account".into(),
+                ..Default::default()
+            })
+            .collect();
+        let settings = Settings {
+            sources: sources.clone(),
+            ..Default::default()
+        };
+        for (index, native, turn, at, output) in [
+            (0, "parent", "before", 19_000, 25),
+            (0, "parent", "current", 21_000, 100),
+            (1, "worker", "its-own-turn", 22_000, 50),
+            (2, "worker", "its-own-turn", 22_000, 999),
+        ] {
+            let mut state = crate::models::ParseState {
+                turn_id: turn.into(),
+                ..Default::default()
+            };
+            let mut event = crate::usage::parse_normalized(&sources[index], &mut state, &json!({"id":format!("{index}:{at}"),"sessionId":native,"timestamp":at/1000,"model":"fixture","tokens":{"output":output}})).unwrap();
+            event.timestamp_ms = Some(at);
+            store.put_event(&event, &[], &settings).unwrap();
+            if index == 0 && turn == "current" {
+                // A duplicate observation in another configured source still counts once.
+                event.source_id = sources[1].id.clone();
+                store.put_event(&event, &[], &settings).unwrap();
+            }
+        }
+        let members = vec![
+            UsageMember {
+                source_id: sources[0].id.clone(),
+                native_session: "parent".into(),
+                ..Default::default()
+            },
+            UsageMember {
+                source_id: sources[1].id.clone(),
+                native_session: "parent".into(),
+                ..Default::default()
+            },
+            UsageMember {
+                source_id: sources[1].id.clone(),
+                native_session: "worker".into(),
+                ..Default::default()
+            },
+        ];
+        let rows = member_rows(&store, "codex", &members).unwrap();
+        let session = LiveSession {
+            native_session: "parent".into(),
+            ..live("current", 20_000, Some(23_000))
+        };
+        let usage = aggregate("codex", &session, &rows).unwrap();
+        assert_eq!(usage.session_tokens, 175);
+        assert_eq!(usage.turn_tokens, Some(150));
     }
     #[test]
     fn history_ids_map_subagents_and_keep_path_defaults() {
@@ -656,6 +895,7 @@ mod live_tests {
             .unwrap();
         writeln!(file, "{}", json!({"type":"response_item","timestamp":at(5),"payload":{"type":"function_call","name":"shell","call_id":"c","arguments":"PRIVATE"}})).unwrap();
         writeln!(file, "{}", count(1500, 160, (500, 60), 4)).unwrap();
+        writeln!(file, "{}", json!({"type":"event_msg","timestamp":at(3),"payload":{"type":"task_complete","turn_id":"t1"}})).unwrap();
         drop(file);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let updated = loop {

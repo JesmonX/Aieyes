@@ -568,6 +568,7 @@ pub(crate) fn reconcile(
                         .cloned()
                         .unwrap_or_else(|| "Qoder".into()),
                     timestamp: created_at,
+                    timestamp_ms: None,
                     tokens,
                     attribution: "qoder-residual".into(),
                     billing: BillingEvidence {

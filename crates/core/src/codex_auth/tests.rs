@@ -741,6 +741,7 @@ fn shared_history_totals_survive_and_profile_quotas_stay_visible() {
         provider: "codex".into(),
         account_id: "one".into(),
         timestamp: now(),
+        timestamp_ms: None,
         model: "fixture".into(),
         tokens: Tokens {
             input: 10,

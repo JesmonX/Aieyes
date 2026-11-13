@@ -4094,7 +4094,24 @@ enum LocalizationCatalog {
   "此版本没有变更记录链接": "This version has no changelog link",
   "无法打开浏览器：{0}": "Could not open the browser: {0}",
   "正在计算用量": "Calculating usage",
-  "查询已取消": "Query cancelled"
+  "查询已取消": "Query cancelled",
+  "打开此会话": "Open this session",
+  "部分 {0}": "Partial {0}",
+  "Token 暂未记录": "Tokens not yet recorded",
+  "尚未读取到此会话的 Token 记录；不同 Agent 的记录能力和写入时间可能不同": "No token records have been read for this session yet; availability and write timing vary by agent",
+  "会话累计 {0} Token": "Session total: {0} tokens",
+  "本轮累计 {0} Token": "Turn total: {0} tokens",
+  "输入 {0} · 输出 {1} · 缓存读取 {2} · 缓存写入 {3}": "Input {0} · Output {1} · Cache read {2} · Cache write {3}",
+  "含 {0} 个子 Agent；本轮包含子 Agent 在此轮期间的用量": "Includes {0} subagents; turn usage includes their activity during this turn",
+  "部分测速：覆盖本轮 {0}% 的输出 Token；其余输出缺少完整的请求计时": "Partial rate: covers {0}% of this turn's output tokens; the remaining output has no complete request timing.",
+  "此轮尚无完整的请求计时，暂不显示整轮速度": "Complete request timing is not available for this turn; no whole-turn rate is shown",
+  "用量记录时间：{0}": "Usage recorded: {0}",
+  "已打开 {0} 中的会话": "Opened the session in {0}",
+  "已定位到 {0} 的分屏": "Focused the pane in {0}",
+  "已定位到 {0} 的标签页": "Focused the tab in {0}",
+  "已切换到 {0} 的窗口": "Switched to the window in {0}",
+  "已激活 {0}；允许自动化权限后可精确定位终端": "Activated {0}; allow Automation access to focus the exact terminal",
+  "已请求切换到 {0}，尚未确认前台窗口": "Requested a switch to {0}; the foreground window has not been confirmed"
 }
 """#.utf8))) ?? [:]
 }

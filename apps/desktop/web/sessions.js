@@ -18,13 +18,34 @@
   const project = (s) => {const name = String(s.workspace ?? '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();return name || null;};
   const updatedTime = (s) => Number.isFinite(s.updatedAt) ? new Date(s.updatedAt * 1000).toLocaleTimeString(AieyesI18n.locale, { hour: '2-digit', minute: '2-digit', ...AieyesI18n.clock }) : '—';
   const updatedText = (s) => AieyesI18n.t("最后更新 {0}", updatedTime(s));
+  const identity = (s) => typeof s.nativeSession === 'string' && s.nativeSession ? s.nativeSession.slice(-8) : null;
+  const rateText = (n) => Number.isFinite(n) && n > 0 ? (n < 1 ? '<1' : Math.round(n)) + ' tok/s' : null;
   // Unknown parts are omitted, never shown as zero.
   const usageText = (s) => {
     const u = s.usage;if (!u) return '';
     const format = (n) => typeof compact === 'function' ? compact(n) : String(n);
-    return [AieyesI18n.t("会话 {0}", format(u.sessionTokens)), u.turnTokens != null ? AieyesI18n.t("本轮 {0} Token", format(u.turnTokens)) : null, Number.isFinite(u.outputTokensPerSecond) && u.outputTokensPerSecond > 0 ? (u.outputTokensPerSecond < 1 ? '<1' : Math.round(u.outputTokensPerSecond)) + ' tok/s' : null].filter(Boolean).join(' · ');
+    const rate = rateText(u.outputTokensPerSecond),measured = rateText(u.measuredOutputTokensPerSecond);
+    return [AieyesI18n.t("会话 {0}", format(u.sessionTokens)), u.turnTokens != null ? AieyesI18n.t("本轮 {0} Token", format(u.turnTokens)) : null, rate || (measured ? AieyesI18n.t("部分 {0}", measured) : null)].filter(Boolean).join(' · ');
   };
-  const detailText = (s, now) => {const time = elapsed(s, now);return [project(s), time == null ? null : AieyesI18n.t("本轮 {0}", elapsedText(time))].filter(Boolean).concat(time == null ? [updatedText(s)] : []).join(' · ');};
+  const usageHelp = (s) => {
+    const u = s.usage;if (!u) return AieyesI18n.t("尚未读取到此会话的 Token 记录；不同 Agent 的记录能力和写入时间可能不同");
+    const exact = (n) => new Intl.NumberFormat(AieyesI18n.locale, {maximumFractionDigits: 0}).format(n);
+    const components = (c) => AieyesI18n.t("输入 {0} · 输出 {1} · 缓存读取 {2} · 缓存写入 {3}", exact(c.input), exact(c.output), exact(c.cacheRead), exact(c.cacheWrite));
+    const lines = [AieyesI18n.t("会话累计 {0} Token", exact(u.sessionTokens))];
+    if (u.session) lines.push(components(u.session));
+    if (u.turnTokens != null) {lines.push(AieyesI18n.t("本轮累计 {0} Token", exact(u.turnTokens)));if (u.turn) lines.push(components(u.turn));}
+    if (s.subagentCount > 0) lines.push(AieyesI18n.t("含 {0} 个子 Agent；本轮包含子 Agent 在此轮期间的用量", s.subagentCount));
+    lines.push(AieyesI18n.t("输出 Token ÷ 模型请求耗时（含首字等待，不含工具执行和用户等待）"));
+    if (rateText(u.measuredOutputTokensPerSecond) && u.turnOutputTokens > 0 && Number.isFinite(u.timedOutputTokens)) lines.push(AieyesI18n.t("部分测速：覆盖本轮 {0}% 的输出 Token；其余输出缺少完整的请求计时", exact(Math.min(100, u.timedOutputTokens / u.turnOutputTokens * 100))));
+    else if (!rateText(u.outputTokensPerSecond)) lines.push(AieyesI18n.t("此轮尚无完整的请求计时，暂不显示整轮速度"));
+    if (Number.isFinite(u.updatedAtMs)) lines.push(AieyesI18n.t("用量记录时间：{0}", new Date(u.updatedAtMs).toLocaleString(AieyesI18n.locale, AieyesI18n.clock)));
+    return lines.join('\n');
+  };
+  const usageHTML = (s) => `<small class="${s.usage ? 'session-usage' : 'session-usage-unavailable'}" title="${escape(usageHelp(s))}">${escape(usageText(s) || AieyesI18n.t("Token 暂未记录"))}</small>`;
+  const detailText = (s, now) => {const time = elapsed(s, now);return [project(s), identity(s) ? '#' + identity(s) : null, time == null ? null : AieyesI18n.t("本轮 {0}", elapsedText(time))].filter(Boolean).concat(time == null ? [updatedText(s)] : []).join(' · ');};
+  const threadLink = (s) => s.machineId === 'local' && (s.provider === 'chatgpt-work' || s.provider === 'codex' && ['codex_desktop', 'codex_work_desktop'].includes(s.client)) && typeof s.nativeSession === 'string' && /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(s.nativeSession) ? 'codex://threads/' + s.nativeSession : null;
+  const canFocus = (s) => s.machineId === 'local' && (Number.isInteger(s.pid) && s.pid > 0 || !!threadLink(s));
+  const focusHelp = (s) => threadLink(s) ? AieyesI18n.t("打开此会话") : AieyesI18n.t("切换到会话所在的终端或 IDE");
   // Only running turns tick, and only while the list is visible.
   // A one-second timer runs only while a rendered turn is still counting.
   let tickTimer = 0;
@@ -38,17 +59,19 @@
     scheduleTick();
   };
   const scheduleTick = () => {if (!tickTimer && document.querySelector('#session-list [data-turn-ticking]')) tickTimer = setTimeout(tick, 1000);};
-  const focusMessages = { window: "已切换到 {0}", application: "已激活 {0}，未定位到具体窗口", noWindow: "未找到所属窗口（可能运行在 tmux、screen 或后台服务中）", exited: "会话进程已退出", unsupported: "当前桌面不支持切换窗口", failed: "无法切换到 {0}" };
+  const focusMessages = { session: "已打开 {0} 中的会话", pane: "已定位到 {0} 的分屏", tab: "已定位到 {0} 的标签页", window: "已切换到 {0} 的窗口", application: "已激活 {0}，未定位到具体窗口", requested: "已请求切换到 {0}，尚未确认前台窗口", noWindow: "未找到所属窗口（可能运行在 tmux、screen 或后台服务中）", exited: "会话进程已退出", unsupported: "当前桌面不支持切换窗口", failed: "无法切换到 {0}" };
+  let focusing = false;
   async function focusSession(id) {
-    const s = latest?.sessions?.find((row) => row.id === id);if (!s || !Number.isInteger(s.pid)) return;
+    const s = latest?.sessions?.find((row) => row.id === id);if (!s || !canFocus(s) || focusing) return;
+    focusing = true;
     let result;
-    try {result = await window.__TAURI__.core.invoke('focus_session', { pid: s.pid, processStart: s.processStart ?? 0 });} catch (error) {result = { outcome: 'failed', name: '' };}
+    try {result = await window.__TAURI__.core.invoke('focus_session', {pid: s.pid ?? null, processStart: s.processStart ?? 0, provider: s.provider ?? '', nativeSession: s.nativeSession ?? '', client: s.client ?? '', workspace: s.workspace ?? '', machineId: s.machineId});} catch (error) {result = { outcome: 'failed', name: '' };} finally {focusing = false;}
     const message = focusMessages[result?.outcome] ?? focusMessages.failed;
-    if (typeof notify === 'function') notify(AieyesI18n.t(message, result?.name || AieyesI18n.t("会话所在应用")), ['window', 'application'].includes(result?.outcome) ? 'info' : 'error');
+    if (typeof notify === 'function') notify(AieyesI18n.t(message, result?.name || AieyesI18n.t("会话所在应用")), ['session', 'pane', 'tab', 'window', 'application', 'requested'].includes(result?.outcome) ? 'info' : 'error');
   }
   document.addEventListener('click', (event) => {const row = event.target instanceof Element ? event.target.closest('[data-focus-session]') : null;if (row) void focusSession(row.dataset.focusSession);});
   document.addEventListener('keydown', (event) => {const row = event.target instanceof Element ? event.target.closest('[data-focus-session]') : null;if (row && (event.key === 'Enter' || event.key === ' ')) {event.preventDefault();void focusSession(row.dataset.focusSession);}});
-  globalThis.AieyesSessions = { visibility() {if (latest) renderLiveSessions(latest);}, tick, elapsed, elapsedText, detailText, usageText, focusSession, phaseLabel, phaseKey, updatedText, updatedTime, active: (phase) => activePhases.includes(phase), snapshot: () => latest };
+  globalThis.AieyesSessions = { visibility() {if (latest) renderLiveSessions(latest);}, tick, elapsed, elapsedText, detailText, usageText, usageHelp, usageHTML, identity, canFocus, focusHelp, threadLink, focusSession, phaseLabel, phaseKey, updatedText, updatedTime, active: (phase) => activePhases.includes(phase), snapshot: () => latest };
   globalThis.renderLiveSessions = (info) => {
     latest = info;
     // The sessions page draws the same snapshot in full.
@@ -75,8 +98,8 @@
     const rows = active.map((s) => {
       const symbol = uiIcon(phaseKey(s.phase)),label = phaseLabel(s.phase);
       // Local sessions open the terminal or IDE that runs them; SSH sessions are information only.
-      const focus = s.machineId === 'local' && Number.isInteger(s.pid) ? ` role="button" tabindex="0" data-focus-session="${escape(s.id)}" title="${escape(AieyesI18n.t("切换到会话所在的终端或 IDE"))}"` : '';
-      return `<div class="live-row" data-phase="${escape(s.phase)}"${focus}><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(({ codex: 'Codex', claude: 'Claude Code', antigravity: 'Antigravity' }[s.provider] || s.source || 'Agent') + ' · ' + (s.machine || AieyesI18n.t("本机")))}</strong><small class="session-detail" title="${escape([s.workspace, updatedText(s)].filter(Boolean).join('\n'))}"${elapsed(s) != null && !(s.turnEndedAt > 0) ? ` data-turn-ticking="${escape(s.id)}"` : ''}>${escape(detailText(s))}</small>${s.usage ? `<small class="session-usage" title="${escape(AieyesI18n.t("输出 Token ÷ 模型请求耗时（含首字等待，不含工具执行和用户等待）"))}">${escape(usageText(s))}</small>` : ''}</div><span>${label}</span></div>`;
+      const focus = canFocus(s) ? ` role="button" tabindex="0" data-focus-session="${escape(s.id)}" title="${escape(focusHelp(s))}"` : '';
+      return `<div class="live-row" data-phase="${escape(s.phase)}"${focus}><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape((window.AieyesContract.providers[s.provider] || s.source || 'Agent') + ' · ' + (s.machine || AieyesI18n.t("本机")))}</strong><small class="session-detail" title="${escape([s.workspace, s.nativeSession, updatedText(s)].filter(Boolean).join('\n'))}"${elapsed(s) != null && !(s.turnEndedAt > 0) ? ` data-turn-ticking="${escape(s.id)}"` : ''}>${escape(detailText(s))}</small>${usageHTML(s)}</div><span>${label}</span>${canFocus(s) ? `<span class="session-jump-mark" aria-hidden="true">${uiIcon('expand')}</span>` : ''}</div>`;
     }).join('') + processSources.map((s) => {
       const provider = window.AieyesContract.providers[s.provider] ?? s.provider;
       const machine = s.machineId === 'local' ? AieyesI18n.t("本机") : state.settings?.hosts?.find((h) => h.id === s.machineId)?.name || s.machineId;

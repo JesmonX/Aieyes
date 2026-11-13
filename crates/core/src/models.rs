@@ -54,6 +54,10 @@ pub struct UsageEvent {
     pub session_id: String,
     pub model: String,
     pub timestamp: i64,
+    /// Native observation time, retained when the source has sub-second precision.
+    /// `timestamp` stays in seconds for history buckets and stable request identities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp_ms: Option<u64>,
     pub tokens: Tokens,
     pub attribution: String,
     #[serde(default)]

@@ -439,6 +439,7 @@ pub fn parse_dsh(source: &Source, state: &mut ParseState, row: &Value) -> Option
                 route["model"].as_str()?,
                 tokens,
             )?;
+            event.timestamp_ms = usage::precise_millis(&row["time"]);
             if !state.inherited_usage
                 && let (Some(turn), Some(step), Some(end)) = (
                     data["turn"].as_u64(),
@@ -628,10 +629,27 @@ pub fn parse(source: &Source, state: &mut ParseState, row: &Value) -> Option<Usa
         Some("llm.request") => {
             state.model = row["model"].as_str().unwrap_or("unknown").into();
             state.model_provider = row["provider"].as_str().unwrap_or("").into();
+            if !state.inherited_usage
+                && let (Some(agent), Some(model), Some(start)) = (
+                    row["agentId"].as_str(),
+                    row["modelAlias"].as_str().or(row["model"].as_str()),
+                    usage::precise_millis(&row["time"]),
+                )
+            {
+                let key = format!("kimi:{}:{model}", hash(agent));
+                state.request_starts.remove(&key);
+                usage::remember_request(state, key, start);
+            }
             None
         }
         Some("turn.prompt") => {
             state.turn_id = row["turnId"].to_string();
+            if let Some(agent) = row["agentId"].as_str() {
+                let prefix = format!("kimi:{}:", hash(agent));
+                state
+                    .request_starts
+                    .retain(|key, _| !key.starts_with(&prefix));
+            }
             None
         }
         Some("usage.record") => {
@@ -654,14 +672,29 @@ pub fn parse(source: &Source, state: &mut ParseState, row: &Value) -> Option<Usa
                 .as_str()
                 .filter(|m| !m.is_empty())
                 .or_else(|| (!state.model.is_empty()).then_some(state.model.as_str()))?;
-            normalized(
+            let mut event = normalized(
                 source,
                 state,
                 identity,
                 millis(&row["time"])?,
                 model,
                 tokens,
-            )
+            )?;
+            event.timestamp_ms = usage::precise_millis(&row["time"]);
+            if !state.inherited_usage
+                && let (Some(agent), Some(end)) = (row["agentId"].as_str(), event.timestamp_ms)
+                && let Some(start) = state
+                    .request_starts
+                    .remove(&format!("kimi:{}:{model}", hash(agent)))
+            {
+                event.output_timing = usage::request_timing(
+                    start,
+                    end,
+                    "kimi-request-v1",
+                    format!("{}:{agent}:{start}", state.session_id),
+                );
+            }
+            Some(event)
         }
         _ => {
             // Legacy Python CLI wire logs (KIMI_SHARE_DIR / ~/.kimi).
@@ -925,6 +958,113 @@ fn codebuddy(source: &Source, state: &mut ParseState, row: &Value) -> Option<Usa
 #[cfg(test)]
 mod request_timing_tests {
     use super::*;
+    #[test]
+    fn kimi_request_clocks_are_consumed_and_isolated_by_agent_and_model() {
+        let source = Source {
+            provider: "kimi".into(),
+            ..Default::default()
+        };
+        let mut state = ParseState {
+            session_id: "session".into(),
+            ..Default::default()
+        };
+        for (agent, at) in [
+            ("main", 1_700_000_000_000u64),
+            ("worker", 1_700_000_001_000),
+        ] {
+            usage::parse(
+                &source,
+                &mut state,
+                &json!({"type":"llm.request","agentId":agent,"model":"native-model","modelAlias":"alias","time":at}),
+            );
+        }
+        let row = |agent: &str, model: &str| json!({"type":"usage.record","agentId":agent,"model":model,"time":1_700_000_003_250u64,"usage":{"inputOther":10,"output":45,"inputCacheRead":2,"inputCacheCreation":3}});
+        let main = usage::parse(&source, &mut state, &row("main", "alias")).unwrap();
+        assert_eq!(main.output_timing.unwrap().duration_ms, 3250);
+        assert_eq!(main.timestamp_ms, Some(1_700_000_003_250));
+        assert!(
+            usage::parse(&source, &mut state, &row("main", "alias"))
+                .unwrap()
+                .output_timing
+                .is_none()
+        );
+        assert!(
+            usage::parse(&source, &mut state, &row("worker", "other-model"))
+                .unwrap()
+                .output_timing
+                .is_none()
+        );
+        assert_eq!(
+            usage::parse(&source, &mut state, &row("worker", "alias"))
+                .unwrap()
+                .output_timing
+                .unwrap()
+                .duration_ms,
+            2250
+        );
+        usage::parse(
+            &source,
+            &mut state,
+            &json!({"type":"llm.request","agentId":"main","model":"alias","time":1_700_000_004_000u64}),
+        );
+        usage::parse(
+            &source,
+            &mut state,
+            &json!({"type":"turn.prompt","agentId":"main","turnId":2}),
+        );
+        assert!(
+            usage::parse(&source, &mut state, &row("main", "alias"))
+                .unwrap()
+                .output_timing
+                .is_none()
+        );
+    }
+    #[test]
+    fn pi_and_omp_native_timestamps_measure_model_time_before_tools() {
+        for (provider, log, duration) in [
+            (
+                "pi",
+                include_str!("../tests/fixtures/native-agents/pi.jsonl"),
+                471,
+            ),
+            (
+                "omp",
+                include_str!("../tests/fixtures/native-agents/omp.jsonl"),
+                412,
+            ),
+        ] {
+            let source = Source {
+                provider: provider.into(),
+                ..Default::default()
+            };
+            let mut state = ParseState::default();
+            let mut events = vec![];
+            for line in log.lines() {
+                if let Some(event) =
+                    usage::parse(&source, &mut state, &serde_json::from_str(line).unwrap())
+                {
+                    events.push(event);
+                }
+            }
+            assert_eq!(events.len(), 1);
+            assert_eq!(
+                events[0].output_timing.as_ref().unwrap().duration_ms,
+                duration
+            );
+            assert_eq!(
+                events[0].output_timing.as_ref().unwrap().evidence,
+                format!("{provider}-request-v1")
+            );
+            assert!(!serde_json::to_string(&events).unwrap().contains("PRIVATE"));
+            let invalid = json!({"type":"message","id":"backwards","timestamp":"2026-10-18T21:26:28.000Z","message":{"role":"assistant","model":"fixture","stopReason":"stop","timestamp":1792358788554u64,"usage":{"input":1,"output":2}}});
+            assert!(
+                usage::parse(&source, &mut state, &invalid)
+                    .unwrap()
+                    .output_timing
+                    .is_none()
+            );
+        }
+    }
     #[test]
     fn harness_request_clock_matches_both_turn_and_step() {
         let source = Source {

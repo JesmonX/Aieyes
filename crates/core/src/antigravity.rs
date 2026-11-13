@@ -331,7 +331,7 @@ pub fn read_database_detailed(path: &Path) -> Result<DatabaseRead> {
                 format!("{session}:{id}"),
             );
             Ok(Some(
-                json!({"id":id,"sessionId":session,"timestamp":end,"intervalStart":start,
+                json!({"id":id,"sessionId":session,"timestamp":end,"timestampMs":stamp_ms(&f, 8)?.max(stamp_ms(&f, 7)?),"intervalStart":start,
                 "intervalEvidence":"antigravity-step-v1","requestTiming":timing,"model":model,"tokens":tokens,"inheritance":inheritance}),
             ))
         })();

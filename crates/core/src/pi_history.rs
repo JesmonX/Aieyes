@@ -83,6 +83,30 @@ pub(crate) fn parse(source: &Source, state: &mut ParseState, row: &Value) -> Opt
     );
     event.import_identity = Some(observation);
     event.turn_id = state.turn_id.clone();
+    event.timestamp_ms = usage::precise_millis(&row["timestamp"]);
+    // The assistant timestamp is created by the streaming adapter; the entry is appended
+    // on message_end, before tool execution. Summary/compaction entries have no such clock.
+    if kind == "message"
+        && matches!(
+            data["stopReason"].as_str(),
+            Some("stop" | "length" | "toolUse" | "error" | "aborted")
+        )
+        && let (Some(start), Some(end)) = (
+            usage::precise_millis(&data["timestamp"]),
+            event.timestamp_ms,
+        )
+    {
+        event.output_timing = usage::request_timing(
+            start,
+            end,
+            &format!("{}-request-v1", source.provider),
+            format!(
+                "{}:{}",
+                state.session_id,
+                row["id"].as_str().unwrap_or(&event.id)
+            ),
+        );
+    }
     event.attribution = format!("{}-local", source.provider);
     event.billing.evidence = data["provider"].as_str().unwrap_or("").into();
     Some(event)

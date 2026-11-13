@@ -74,9 +74,9 @@ const {fixture} = require('./workspace-ui-fixture.cjs');
       assert(await page.locator('header .refresh-wrap').isHidden(), 'the live page has nothing to refresh');
       const now = Date.now();
       const sessions = [
-        {id: 's1', provider: 'codex', source: 'Codex', machine: '本机', machineId: 'local', workspace: '/work/alpha', phase: 'working', updatedAt: now / 1000, turnStartedAt: now - 65000, pid: 4242, processStart: 1, usage: {sessionTokens: 1200, turnTokens: null}},
+        {id: 's1', provider: 'codex', source: 'Codex', machine: '本机', machineId: 'local', workspace: '/work/alpha', nativeSession: '01234567-89ab-4cde-8f01-23456789abcd', subagentCount: 2, phase: 'working', updatedAt: now / 1000, turnStartedAt: now - 65000, pid: 4242, processStart: 1, usage: {sessionTokens: 1200, turnTokens: 300, turnOutputTokens: 100, measuredOutputTokensPerSecond: 20, timedOutputTokens: 40, untimedRequests: 1, session: {input: 600, output: 100, cacheRead: 400, cacheWrite: 100}, turn: {input: 150, output: 100, cacheRead: 50, cacheWrite: 0}}},
         {id: 's2', provider: 'claude', machine: '测试服务器', machineId: 'host', workspace: '/work/beta', phase: 'needsInput', updatedAt: now / 1000, turnStartedAt: now - 5000},
-        {id: 's3', provider: 'codex', machine: '本机', machineId: 'local', workspace: 'C:\\work\\gamma', phase: 'complete', updatedAt: now / 1000 - 60, turnStartedAt: now - 120000, turnEndedAt: now - 60000},
+        {id: 's3', provider: 'codex', client: 'codex_desktop', nativeSession: '01234567-89ab-4cde-8f01-23456789abce', machine: '本机', machineId: 'local', workspace: 'C:\\work\\gamma', phase: 'complete', updatedAt: now / 1000 - 60, turnStartedAt: now - 120000, turnEndedAt: now - 60000},
         {id: 's4', provider: 'codex', machine: '本机', machineId: 'local', phase: 'idle', updatedAt: now / 1000},
       ];
       await status(page, sessions);
@@ -85,7 +85,14 @@ const {fixture} = require('./workspace-ui-fixture.cjs');
       assert.deepEqual(await page.locator('[data-session-list=running] .session-row').evaluateAll(rows => rows.map(row => row.dataset.phase)), ['needsInput', 'working'], 'waiting sessions lead');
       assert.deepEqual(await page.locator('[data-session-list=running] .session-info strong').allInnerTexts(), ['beta', 'alpha']);
       assert.deepEqual(await page.locator('[data-session-list=ended] .session-info strong').allInnerTexts(), ['gamma']);
-      assert.equal(await page.locator('.session-page [data-focus-session]').count(), 1, 'only local sessions with a process can be focused');
+      assert.equal(await page.locator('.session-page [data-focus-session]').count(), 2, 'local processes and native desktop thread routes can be focused');
+      assert.equal(await page.locator('.session-page [data-focus-session=s3]').getAttribute('title'), '打开此会话');
+      assert.match(await page.locator('.session-page .session-usage').innerText(), /部分 20 tok\/s/);
+      assert.match(await page.locator('.session-page .session-usage').getAttribute('title'), /40%/);
+      assert.match(await page.locator('.session-page .session-info').allInnerTexts().then(rows => rows.join('\n')), /#6789abcd/);
+      const preview = path.resolve(__dirname, '../.local/ui-previews/session-improvements');
+      fs.mkdirSync(preview, {recursive: true});
+      await page.screenshot({path: path.join(preview, `sessions-${platform}.png`), animations: 'disabled'});
       assert.match(await page.locator('[data-session-timing=s1]').innerText(), /^本轮 1m0\ds$/);
       assert.match(await page.locator('[data-session-timing=s3]').innerText(), /^本轮 1m00s · /);
       assert(!/turnTokens|null|undefined/.test(await page.locator('.session-page').innerText()), 'unknown usage parts are omitted');

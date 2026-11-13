@@ -1852,6 +1852,7 @@ mod tests {
                     account_id: source.account_id.clone(),
                     provider: "codex".into(),
                     timestamp: q.updated_at + 5,
+                    timestamp_ms: None,
                     model: "model".into(),
                     tokens: Tokens {
                         input: tokens,

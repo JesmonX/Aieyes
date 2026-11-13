@@ -22,10 +22,11 @@ struct LiveSession: Identifiable, Decodable, Equatable {
     var usage: SessionUsage? = nil
     /// Local agent process; absent for SSH sessions, which never focus a local window.
     var pid: Int32? = nil, processStart: Double? = nil
+    var nativeSession: String? = nil, client: String? = nil, subagentCount: Int? = nil
     init(id: String, source: String, phase: SessionPhase, updatedAt: Date) {
         self.id = id; self.source = source; self.phase = phase; self.updatedAt = updatedAt
     }
-    enum CodingKeys: String, CodingKey { case id, source, phase, updatedAt, provider, machine, machineId, sourceId, turnId, workspace, turnStartedAt, turnEndedAt, usage, pid, processStart }
+    enum CodingKeys: String, CodingKey { case id, source, phase, updatedAt, provider, machine, machineId, sourceId, turnId, workspace, turnStartedAt, turnEndedAt, usage, pid, processStart, nativeSession, client, subagentCount }
     init(from decoder: Decoder) throws {
         let row = try decoder.container(keyedBy: CodingKeys.self)
         id = try row.decode(String.self, forKey: .id)
@@ -44,14 +45,43 @@ struct LiveSession: Identifiable, Decodable, Equatable {
         usage = try? row.decodeIfPresent(SessionUsage.self, forKey: .usage)
         pid = machineId == "local" ? try row.decodeIfPresent(Int32.self, forKey: .pid) : nil
         processStart = try row.decodeIfPresent(Double.self, forKey: .processStart)
+        nativeSession = try row.decodeIfPresent(String.self, forKey: .nativeSession)
+        client = try row.decodeIfPresent(String.self, forKey: .client)
+        subagentCount = try row.decodeIfPresent(Int.self, forKey: .subagentCount)
     }
-    var focusable: Bool { machineId == "local" && pid != nil }
+    var focusable: Bool { machineId == "local" && ((pid ?? 0) > 0 || threadURL != nil) }
+    var threadURL: URL? {
+        guard machineId == "local", let nativeSession, UUID(uuidString: nativeSession) != nil,
+              provider == "chatgpt-work" || provider == "codex" && ["codex_desktop", "codex_work_desktop"].contains(client ?? "") else { return nil }
+        return URL(string: "codex://threads/" + nativeSession)
+    }
+    var shortIdentity: String? { nativeSession.flatMap { $0.isEmpty ? nil : String($0.suffix(8)) } }
+    var focusHelp: String { threadURL != nil ? L("打开此会话") : L("切换到会话所在的终端或 IDE") }
     /// "Session 1.2M · Turn 8.4K · 42 tok/s"; unknown parts are omitted, never shown as zero.
     var usageText: String? {
         guard let usage else { return nil }
         let parts = [L("会话 {0}", Format.compact(usage.sessionTokens)), usage.turnTokens.map { L("本轮 {0} Token", Format.compact($0)) },
-                     usage.outputTokensPerSecond.flatMap { $0 > 0 && $0.isFinite ? ($0 < 1 ? "<1 tok/s" : String(format: "%.0f tok/s", $0)) : nil }].compactMap { $0 }
+                     usage.outputTokensPerSecond.flatMap(SessionUsage.rateText)
+                        ?? usage.measuredOutputTokensPerSecond.flatMap(SessionUsage.rateText).map { L("部分 {0}", $0) }].compactMap { $0 }
         return parts.joined(separator: " · ")
+    }
+    var usageHelp: String {
+        guard let usage else { return L("尚未读取到此会话的 Token 记录；不同 Agent 的记录能力和写入时间可能不同") }
+        var lines = [L("会话累计 {0} Token", SessionUsage.exact(usage.sessionTokens))]
+        if let components = usage.session { lines.append(components.text) }
+        if let total = usage.turnTokens {
+            lines.append(L("本轮累计 {0} Token", SessionUsage.exact(total)))
+            if let components = usage.turn { lines.append(components.text) }
+        }
+        if let count = subagentCount, count > 0 { lines.append(L("含 {0} 个子 Agent；本轮包含子 Agent 在此轮期间的用量", count)) }
+        lines.append(L("输出 Token ÷ 模型请求耗时（含首字等待，不含工具执行和用户等待）"))
+        if usage.measuredOutputTokensPerSecond != nil, let timed = usage.timedOutputTokens, let total = usage.turnOutputTokens, total > 0 {
+            lines.append(L("部分测速：覆盖本轮 {0}% 的输出 Token；其余输出缺少完整的请求计时", SessionUsage.exact(min(100, timed / total * 100))))
+        } else if usage.outputTokensPerSecond == nil {
+            lines.append(L("此轮尚无完整的请求计时，暂不显示整轮速度"))
+        }
+        if let at = usage.updatedAtMs { lines.append(L("用量记录时间：{0}", Format.date(at / 1000))) }
+        return lines.joined(separator: "\n")
     }
     /// Last path component of the working directory, shown as the project name.
     var project: String? { workspace.map { URL(fileURLWithPath: $0).lastPathComponent }.flatMap { $0.isEmpty || $0 == "/" ? nil : $0 } }
@@ -72,39 +102,20 @@ struct LiveSession: Identifiable, Decodable, Equatable {
 struct SessionUsage: Decodable, Equatable {
     var sessionTokens: Double = 0
     var turnTokens: Double?, turnOutputTokens: Double?, outputTokensPerSecond: Double?
+    var measuredOutputTokensPerSecond: Double?, timedOutputTokens: Double?, timedRequests: Int?, untimedRequests: Int?
+    var session: SessionTokenBreakdown?, turn: SessionTokenBreakdown?, updatedAtMs: Double?
+    static func rateText(_ value: Double) -> String? { value > 0 && value.isFinite ? (value < 1 ? "<1 tok/s" : String(format: "%.0f tok/s", value)) : nil }
+    static func exact(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(0)).locale(AieyesLocale.locale)) }
 }
-/// Bring the terminal or IDE that runs a local session to the front, with existing permissions only.
-@MainActor enum SessionFocus {
-    static let engine = EngineClient(configurationOnly: true)
-    struct Target: Decodable { var status: String; var ancestors: [Ancestor]? }
-    struct Ancestor: Decodable { var pid: Int32 }
-    enum Outcome: Equatable { case window(String), application(String), noWindow, exited, failed(String) }
-    /// The nearest ancestor that is a regular (Dock) application owns the session's window.
-    static func application(for ancestors: [Int32], lookup: (Int32) -> NSRunningApplication? = { NSRunningApplication(processIdentifier: $0) }) -> NSRunningApplication? {
-        ancestors.lazy.compactMap(lookup).first { $0.activationPolicy == .regular && !$0.isTerminated }
-    }
-    /// On-screen normal windows of the app; one window means activation reaches exactly that window.
-    static func windowCount(_ pid: Int32) -> Int {
-        let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        return rows.filter { ($0[kCGWindowOwnerPID as String] as? Int32) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 }.count
-    }
-    static func focus(_ session: LiveSession, engine: EngineClient) async -> Outcome {
-        guard let pid = session.pid else { return .noWindow }
-        guard let target: Target = try? await engine.call("sessions.focusTarget", params: ["pid": Int(pid), "processStart": session.processStart ?? 0]) else { return .failed("") }
-        guard target.status == "found" else { return .exited }
-        guard let app = application(for: (target.ancestors ?? []).map(\.pid)) else { return .noWindow }
-        let name = app.localizedName ?? Format.provider(session.provider)
-        guard app.activate() else { return .failed(name) }
-        return windowCount(app.processIdentifier) == 1 ? .window(name) : .application(name)
-    }
-    static func message(_ outcome: Outcome) -> String {
-        switch outcome {
-        case .window(let name): return L("已切换到 {0}", name)
-        case .application(let name): return L("已激活 {0}，未定位到具体窗口", name)
-        case .noWindow: return L("未找到所属窗口（可能运行在 tmux、screen 或后台服务中）")
-        case .exited: return L("会话进程已退出")
-        case .failed(let name): return name.isEmpty ? L("无法读取会话进程") : L("无法切换到 {0}", name)
-        }
+struct SessionTokenBreakdown: Decodable, Equatable {
+    var input: Double, output: Double, cacheRead: Double, cacheWrite: Double
+    var text: String { L("输入 {0} · 输出 {1} · 缓存读取 {2} · 缓存写入 {3}", SessionUsage.exact(input), SessionUsage.exact(output), SessionUsage.exact(cacheRead), SessionUsage.exact(cacheWrite)) }
+}
+struct SessionUsageLine: View {
+    var session: LiveSession
+    var body: some View {
+        Text(session.usageText ?? L("Token 暂未记录")).font(AppFont.secondary).foregroundStyle(.secondary)
+            .monospacedDigit().lineLimit(2).fixedSize(horizontal: false, vertical: true).help(session.usageHelp)
     }
 }
 struct SessionSnapshot: Decodable { var sessions: [LiveSession]; var unavailable: Bool; var pet: PetState? = nil; var summary: String? = nil; var phase: String? = nil; var sources: [SessionSourceHealth]? = nil }

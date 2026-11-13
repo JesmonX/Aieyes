@@ -20,6 +20,19 @@ import Combine
         precondition(slow.usageText?.hasSuffix("<1 tok/s") == true)
         slow.usage?.outputTokensPerSecond = 0
         precondition(slow.usageText?.contains("tok/s") == false)
+        slow.usage?.measuredOutputTokensPerSecond = 12.4
+        slow.usage?.timedOutputTokens = 40; slow.usage?.turnOutputTokens = 100; slow.usage?.untimedRequests = 1
+        slow.subagentCount = 2
+        precondition(slow.usageText?.hasSuffix("部分 12 tok/s") == true)
+        precondition(slow.usageHelp.contains("40%") && slow.usageHelp.contains("2 个子 Agent"))
+        var desktop = LiveSession(id: "desktop", source: "Work", phase: .complete, updatedAt: Date())
+        desktop.provider = "chatgpt-work"; desktop.nativeSession = "01234567-89ab-4cde-8f01-23456789abcd"
+        precondition(desktop.focusable && desktop.threadURL?.absoluteString == "codex://threads/01234567-89ab-4cde-8f01-23456789abcd")
+        precondition(desktop.shortIdentity == "6789abcd")
+        desktop.machineId = "remote"; desktop.pid = 123
+        precondition(!desktop.focusable && desktop.threadURL == nil)
+        desktop.machineId = "local"; desktop.nativeSession! += "?prompt=bad"; desktop.pid = 0
+        precondition(!desktop.focusable && desktop.threadURL == nil)
 
         var played: [String] = []
         var choices: [(String, Float)] = []

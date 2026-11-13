@@ -91,7 +91,7 @@ Linux 先在隔离桌面会话中设置 `AIEYES_DATA_DIR=<绝对临时目录>`�
 
 ## 2026-11-09 会话跳转：真实桌面验收
 
-点击本机会话会切换到运行它的终端或 IDE，这一步只能在真实桌面上确认。先取 Agent 进程的祖先链，再交给验证器激活（会改变前台应用）：
+以下为当时的应用级验收记录；当前验证器入口及粒度见后面的 11-13 记录。点击本机会话会切换到运行它的终端或 IDE，这一步只能在真实桌面上确认。当时先取 Agent 进程的祖先链，再交给验证器激活（会改变前台应用）：
 
 ```sh
 target/debug/aieyes-core --data-dir "$(mktemp -d)" --call sessions.focusTarget '{"pid":<Agent pid>}'
@@ -110,3 +110,33 @@ macOS 规则：沿祖先链取第一个普通（有 Dock 图标）应用并激�
 | Terminal、iTerm2、VS Code、同应用多窗口 | 本机未安装或未运行，**未验收** |
 | Windows（`EnumWindows` + `SetForegroundWindow`，以实际前台窗口判断成功） | 仅交叉类型检查，**未在 Windows 实机验收** |
 | Linux X11（`wmctrl -lp` / `wmctrl -ia`）与 Wayland（报告不支持） | **未在 Linux 实机验收** |
+
+## 2026-11-13 会话用量与精确跳转
+
+当前 `verify-session-focus` 默认只检查 TTY 输入、完整工作目录匹配，并对已安装终端的原生字典编译实际脚本。`--pid` 通过真实核心 RPC 与 `SessionFocus.focus` 完整路径验收，始终使用 `requestAutomation: false`，不会请求新权限。`--restore` 在检查后恢复原前台应用；被选中的终端面板保持该选择。`--inventory` 只读取已有权限和窗口数量。
+
+```sh
+cargo build --workspace --locked
+PROJECT_DIR="$PWD" sh -c '. scripts/native-verifiers.sh; build_native_app; build_native_verifier sessions; build_native_verifier session-focus'
+AIEYES_CORE_PATH="$PWD/target/debug/aieyes-core" .build/verify-sessions
+.build/verify-session-focus --inventory
+# 传入实际 Agent PID 与控制 TTY；测试会短暂切换前台应用。
+.build/verify-session-focus --pid <Agent-PID> --tty /dev/ttysNNN --expect pane --restore
+# 手工验证桌面客户端中已存在的会话，须同时观察是否导航到该会话。
+.build/verify-session-focus --thread <native-UUID> --expect session --restore
+```
+
+| 检查 | 证据与边界 |
+|---|---|
+| Rust 全量回归 | `cargo test --workspace --locked -- --test-threads=4`：839 项通过、4 个子进程 fixture 忽略；默认高并发下发生的进程清理/配额时序失败，在低并发全量重跑通过。随后时间戳与焦点复核的 17 项定向测试、全目标 Clippy 均通过 |
+| Token 归属 | 覆盖不同来源的父/子 Agent、重复事件、无关同名会话、毫秒边界、完成后末次计数、同一请求耗时去重，以及部分速度的输出 Token 覆盖率 |
+| Pi / Oh My Pi / Kimi | 原生 Pi/OMP fixture 的请求计时分别为 471 ms / 412 ms；Kimi 验证 Agent 与模型隔离、消费一次、新轮失效；SSH 投影与隐私测试通过。尚未对各 Agent 的真实长会话持续测速 |
+| Ghostty 1.4.0 | 本机已存在自动化权限；核心从真实 Agent PID 得到 `/dev/ttys008` 和 Ghostty GUI 祖先，生产跳转返回 `pane`，原生脚本核对当前终端 ID，验证器确认应用置前。跨 Space/最小化窗口计数为 14，不靠“只有一个可见窗口”推断精准定位 |
+| Terminal / iTerm2 | Terminal 已安装字典的真实脚本编译通过；iTerm2 本机未安装，仅按官方脚本文档实现。两者均未做实际标签页/分屏导航验收 |
+| ChatGPT Work / Codex 桌面 thread 路由 | 已核对本机 ChatGPT 26.1103.60933 的 URL scheme 和原生 `codex://threads/<uuid>` 路由；UUID、桌面来源、无 PID、远程禁用的核心/界面测试通过。计算机使用工具禁止访问 ChatGPT 窗口，因此本次未自动验收实际会话导航 |
+| IDE 完整路径窗口匹配 | 路径边界、URL 编码、父目录规整和同名其他目录的测试通过；仅使用既有辅助功能权限，并确认实际聚焦窗口。未逐个在 VS Code/Qoder/Cursor 实机验收 |
+| Windows / Linux | 生产 `session_focus.rs` 的平台代码对 Windows GNU / Linux GNU 目标完成类型检查；该隔离检查只替代核心/Tauri 传输，原生 Windows API 保留真实依赖。未在 Windows、X11 或 Wayland 真实桌面操作 |
+| 界面 | 紧凑会话条及完整会话页测试覆盖 ID 区分、部分速度、分项悬停、无 PID 的桌面链接、远程/无效 ID 禁用。完整会话页预览生成于 `.local/ui-previews/session-improvements/` |
+| 原生流程与构建 | `verify-sessions` 的真实核心生命周期、子 Agent 聚合、独立轮询/暂停恢复通过；Tauri（本机 `native-tray`）类型检查、macOS 构建及本地调试包签名校验通过。包内保留自动化 entitlement 与中英文权限说明；产物为 `dist/Aieyes.app` |
+
+本次没有新增 tmux/screen 内部面板寻址、IDE 聊天面板寻址，或远程机器的本地窗口跳转。权限拒绝、窗口不明确与仅发出请求分别显示对应的回退结果。

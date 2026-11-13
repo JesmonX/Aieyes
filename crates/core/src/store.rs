@@ -1016,10 +1016,23 @@ impl Store {
         });
         if let Some((old, _)) = &old {
             let prior: UsageEvent = serde_json::from_str(old)?;
+            let incoming_output = next.tokens.output;
+            let prior_output = prior.tokens.output;
+            let prior_timing = prior.output_timing.clone();
             // A second copy/older parser without originator cannot erase the
             // display identity. An explicit Codex originator can replace Work.
             if next.agent.is_empty() {
                 next.agent.clone_from(&prior.agent);
+            }
+            if next.timestamp == prior.timestamp {
+                next.timestamp_ms = next.timestamp_ms.or(prior.timestamp_ms);
+            } else if next.timestamp > prior.timestamp {
+                next.timestamp_ms = prior.timestamp_ms;
+            }
+            // Copies projected by an older collector must not erase a verified request clock.
+            // Keep it only for the same complete output measurement.
+            if next.output_timing.is_none() && next.tokens.output == prior.tokens.output {
+                next.output_timing = prior.output_timing.clone();
             }
             match (&mut next.native_credits, prior.native_credits) {
                 (Some(next), Some(prior)) => {
@@ -1090,12 +1103,20 @@ impl Store {
                 next.tokens.cache_write = next.tokens.cache_write.max(prior.tokens.cache_write);
                 next.tokens.reasoning = next.tokens.reasoning.max(prior.tokens.reasoning);
             }
+            if next.tokens.output != incoming_output {
+                next.output_timing = (next.tokens.output == prior_output)
+                    .then_some(prior_timing)
+                    .flatten();
+            }
             next.raw_tokens = next.raw_tokens.take().or(prior.raw_tokens.clone());
             next.inheritance = next.inheritance.take().or(prior.inheritance);
         }
         // A proved counter correction is authoritative even when an older parser
         // or a second copy later supplies the original, larger cumulative value.
         if let Some(corrected) = self.corrected_usage(&next.id)? {
+            if next.tokens.output != corrected.tokens.output {
+                next.output_timing = None;
+            }
             next.tokens = corrected.tokens;
             next.attribution = corrected.attribution;
             next.interval_start = corrected.interval_start;

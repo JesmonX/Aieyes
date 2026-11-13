@@ -289,7 +289,10 @@ struct NeutralCard: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: Palette.radiusCard)
         content.background {
             if plain { shape.fill(Color(nsColor: .controlBackgroundColor)) }
-            else if translucentPanel { shape.fill(scheme == .light ? Color.white.opacity(0.94) : Color(nsColor: .controlBackgroundColor).opacity(DesignTokens.panelCardOpacity)) }
+            else if translucentPanel {
+                // A neutral gray wash lets the popover material and surrounding colors show through.
+                shape.fill((scheme == .light ? Color(white: 0.9) : Color(nsColor: .controlBackgroundColor)).opacity(DesignTokens.panelCardOpacity))
+            }
             // The detail page already sits on a material; a second blur under each card only muddies it.
             // The card is lifted by its own shadow, so text inside casts none.
             else { shape.fill(Palette.detailCard).modifier(CardElevation(dark: scheme == .dark)) }
@@ -457,7 +460,7 @@ struct RootView: View, Equatable {
         let value = usageDashboard.summary.costAvailable ? Format.money(usageDashboard.summary.cost) : "—"
         return Text(value).numericTransition(value: value)
     }
-    private var analysisAction: some View { HStack { Button(L("查看分析"),systemImage:"arrow.up.right") { model.openAnalysis(from:scope) }.font(AppFont.caption).tint(.primary); PricingWarning { model.openPricing() }.opacity(usageDashboard.summary.pricedTokens < usageDashboard.summary.total ? 1 : 0).allowsHitTesting(usageDashboard.summary.pricedTokens < usageDashboard.summary.total).disabled(usageDashboard.summary.pricedTokens >= usageDashboard.summary.total).accessibilityHidden(usageDashboard.summary.pricedTokens >= usageDashboard.summary.total) }.fixedSize() }
+    private var analysisAction: some View { HStack { Button(L("查看分析"),systemImage:"arrow.up.right") { model.openAnalysis(from:scope) }.font(AppFont.caption).tint(.primary).fixedSize(); PricingWarning { model.openPricing() }.opacity(usageDashboard.summary.pricedTokens < usageDashboard.summary.total ? 1 : 0).allowsHitTesting(usageDashboard.summary.pricedTokens < usageDashboard.summary.total).disabled(usageDashboard.summary.pricedTokens >= usageDashboard.summary.total).accessibilityHidden(usageDashboard.summary.pricedTokens >= usageDashboard.summary.total) }.fixedSize() }
     @ViewBuilder private var agentButtons: some View {
         agentButton("all", title: L("总览"))
         ForEach(model.overviewAgentProviders, id: \.self) { provider in agentButton(provider, title: Format.provider(provider)) }
@@ -647,16 +650,28 @@ struct RootView: View, Equatable {
             }
         }
     }
+    private var quotaHeading: some View {
+        HStack(spacing: 8) {
+            Text(L("账户额度")).font(compact ? AppFont.section : AppFont.title)
+            RefreshIndicator(model: model, key: "quotas")
+            if ringStyle != nil { QuotaRingLegend().padding(.leading, 4) }
+        }.fixedSize()
+    }
+    private var quotaActions: some View {
+        HStack(spacing: 8) {
+            QuotaStylePicker(selection: $quotaStyle)
+            Button { model.openSettings(.init(category: "general", section: "panel")) } label: { Image(systemName: "arrow.up.arrow.down") }.help(L("调整账户顺序")).accessibilityLabel(L("调整账户顺序"))
+            QuotaRefreshButton(model: model)
+        }.fixedSize()
+    }
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(L("账户额度")).font(compact ? AppFont.section : AppFont.title)
-                RefreshIndicator(model: model, key: "quotas")
-                if ringStyle != nil { QuotaRingLegend().padding(.leading, 4) }
-                Spacer()
-                QuotaStylePicker(selection: $quotaStyle)
-                Button { model.openSettings(.init(category: "general", section: "panel")) } label: { Image(systemName: "arrow.up.arrow.down") }.help(L("调整账户顺序")).accessibilityLabel(L("调整账户顺序"))
-                QuotaRefreshButton(model: model)
+            ViewThatFits(in: .horizontal) {
+                HStack { quotaHeading; Spacer(minLength: 8); quotaActions }
+                VStack(alignment: .leading, spacing: 6) {
+                    quotaHeading
+                    HStack { Spacer(minLength: 0); quotaActions }
+                }
             }
             if let ringStyle {
                 QuotaRingSection(model: model, style: ringStyle, compact: compact, accounts: quotaProviders.flatMap(quotaAccounts), quotas: displayedQuotas)
@@ -1291,7 +1306,7 @@ private struct QuotaRefreshButton: View {
                 case .idle: Text(L("刷新额度")).transition(.opacity)
                 }
             }.motion(.fast, value: phase)
-        }.font(AppFont.caption).disabled(model.quotaBusy)
+        }.font(AppFont.caption).fixedSize().disabled(model.quotaBusy)
             .onChange(of: model.refreshStates["quotas"]?.succeededAt) { _, time in
                 guard let time else { return }
                 confirmed = time
@@ -1473,7 +1488,6 @@ struct AccountObservedQuota: View {
             creditHistory: model.dashboard.presentationEstimates(account: quota.id, credits: true),
             onAnalysis: { model.openAnalysis(from: compact ? "panel" : "overview", account: quota.id, provider: quota.provider) },
             onRetry: { Task { await model.refreshQuotas(accountID: quota.accountId) } },
-            onDetail: compact ? { model.showAccount(quota.id) } : nil,
             actionOwner: ObjectIdentifier(model)).equatable()
     }
 }
@@ -1493,8 +1507,6 @@ struct QuotaCard: View, Equatable {
     var creditHistory: [QuotaEstimate] = []
     var onAnalysis: (() -> Void)?
     var onRetry: (() -> Void)?
-    /// Panel cards: open this account's card in the main window.
-    var onDetail: (() -> Void)?
     private var actionOwner: ObjectIdentifier?
     static func == (lhs: Self, rhs: Self) -> Bool {
         // Opt in only where actions capture the same retained model and quota.
@@ -1506,7 +1518,6 @@ struct QuotaCard: View, Equatable {
             && lhs.deviceCounts == rhs.deviceCounts && (lhs.onSwitch == nil) == (rhs.onSwitch == nil)
             && (lhs.onEstimate == nil) == (rhs.onEstimate == nil) && (lhs.onCredits == nil) == (rhs.onCredits == nil)
             && (lhs.onAnalysis == nil) == (rhs.onAnalysis == nil) && (lhs.onRetry == nil) == (rhs.onRetry == nil)
-            && (lhs.onDetail == nil) == (rhs.onDetail == nil)
     }
     private var bestCredit: QuotaEstimate? { EstimatePresentation.credit(creditHistory) ?? EstimatePresentation.canonical([creditEstimate].compactMap { $0 }).first }
     private var defaultExpanded: Bool
@@ -1515,9 +1526,9 @@ struct QuotaCard: View, Equatable {
     @Environment(\.collapsedQuotaHeight) private var collapsedHeight
     private var measuring: QuotaCard { var copy = self; copy.isMeasurement = true; return copy }
     private var expanded: Bool { !isMeasurement && (!collapsible || (storedExpanded ?? defaultExpanded)) }
-    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, defaultExpanded: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, deviceCounts: AccountDeviceCounts? = nil, onSwitch: (() -> Void)? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = [], onAnalysis: (() -> Void)? = nil, onRetry: (() -> Void)? = nil, onDetail: (() -> Void)? = nil, actionOwner: ObjectIdentifier? = nil) {
+    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, defaultExpanded: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, deviceCounts: AccountDeviceCounts? = nil, onSwitch: (() -> Void)? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = [], onAnalysis: (() -> Void)? = nil, onRetry: (() -> Void)? = nil, actionOwner: ObjectIdentifier? = nil) {
         self.actionOwner = actionOwner
-        self.defaultExpanded = defaultExpanded; self.onAnalysis = onAnalysis; self.onRetry = onRetry; self.onDetail = onDetail
+        self.defaultExpanded = defaultExpanded; self.onAnalysis = onAnalysis; self.onRetry = onRetry
         self.deviceCounts = deviceCounts; self.onSwitch = onSwitch
         self.quotaHistory = quotaHistory; self.creditHistory = creditHistory
         self.collapsible = collapsible; self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits; self.creditEstimate = creditEstimate
@@ -1686,8 +1697,7 @@ struct QuotaCard: View, Equatable {
         if let age = quota.snapshotAge { SurfaceTimeline(interval: 60) { context in Text(staleLabel(age, now: context.date)).font(AppFont.caption).foregroundStyle(quota.isStale ? Palette.warn : .secondary).help(Format.date(age)) } }
     }
     @ViewBuilder private var analysisButton: some View {
-        if let onDetail { Button(L("主窗口"), systemImage: "macwindow", action: onDetail).font(AppFont.caption).tint(.primary).help(L("在主窗口中查看")) }
-        if let onAnalysis { Button(L("查看分析"), systemImage: "arrow.up.right", action: onAnalysis).font(AppFont.caption).tint(.primary) }
+        if let onAnalysis { Button(L("查看分析"), systemImage: "arrow.up.right", action: onAnalysis).font(AppFont.caption).tint(.primary).fixedSize() }
     }
     private var fullCard: some View {
         Surface(spacing: compact ? 9 : 14, padding: compact ? 12 : 16, tint: Palette.category(quota.provider), minimumHeight: !isMeasurement && collapsible && !expanded ? collapsedHeight : nil) {
@@ -2246,10 +2256,10 @@ struct SessionDetailLine: View {
     var session: LiveSession, now: Date
     var body: some View {
         let updated = L("最后更新 ") + session.updatedAt.formatted(Date.FormatStyle(date: .omitted, time: .shortened).locale(AieyesLocale.locale))
-        let parts = [session.project, session.turnElapsed(at: now).map { L("本轮 {0}", LiveSession.elapsedText($0)) }].compactMap { $0 }
+        let parts = [session.project, session.shortIdentity.map { "#" + $0 }, session.turnElapsed(at: now).map { L("本轮 {0}", LiveSession.elapsedText($0)) }].compactMap { $0 }
         Text(parts.isEmpty || session.turnElapsed(at: now) == nil ? (parts + [updated]).joined(separator: " · ") : parts.joined(separator: " · "))
             .font(AppFont.secondary).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).truncationMode(.middle)
-            .help([session.workspace, updated].compactMap { $0 }.joined(separator: "\n"))
+            .help([session.workspace, session.nativeSession, updated].compactMap { $0 }.joined(separator: "\n"))
     }
 }
 private struct SessionStrip: View {
@@ -2272,20 +2282,25 @@ private struct SessionStrip: View {
                 SurfaceTimeline(interval: session.turnEndedAt == nil && session.phase.active ? 1 : 60) { context in
                     SessionDetailLine(session: session, now: context.date)
                 }
-                if let usage = session.usageText { Text(usage).font(AppFont.secondary).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).help(L("输出 Token ÷ 模型请求耗时（含首字等待，不含工具执行和用户等待）")) }
+                SessionUsageLine(session: session)
             }
             Spacer()
             Text(session.phase.label).foregroundStyle(session.phase.color)
+            if session.focusable { Image(systemName: "arrow.up.forward.app").font(AppFont.caption).foregroundStyle(.secondary) }
         }
         .contentShape(Rectangle())
     }
     @State private var focusMessage: String?
     @State private var focusGeneration = 0
+    @State private var focusingID: String?
     private func focus(_ session: LiveSession) {
+        guard focusingID == nil else { return }
+        focusingID = session.id
         focusGeneration += 1
         let generation = focusGeneration
         Task { @MainActor in
             let outcome = await SessionFocus.focus(session, engine: SessionFocus.engine)
+            focusingID = nil
             guard generation == focusGeneration else { return }
             withMotion(.expand) { focusMessage = SessionFocus.message(outcome) }
             try? await Task.sleep(for: .seconds(5))
@@ -2314,7 +2329,7 @@ private struct SessionStrip: View {
                     // SSH sessions are information only: no local window owns them.
                     if session.focusable {
                         Button { focus(session) } label: { sessionRow(session) }.buttonStyle(.plain)
-                            .help(L("切换到会话所在的终端或 IDE")).accessibilityHint(L("切换到会话所在的终端或 IDE"))
+                            .help(session.focusHelp).accessibilityHint(session.focusHelp).disabled(focusingID == session.id)
                     } else { sessionRow(session) }
                 }
                 if let focusMessage { Text(focusMessage).font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).transition(.opacity) }

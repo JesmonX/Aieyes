@@ -2,40 +2,40 @@ use crate::contracts::{FIVE_HOUR_MINUTES, WEEK_MINUTES};
 use crate::models::*;
 use serde_json::Value;
 
-pub const PARSER_VERSION: u32 = 6;
+pub const PARSER_VERSION: u32 = 7;
 pub fn parser_version(provider: &str) -> u32 {
     if provider == "codex" {
-        return 11;
+        return 12;
     }
     if provider == "codebuddy" {
-        return 11;
+        return 12;
     }
     if provider == "kimi" {
-        return 9;
-    }
-    if crate::opencode::family(provider) {
-        return 8;
-    }
-    if crate::qoder_family::is_qoder(provider) {
-        return 11;
-    }
-    if provider == "deepseek-harness" {
         return 10;
     }
+    if crate::opencode::family(provider) {
+        return 9;
+    }
+    if crate::qoder_family::is_qoder(provider) {
+        return 12;
+    }
+    if provider == "deepseek-harness" {
+        return 11;
+    }
     if matches!(provider, "pi" | "omp") {
-        return 8;
+        return 9;
     }
     if provider == "claude" {
-        return 8;
+        return 9;
     }
     if provider == "antigravity" {
-        return 7;
+        return 8;
     }
     if provider == "workbuddy" {
-        return 7;
+        return 8;
     }
     if provider == "grok" {
-        8
+        9
     } else {
         PARSER_VERSION
     }
@@ -88,6 +88,7 @@ fn event(
         provider: crate::providers::canonical(&source.provider).into(),
         session_id: state.session_id.clone(),
         timestamp: stamp,
+        timestamp_ms: None,
         model,
         tokens,
         attribution: attribution.into(),
@@ -118,7 +119,7 @@ pub fn event_id(provider: &str, source_id: &str, account_id: &str, identity: &st
 pub fn parse(source: &Source, state: &mut ParseState, v: &Value) -> Option<UsageEvent> {
     state.parser_version = parser_version(&source.provider);
     state.counter_correction = None;
-    match source.provider.as_str() {
+    let mut parsed = match source.provider.as_str() {
         "codex" => parse_codex(source, state, v),
         "qoder" | "qoder-cn" | "pi" | "omp" if v["tokens"].is_object() => {
             parse_normalized(source, state, v)
@@ -130,7 +131,33 @@ pub fn parse(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usage
             crate::native_agents::parse_dsh(source, state, v)
         }
         _ => parse_normalized(source, state, v),
+    }?;
+    parsed.timestamp_ms = precise_millis(&v["timestamp"])
+        .or_else(|| precise_millis(&v["time"]))
+        .filter(|ms| i64::try_from(ms / 1000).ok() == Some(parsed.timestamp))
+        .or(parsed.timestamp_ms);
+    Some(parsed)
+}
+
+/// Do not turn a seconds-only counter into a supposedly precise timestamp.
+pub(crate) fn precise_millis(value: &Value) -> Option<u64> {
+    if let Some(n) = value.as_u64() {
+        return (n > 10_000_000_000).then_some(n);
     }
+    if let Some(n) = value.as_f64() {
+        if !n.is_finite() || n <= 0.0 {
+            return None;
+        }
+        let ms = if n > 10_000_000_000.0 {
+            n
+        } else if n.fract() != 0.0 {
+            n * 1000.0
+        } else {
+            return None;
+        };
+        return (ms < u64::MAX as f64).then_some(ms.round() as u64);
+    }
+    millis(value)
 }
 
 pub(crate) fn millis(value: &Value) -> Option<u64> {
@@ -349,6 +376,10 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
                 codex_tokens(&payload["info"]["last_token_usage"]).as_ref() == Some(&parsed.tokens);
             if request_complete {
                 parsed.billing.evidence = "codex-request-v4".into();
+            } else {
+                // A catch-up counter can include older turns. Keep the session total, but
+                // do not label the entire delta as usage of the turn that happened to log it.
+                parsed.turn_id.clear();
             }
             // Request/response bounds include first-token wait. Catch-up deltas and clocks
             // without an explicit current-turn/tool-result start remain unknown.
@@ -542,6 +573,11 @@ pub(crate) fn parse_normalized(
         format!("{}:{id}", state.session_id),
         "import",
     );
+    parsed.timestamp_ms = precise_millis(&v["timestamp"]).or_else(|| {
+        v["timestampMs"]
+            .as_u64()
+            .filter(|ms| i64::try_from(ms / 1000).ok() == Some(stamp))
+    });
     // This marker belongs only to a Cline legacy task's canonical cumulative
     // row. Version 3 removes an ambiguous child aggregate when independent,
     // explicitly related child records appear after an earlier import.
@@ -682,6 +718,43 @@ mod tests {
         chrono::DateTime::from_timestamp_millis(1_700_000_000_000 + ms)
             .unwrap()
             .to_rfc3339()
+    }
+    #[test]
+    fn precise_timestamps_keep_units_and_cannot_replace_a_different_event_time() {
+        assert_eq!(precise_millis(&json!(1_700_000_000)), None);
+        assert_eq!(precise_millis(&json!(1_700_000_000.0)), None);
+        assert_eq!(
+            precise_millis(&json!(1_700_000_000.125)),
+            Some(1_700_000_000_125)
+        );
+        assert_eq!(
+            precise_millis(&json!(1_700_000_000_125.0)),
+            Some(1_700_000_000_125)
+        );
+        assert_eq!(
+            precise_millis(&json!(1_700_000_000_125.25)),
+            Some(1_700_000_000_125)
+        );
+        assert_eq!(precise_millis(&json!(-1)), None);
+        assert_eq!(precise_millis(&json!(1e30)), None);
+        let agent = Source {
+            provider: "antigravity".into(),
+            ..source()
+        };
+        let mut row = json!({"id":"request","sessionId":"s","timestamp":1700000002,"timestampMs":1700000002125u64,"time":1700000099125u64,"model":"test","tokens":{"input":10,"output":40}});
+        assert_eq!(
+            parse(&agent, &mut ParseState::default(), &row)
+                .unwrap()
+                .timestamp_ms,
+            Some(1_700_000_002_125)
+        );
+        row["timestampMs"] = json!(1_700_000_003_000u64);
+        assert_eq!(
+            parse(&agent, &mut ParseState::default(), &row)
+                .unwrap()
+                .timestamp_ms,
+            None
+        );
     }
     #[test]
     fn codex_request_clocks_ignore_old_turns_and_exclude_tool_waits() {

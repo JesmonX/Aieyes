@@ -57,6 +57,7 @@ fn event(store: &Store, q: &QuotaSnapshot, model: &str, category: &str, id: &str
         session_id: "new".into(),
         model: model.into(),
         timestamp: q.updated_at + 5,
+        timestamp_ms: None,
         tokens: Tokens {
             input: 100,
             output: 20,

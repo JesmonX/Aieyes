@@ -45,7 +45,8 @@ def bundle(app, mode):
     # Sign nested code from the inside out; never use --deep to paper over missing signatures.
     nested = [target / 'Versions/B/Autoupdate', *sorted((target / 'Versions/B/XPCServices').glob('*.xpc')), target / 'Versions/B/Updater.app', target, app / 'Contents/Resources/aieyes-core', app]
     for path in nested:
-        run('codesign', '--force', '--sign', identity, *flags, path)
+        entitlements = ['--entitlements', ROOT / 'apps/macos/Aieyes.entitlements'] if path == app else []
+        run('codesign', '--force', '--sign', identity, *flags, *entitlements, path)
     run('codesign', '--verify', '--deep', '--strict', app)
     if mode == 'release' and identity != '-':
         profile = os.environ.get('MACOS_NOTARY_PROFILE')
