@@ -47,7 +47,7 @@ db.execute('INSERT INTO event_sources VALUES(?,?)',(event['id'],'fixture'));db.c
     await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
     browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1180,height:900}}),errors=[];
     page.on('pageerror',error=>errors.push(String(error)));await page.exposeFunction('testRPC',invoke);await page.addInitScript(browserFixture);
-    await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.evaluate(()=>AieyesApp.ready);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
     assert.equal(await page.evaluate(()=>state.dashboard.summary.total),200);
     assert.equal(calls.filter(call=>call.method==='sources.rescan').length,0);
     await page.evaluate(()=>{state.page='settings';state.settingsTab='general';state.generalTab='refresh';render();});
@@ -88,7 +88,7 @@ db.execute('INSERT INTO event_sources VALUES(?,?)',(event['id'],'fixture'));db.c
     forkSettings.sources=[{id:'fork',name:'Fork 测试',provider:'codex',accountId:'',path:forkDir,enabled:true}];
     const codexAgent=forkSettings.agents.find(agent=>agent.provider==='codex');codexAgent.enabled=true;codexAgent.machineIds=['local'];
     await rpc('settings.patch',{base:beforeFork,settings:forkSettings});
-    await page.reload();await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
+    await page.reload();await page.evaluate(()=>AieyesApp.ready);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
     await page.evaluate(async()=>{await scan();state.page='settings';state.settingsTab='general';state.generalTab='refresh';render();});
     assert.equal((await rpc('dashboard')).summary.total,1100,'Disabled precise counting includes inherited cumulative usage alongside retained historical data');
     assert.equal(await page.evaluate(()=>state.refreshState.scan.error),null,JSON.stringify(await page.evaluate(()=>state.refreshState.scan.failures)));
