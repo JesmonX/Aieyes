@@ -1,7 +1,7 @@
 #!/bin/sh
 # Source from native build entry points so debug and release use the same SDK generation.
 set -eu
-AIEYES_XCODE_VERSION=$(xcodebuild -version | awk '$1 == "Xcode" { print $2; exit }')
+AIEYES_XCODE_VERSION=$(xcodebuild -version | awk '$1 == "Xcode" { print $2 }')
 case "$AIEYES_XCODE_VERSION" in
   26.*) ;;
   *) echo "Aieyes requires Xcode 26.x; selected: ${AIEYES_XCODE_VERSION:-unavailable}. Select it with DEVELOPER_DIR or xcode-select." >&2; exit 1 ;;

@@ -1,4 +1,5 @@
 import Foundation
+@testable import Aieyes
 
 @main struct VerifyDashboardCache {
     static func counts(_ directory: URL) throws -> [String: Int] {

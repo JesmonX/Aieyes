@@ -35,13 +35,11 @@ def main():
         core.call('settings.save', settings)
     finally:
         core.close()
-    source = ROOT/'apps/macos/Sources/Aieyes'
-    names = ['Localization', 'LocalizationCatalog', 'MonitorSelection', 'Models', 'ProviderPresentation', 'EngineClient', 'QuotaNotifications',
-        'ConfigurationActions', 'DesignTokens', 'Motion', 'Palette', 'QuotaRingCore', 'SessionActivity', 'OutboundEvents', 'AccountFocus']
-    executable = output/'verify-dashboard-cache'
-    subprocess.run(['swiftc', '-module-cache-path', str(ROOT/'.build/swift-module-cache'),
-        *[str(source/(name+'.swift')) for name in names], str(ROOT/'scripts/verify-dashboard-cache.swift'),
-        '-o', str(executable)], check=True)
+    # Link the production app module, just like the other native verifiers.
+    # A hand-maintained source subset misses dependencies when AppModel grows.
+    subprocess.run(['sh', '-c', 'set -e\n. scripts/native-verifiers.sh\nbuild_native_app\nbuild_native_verifier dashboard-cache'],
+        cwd=ROOT, env=dict(os.environ, PROJECT_DIR=str(ROOT)), check=True)
+    executable = ROOT/'.build/verify-dashboard-cache'
     proxy = output/'core-log.py'
     shutil.copyfile(ROOT/'scripts/runtime-ipc-proxy.py', proxy)
     proxy.chmod(0o700)

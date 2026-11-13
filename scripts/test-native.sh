@@ -31,7 +31,7 @@ for verifier in macos-ui configuration wakeups setup-guide updates credit-format
 done
 
 AIEYES_SKIP_BUILD=1 sh scripts/test-native-pets.sh
-python3 scripts/test-dashboard-cache.py
+AIEYES_SKIP_BUILD=1 python3 scripts/test-dashboard-cache.py
 
 AIEYES_SKIP_BUILD=1 sh scripts/test-native-quota-layout.sh
 AIEYES_SKIP_BUILD=1 sh scripts/test-cpu-optimization.sh
