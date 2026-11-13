@@ -47,7 +47,7 @@ const cards=page=>page.locator('[data-quota]:visible').evaluateAll(nodes=>nodes.
     assert.deepEqual(await cards(page),['codex:free','codex:plus'],'Off: every account keeps its card');
 
     await openGeneralPage(page,'advanced');
-    assert.deepEqual(await page.locator('[data-general-page]').allTextContents(),['外观','面板','桌宠与会话','启动与系统','网络代理','刷新与历史','通知','Webhook','高级','更新与关于']);
+    assert.deepEqual(await page.locator('[data-general-page]').allTextContents(),['外观','面板','桌宠与会话','启动与系统','网络代理','刷新与历史','通知','Webhook','聊天渠道','高级','更新与关于']);
     assert.equal(await page.locator('#field-hideFreeQuotaCards').isChecked(),false);
     await page.locator('#field-hideFreeQuotaCards').check();
     await page.waitForFunction(()=>state.settings.hideFreeQuotaCards===true&&!state.settingsCommitting);

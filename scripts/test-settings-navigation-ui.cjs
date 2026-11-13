@@ -93,7 +93,7 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
       await page.locator('#cancel-editor').click();
 
       await page.locator('[data-settings-tab=general]').click();
-      assert.deepEqual(await page.locator('[data-general-page]').allTextContents(), ['外观','面板','桌宠与会话','启动与系统','网络代理','刷新与历史','通知','Webhook','高级','更新与关于']);
+      assert.deepEqual(await page.locator('[data-general-page]').allTextContents(), ['外观','面板','桌宠与会话','启动与系统','网络代理','刷新与历史','通知','Webhook','聊天渠道','高级','更新与关于']);
       assert.equal(await page.locator('[data-general-page=panel]').getAttribute('aria-current'), 'page', 'the general page last opened stays selected');
       await openGeneralPage(page, 'appearance');
       assert.equal(await page.locator('[data-general-section=appearance] #material-main, [data-general-section=appearance] #material-floating').count(), platform === 'windows' ? 2 : 0, 'Windows material controls belong to Appearance');
