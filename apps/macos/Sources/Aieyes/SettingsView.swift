@@ -345,6 +345,7 @@ struct SettingsView: View {
             }
             if model.generalPage == "system" { SystemIntegrationSettings() }
             if model.generalPage == "webhooks" { WebhookSettingsView(model: model, service: model.outbound) }
+            if model.generalPage == "channels" { ChatChannelSettingsView(service: model.channels) }
             if model.generalPage == "desktop" {
             Section(L("桌面宠物")) {
                 HStack { Toggle(L("显示桌宠"), isOn: $petEnabled); HelpNote(title: L("桌面显示"), text: L("桌宠展示本机和 SSH 会话。单击打开面板，拖动移动。")) }

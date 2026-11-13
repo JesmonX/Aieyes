@@ -39,7 +39,7 @@
   }
   window.AieyesSettingsPages = {
     register(key, page) {pages.set(key, page);},
-    has: (key) => !['panel', 'system', 'webhooks'].includes(key) || pages.has(key),
+    has: (key) => !['panel', 'system', 'webhooks', 'channels'].includes(key) || pages.has(key),
     fields: (key, settings) => part(key, 'fields', settings),
     body: (key, settings) => part(key, 'body', settings),
     searchHTML: () => `<div class="settings-search" role="search"><input type="search" id="settings-search" autocomplete="off" spellcheck="false" aria-controls="settings-search-results" aria-expanded="false" aria-label="${AieyesI18n.t("搜索设置")}" placeholder="${AieyesI18n.t("搜索设置")}" value="${escape(state.settingsSearch ?? '')}"><div id="settings-search-results" class="settings-search-results" hidden></div></div>`,

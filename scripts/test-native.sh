@@ -19,7 +19,7 @@ build_native_verifier qoder-cli
 .build/verify-qoder-cli "$MODEL_FIXTURE/qoder-cli.json" "$MODEL_FIXTURE/settings.json"
 target/debug/aieyes-core --data-dir "$MODEL_FIXTURE" --call qoderCli.status '{"provider":"qoder-cn"}' > "$MODEL_FIXTURE/qoder-cn-cli.json"
 .build/verify-qoder-cli "$MODEL_FIXTURE/qoder-cn-cli.json" "$MODEL_FIXTURE/settings.json" qoder-cn
-for verifier in localization dock-presence palette selection sessions session-focus proxy; do
+for verifier in localization dock-presence palette selection sessions session-focus chat-channels proxy; do
   build_native_verifier "$verifier"
   ".build/verify-$verifier"
 done

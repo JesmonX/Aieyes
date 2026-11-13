@@ -4,7 +4,7 @@ import Foundation
 /// search and the snapshot renderer, so a new page cannot be missed in any of them.
 enum SettingsIndex {
     /// General settings pages in display order.
-    static let generalPageKeys = ["appearance", "panel", "desktop", "system", "network", "refresh", "notifications", "webhooks", "advanced", "updates"]
+    static let generalPageKeys = ["appearance", "panel", "desktop", "system", "network", "refresh", "notifications", "webhooks", "channels", "advanced", "updates"]
 
     static func generalPageTitle(_ key: String) -> String {
         switch key {
@@ -16,6 +16,7 @@ enum SettingsIndex {
         case "refresh": return L("刷新与历史")
         case "notifications": return L("通知")
         case "webhooks": return "Webhook"
+        case "channels": return L("聊天渠道")
         case "advanced": return L("高级")
         default: return L("更新与关于")
         }
@@ -80,6 +81,7 @@ enum SettingsIndex {
         Entry(title: "服务器告警", category: "general", page: "notifications", keywords: ["alert", "cpu", "memory", #"内存"#, #"阈值"#]),
         Entry(title: "发送 Webhook 通知", category: "general", page: "webhooks", keywords: ["webhook", "slack", "bark", #"飞书"#, #"企业微信"#]),
         Entry(title: "通知事件", category: "general", page: "webhooks", keywords: ["webhook", "event", #"会话完成"#, #"等待输入"#, #"额度重置"#]),
+        Entry(title: "飞书会话控制", category: "general", page: "channels", keywords: ["channel", "feishu", "lark", #"私聊"#, #"配对"#, #"回复"#, #"中断"#, #"继续"#]),
         Entry(title: "隐藏免费账户的额度卡片", category: "general", page: "advanced", keywords: ["free", "quota"]),
         Entry(title: "后台采样", category: "general", page: "advanced", keywords: ["sampling", "estimate", #"估值"#]),
         Entry(title: "检查更新", category: "general", page: "updates", keywords: ["update", "version", #"版本"#]),

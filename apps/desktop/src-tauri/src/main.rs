@@ -499,6 +499,9 @@ fn main() {
                 });
             whats_new::setup(app.handle(), launch);
             outbound::start(app.handle(), &root);
+            if let Some(channels) = aieyes_core::channels::Service::start(&root)? {
+                app.manage(channels);
+            }
             let automatic_app = app.handle().clone();
             app.manage(aieyes_core::automatic::Background::start(
                 &root,
@@ -536,6 +539,9 @@ fn main() {
                 state.stop();
             }
             if let Some(state) = app.try_state::<outbound::Outbound>() {
+                state.stop();
+            }
+            if let Some(state) = app.try_state::<aieyes_core::channels::Service>() {
                 state.stop();
             }
             aieyes_core::process::terminate_query_children();

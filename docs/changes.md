@@ -33,6 +33,7 @@
 
 ### 会话状态与桌宠
 
+- 飞书个人会话控制（11-13）：长连接机器人、系统凭据库和单账号配对；按原会话与轮次路由问题回答、单次审批和续聊。覆盖本机与 SSH，优先复用 Codex 原生接口，其次已核验的 CLI 队列、tmux 或 macOS 终端自动化；提交结果不明确时保留状态并禁止重放。两端新增聊天渠道设置，关闭时不采集会话正文。真实账号与终端输入尚待验收。见 [chat-channels.md](chat-channels.md)。
 - 动画桌宠（10-13，v0.1.35）：三端统一随会话状态变化的桌宠，支持导入 Codex Pet 格式，默认附带月薪喵。见 [desktop-pets.md](desktop-pets.md)、[pets.md](pets.md)。
 - 会话监测扩展（10-13，v0.1.35）：本机与 SSH 上的 Codex、Claude Code、AGY 会话状态，Claude Code 与 AGY 通过生命周期 hooks 接入。见 [claude-session-sources.md](claude-session-sources.md)。
 - 桌宠缩放与多会话汇总（10-13，v0.1.36）：50%–200% 缩放，按状态优先级选主动作并显示各状态数量。

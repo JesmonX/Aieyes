@@ -10,7 +10,7 @@
   function scale(a, factor) {const result = zero();for (const k of Object.keys(result.tokens)) result.tokens[k] = Math.round((a.tokens[k] || 0) * factor);for (const k of ['total', 'pricedTokens', 'events']) result[k] = Math.round((a[k] || 0) * factor);result.cost = (a.cost || 0) * factor;return result;}
   function redact(value) {
     if (Array.isArray(value)) return value.map(redact);
-    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, /^(apiKey|password|secret|accessToken|refreshToken|authorization|cookie)$/i.test(k) ? '[hidden]' : redact(v)]));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, /^(apiKey|password|secret|appSecret|accessToken|refreshToken|authorization|cookie)$/i.test(k) ? '[hidden]' : redact(v)]));
     if (typeof value === 'string') return value.replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g, '$1[hidden]@').replace(/\bsk-(?:proj-|ant-)?[\w-]{8,}/g, '[hidden]');
     return value;
   }
@@ -199,6 +199,22 @@
         case 'hosts.history': return { hosts: copy(d.hostHistory?.hosts ?? []).filter(h => !p.hostId || h.id === p.hostId) };
         case 'webhooks.dispatch': return { delivered: 0, failed: 0, pending: 0 };
         case 'webhooks.test': return this.boundary('Webhook 测试');
+        case 'channels.start': case 'channels.dispatch': return { started: false, scheduled: false };
+        case 'channels.status': return d.channel ||= { enabled: false, appId: '', hasSecret: false, revision: 0, paired: false, allowTerminal: false, connection: { state: 'disabled' }, pending: 0, undelivered: 0 };
+        case 'channels.configure': {
+          const old = this.engine('channels.status');
+          if (p.revision !== old.revision) throw Error('聊天渠道配置已变更，请刷新后重试');
+          if (!/^cli_[A-Za-z0-9_]+$/.test(p.appId)) throw Error('飞书 App ID 格式无效');
+          if (!p.appSecret && !old.hasSecret) throw Error('请输入飞书 App Secret');
+          d.channel = { ...old, appId: p.appId, enabled: p.enabled, allowTerminal: p.allowTerminal, hasSecret: true, revision: old.revision + 1, connection: { state: p.enabled ? 'stopped' : 'disabled' } };
+          return d.channel;
+        }
+        case 'channels.pair': return { code: 'preview-only', message: '/pair preview-only', expiresAt: now + 600 };
+        case 'channels.unpair': {const c = this.engine('channels.status');if (c.revision !== p.revision) throw Error('聊天渠道配置已变更，请刷新后重试');c.paired = false;c.revision++;return c;}
+        case 'channels.sessions': return { sessions: this.engine('channels.status').enabled ? d.sessions.map((row, i) => ({ id: row.id, key: `s${i + 1}`, title: `${row.provider} · ${row.machine}`, phase: row.phase, control: '通知与待处理指令' })) : [] };
+        case 'channels.commands': return { commands: d.channelCommands || [] };
+        case 'channels.retry': case 'channels.cancel': {const row = (d.channelCommands || []).find(c => c.id === p.id);if (!row || !['queued', 'blocked', 'automation'].includes(row.status)) throw Error('该指令已提交或已结束，不能取消');row.status = method === 'channels.retry' ? 'queued' : 'cancelled';return { saved: true };}
+        case 'channels.automation.take': return { job: null };
         default:
           if (/^(?:codexAuth\.(?:login|switch|openUrl|adopt|enable|profiles\.)|agyAuth\.(?!inspect)|subscriptions\.openLogin|wakeups\.(?:deploy|remove|run|enable|disable)|sessions\.hooks\.(?:repair|remove)|accounts\.native\.remove|pets\.(?:import|select|asset)|(?:quota|credit)Estimates\.(?:start|stop|restart|repair)|autoEstimates\.(?:tick|rebuild))/.test(method)) return this.boundary(method);
           throw new Error(`未实现的预览调用 / Unhandled preview call: ${method}`);

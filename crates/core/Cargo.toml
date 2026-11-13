@@ -32,6 +32,10 @@ zstd = "0.13"
 serde_yaml_ng = "0.10"
 unsafe-libyaml = "0.2.11"
 tempfile = "3.27.0"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+prost = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "1"
 
 [dev-dependencies]
 keyring-core = "1.0"

@@ -793,6 +793,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                     let snapshot =
                         monitor.read_with_usage(&settings, std::time::SystemTime::now(), &store);
                     webhooks.observe(&store, &settings, &snapshot.sessions);
+                    let _ = aieyes_core::channels::observe(&store, &snapshot);
                     snapshot
                 }
                 Err(_) => Snapshot {

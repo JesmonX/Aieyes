@@ -129,6 +129,7 @@ impl Store {
         crate::native_credits::setup(&db)?;
         crate::quota_notifications::setup(&db)?;
         crate::webhooks::setup(&db)?;
+        crate::channels::setup(&db)?;
         crate::remote_history::setup(&db)?;
         crate::qoder_state::setup(&db)?;
         crate::codex_api::usage::setup(&db)?;

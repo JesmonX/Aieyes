@@ -763,3 +763,18 @@ body[data-platform=windows] #message { top:calc(var(--titlebar-h) + 64px); }
 #account-context { position:fixed; z-index:10000; display:grid; gap:4px; min-width:174px; padding:8px; background:var(--surface-strong); color:var(--ink); border:1px solid var(--border); border-radius:var(--radius-overlay); box-shadow:var(--shadow-lift); }
 #account-context button { text-align:start; }
 }
+
+@layer components {
+#channel-settings .setting-row, [data-channel-sessions] .setting-row { display:flex; align-items:baseline; justify-content:space-between; gap:16px; padding:8px 0; }
+#channel-settings .actions, .channel-command .actions { flex-wrap:wrap; margin-top:12px; }
+.channel-pairing { margin-top:16px; padding:14px; border:1px solid var(--border); border-radius:var(--radius-card); background:var(--surface-soft); }
+.channel-pairing code { display:block; margin:10px 0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.channel-steps { margin:12px 0; padding-inline-start:22px; }
+.channel-steps li + li { margin-top:8px; }
+.channel-command { padding:14px 0; border-bottom:1px solid var(--border); }
+.channel-command:last-child { border-bottom:0; }
+.channel-command > .between { gap:16px; flex-wrap:wrap; }
+.channel-message { margin:8px 0; white-space:pre-wrap; overflow-wrap:anywhere; max-height:10em; overflow:auto; }
+.channel-session-title { min-width:0; overflow-wrap:anywhere; }
+[data-channel-sessions] small { flex-shrink:0; }
+}

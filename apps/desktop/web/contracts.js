@@ -1216,6 +1216,90 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
+    },
+    "channels.start": {
+      "lane": "configuration",
+      "updateBehavior": "observe",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "channels.status": {
+      "lane": "configuration",
+      "updateBehavior": "observe",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "channels.configure": {
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "channels.pair": {
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "channels.unpair": {
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "channels.sessions": {
+      "lane": "configuration",
+      "updateBehavior": "observe",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "channels.commands": {
+      "lane": "configuration",
+      "updateBehavior": "observe",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "channels.retry": {
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "channels.cancel": {
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "channels.automation.take": {
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "channels.automation.finish": {
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "channels.dispatch": {
+      "lane": "network",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
     }
   },
   "subscriptions": {
@@ -1652,7 +1736,7 @@
       "monochrome": false
     }
   },
-  "contractHash": "782d205c4778e409607adf229600b9b58f61caaa7b04df4fd3b40268a214e027",
+  "contractHash": "c12a715ae4710fb5b07f17ea416eb9948dcc6fc869944d2bcd43972693c09193",
   "petFrameDurations": [
     [
       280,

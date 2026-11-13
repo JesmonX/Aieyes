@@ -63,6 +63,9 @@ function fixture({platform, failStatus = false}) {
       if (method === 'sessions.list') return {sessions: [], warnings: []};
       if (method === 'quotas.schedule') return {nextDueAt: stamp + 86400};
       if (method === 'webhooks.test') {(nav.webhookTests ||= []).push(copy(params.target));if (nav.failWebhook) throw Error('Webhook 返回 HTTP 500');return {delivered: true};}
+      if (method === 'channels.status') return {enabled:false,appId:'',hasSecret:false,revision:0,paired:false,allowTerminal:false,connection:{state:'disabled'},pending:0,undelivered:0};
+      if (method === 'channels.commands') return {commands:[]};
+      if (method === 'channels.sessions') return {sessions:[]};
       return {};
     }}
   };

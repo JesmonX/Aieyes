@@ -1893,6 +1893,102 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
+    },
+    {
+      "name": "channels.start",
+      "lane": "configuration",
+      "updateBehavior": "observe",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "channels.status",
+      "lane": "configuration",
+      "updateBehavior": "observe",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "channels.configure",
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "channels.pair",
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "channels.unpair",
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "channels.sessions",
+      "lane": "configuration",
+      "updateBehavior": "observe",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "channels.commands",
+      "lane": "configuration",
+      "updateBehavior": "observe",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "channels.retry",
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "channels.cancel",
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "channels.automation.take",
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "channels.automation.finish",
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "channels.dispatch",
+      "lane": "network",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
     }
   ],
   "petFrameDurations": [

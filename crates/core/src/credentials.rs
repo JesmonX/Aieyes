@@ -26,6 +26,7 @@ use keyring_core::Error as SecretError;
 const SSH: &str = "app.aieyes.ssh";
 /// Tokens Aieyes was granted directly; agent-owned credentials are never copied here.
 const AGENTS: &str = "app.aieyes.agents";
+const CHANNELS: &str = "app.aieyes.channels";
 fn entry(reference: &str) -> Result<SecretEntry> {
     entry_in(SSH, reference)
 }
@@ -44,7 +45,7 @@ fn entry_in(service: &str, reference: &str) -> Result<SecretEntry> {
                 .all(|c| c.is_ascii_alphanumeric() || c == b'-'),
         "密码引用无效"
     );
-    ensure!(matches!(service, SSH | AGENTS), "凭据服务无效");
+    ensure!(matches!(service, SSH | AGENTS | CHANNELS), "凭据服务无效");
     SecretEntry::new(service, reference).context("系统凭据库不可用")
 }
 
@@ -93,6 +94,26 @@ pub fn delete_agent(reference: &str) -> Result<()> {
         Ok(()) => Ok(()),
         Err(SecretError::NoEntry) => Ok(()),
         Err(error) => Err(error).context("无法清理登录凭据"),
+    }
+}
+pub(crate) fn save_channel(reference: &str, secret: &str) -> Result<()> {
+    ensure!(
+        !secret.is_empty() && secret.len() <= 4096 && !secret.contains(['\n', '\r', '\0']),
+        "飞书 App Secret 格式无效"
+    );
+    entry_in(CHANNELS, reference)?
+        .set_password(secret)
+        .context("无法保存聊天渠道凭据，请解锁系统凭据库")
+}
+pub(crate) fn read_channel(reference: &str) -> Result<String> {
+    entry_in(CHANNELS, reference)?
+        .get_password()
+        .context("无法读取聊天渠道凭据，请解锁系统凭据库")
+}
+pub(crate) fn delete_channel(reference: &str) -> Result<()> {
+    match entry_in(CHANNELS, reference)?.delete_credential() {
+        Ok(()) | Err(SecretError::NoEntry) => Ok(()),
+        Err(error) => Err(error).context("无法清理聊天渠道凭据"),
     }
 }
 /// Runs before opening SQLite. OpenSSH passes only its prompt; the environment

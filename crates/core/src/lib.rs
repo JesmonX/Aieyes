@@ -8,6 +8,7 @@ pub mod antigravity;
 pub mod automatic;
 mod buddy_auth;
 pub mod capacity;
+pub mod channels;
 pub mod claude_keychain;
 mod codebuddy_ide;
 pub mod codex_api;
@@ -103,6 +104,7 @@ pub struct Engine {
     sessions: sessions::SessionMonitor,
     /// Last phase and turn per live session, for webhook transitions.
     session_marks: HashMap<String, webhooks::SessionMark>,
+    channel_service: Option<channels::Service>,
     progress: Option<Box<dyn FnMut(Value) + Send>>,
     network_cache: HashMap<String, network::NetworkTest>,
     status_observations: Option<std::cell::RefCell<HashMap<String, Value>>>,
@@ -142,6 +144,7 @@ impl Engine {
             alert_webhooks,
             sessions: sessions::SessionMonitor::default(),
             session_marks: HashMap::new(),
+            channel_service: None,
             progress: None,
             network_cache: HashMap::new(),
             status_observations: None,
@@ -529,6 +532,7 @@ impl Engine {
             "app.launch" => self.launch_state(),
             "webhooks.dispatch" => self.dispatch_webhooks(),
             "webhooks.test" => self.test_webhook(&params),
+            name if name.starts_with("channels.") => self.channel_call(name, params),
             "hosts.history" => {
                 let settings = self.store.settings()?;
                 self.sync_host_observer(&settings);
@@ -599,6 +603,8 @@ impl Engine {
                     std::time::SystemTime::now(),
                     &self.store,
                 );
+                // Channel publication runs on its own worker; the observer hands off identity only.
+                let _ = channels::observe(&self.store, &snapshot);
                 for (kind, session) in
                     webhooks::session_transitions(&mut self.session_marks, &snapshot.sessions)
                 {

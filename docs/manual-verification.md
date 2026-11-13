@@ -1,5 +1,26 @@
 # 手动验证与维护入口
 
+## 飞书个人会话控制
+
+说明与支持边界见 [chat-channels.md](chat-channels.md)。离线验证入口：
+
+- `cargo test -p aieyes-core channels:: --lib --locked`：临时数据库、飞书 HTTP 与 Codex Unix socket 模拟；不发送真实账号消息。
+- `python3 scripts/test-session-channel.py`：SSH helper 的原生协议、原会话身份、终端输入边界与字面量传输。
+- `node scripts/test-chat-channels-ui.cjs`：Windows 中文、Linux 英文的配置、配对、保留草稿、指令按钮和页面轮询。
+- `verify-chat-channels.swift`：按本文件的 `native-verifiers.sh` 方法编译运行；检查 DTO、TTY、状态及本机已安装终端的 AppleScript 字典，只编译、不请求权限、不输入。
+
+真实服务验收须使用专门的机器人和可识别的测试会话，并逐项记录原 thread / turn、机器和最终指令状态：
+
+1. 飞书应用完成权限、长连接订阅和发布；配对自己账号，确认其他人、群聊和过期配对码不能控制会话。
+2. 保持原有本机与 SSH 启动方式，分别验证 `/sessions`、`/use`、`/send` 和跨会话引用；未知引用不能发给当前选中的另一会话。
+3. 测试会话产生单问题、多问题和单次审批；确认真实 app-server 是否向新连接重放未决请求，接收答案后仍为原 thread。没有重放时应保留指令。
+4. 在原窗口先进入新轮次，再回复旧通知；旧回答必须被拦截。随后测试中断恢复、完成后续聊及下一轮最终回复。
+5. 人工断开网络、退出 Aieyes、让目标进程退出、暂停或移除来源、切换 tmux 前台为 shell、锁定桌面及撤销终端自动化权限；检查待处理或结果待核对状态，不能自动重复输入。已提交指令应在确认超时后转为结果待核对，不能一直停在待确认，也不应被描述为任务完成。
+6. 同时开启两个使用相同数据目录的前端，确认只收到一次通知、只提交一次。修改配置或解除配对后，旧引用不能控制新配置中的会话。
+7. 验证飞书发送失败时能看到未送达数量、密钥库不可用时能看到错误；检查中英文界面、凭据不回显和 24 小时清理。
+
+当前离线测试不代替以上真实服务验收，未对真实飞书账号或已有工作会话执行输入测试。
+
 从仓库根目录运行。共享 Python 检查支持 Python 3.9+，旧版本复用仓库内 Tomli 解析 TOML；发布打包仍按对应构建脚本的依赖要求执行。共享检查和浏览器检查先执行 `npm ci --prefix apps/desktop`；浏览器检查安装 Playwright Chromium，WebKit 通道另安装 WebKit。核心集成检查使用先构建的 `target/debug/aieyes-core`。原生检查需要 macOS、Swift 和已解析的 Sparkle 依赖。
 
 自动化入口：`sh scripts/ci-checks.sh [--rust]`、`npm run test:ui --prefix apps/desktop`、`sh scripts/test-native.sh`。共享检查包含发布、采集、唤醒、增量历史、旧账户历史、Antigravity 身份、Node 交互、重置格式及生成契约；远端 Codex 权限/锁测试依赖 POSIX，在 Unix 检查任务执行。Web 测试链包含真实核心的主题同步；`verify-models.swift` 在原生测试链中使用真实核心输出，流式历史检查也随 macOS 原生 CI 执行。面板偏好和重置格式由两端读取同一组 JSON 夹具。

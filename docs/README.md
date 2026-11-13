@@ -35,6 +35,7 @@
 - [Codex 活动会话来源](codex-session-sources.md) · [Claude 会话状态来源](claude-session-sources.md)
 - [Headless 与内部会话排除规则](headless-rules.md)
 - [会话提示音](session-sounds.md)
+- [飞书个人会话控制](chat-channels.md)：问题与最终回复、原会话续聊、能力分级与待处理指令
 
 ## 界面与平台
 

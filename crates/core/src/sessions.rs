@@ -76,6 +76,13 @@ impl Phase {
 fn is_zero(value: &u64) -> bool {
     *value == 0
 }
+/// A process on the session's machine. Kept out of the public local-focus contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[doc(hidden)]
+pub struct ControlProcess {
+    pub pid: u32,
+    pub start: u64,
+}
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LiveSession {
@@ -117,6 +124,9 @@ pub struct LiveSession {
     pub pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_start: Option<u64>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub control_process: Option<ControlProcess>,
     /// Native session id that the provider's history import also records.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub native_session: String,
@@ -313,7 +323,14 @@ impl Snapshot {
             HashMap::new();
         let mut clients: HashMap<String, HashSet<String>> = HashMap::new();
         let mut processes: HashMap<String, HashSet<(u32, Option<u64>)>> = HashMap::new();
+        let mut control_processes: HashMap<String, HashSet<ControlProcess>> = HashMap::new();
         for s in &self.sessions {
+            if let Some(process) = s.control_process {
+                control_processes
+                    .entry(s.id.clone())
+                    .or_default()
+                    .insert(process);
+            }
             if !s.client.is_empty() {
                 clients
                     .entry(s.id.clone())
@@ -478,6 +495,12 @@ impl Snapshot {
                     .unwrap();
             }
             session.log_paths = transcripts.remove(&session.id).unwrap_or_default();
+            if session.control_process.is_none()
+                && let Some(values) = control_processes.remove(&session.id)
+                && values.len() == 1
+            {
+                session.control_process = values.into_iter().next();
+            }
             session.usage_members = usage_members.remove(&session.id).unwrap_or_default();
         }
         let mut roots: HashMap<String, Vec<LiveSession>> = HashMap::new();
@@ -1055,6 +1078,13 @@ impl Reader {
                     && cursor.activity.pid > 0
                     && alive != Some(false))
                 .then_some(cursor.activity.process_start),
+                control_process: (cursor.activity.pid > 0
+                    && cursor.activity.process_start > 0
+                    && alive != Some(false))
+                .then_some(ControlProcess {
+                    pid: cursor.activity.pid,
+                    start: cursor.activity.process_start,
+                }),
                 expired,
                 ..Default::default()
             });

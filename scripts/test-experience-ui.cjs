@@ -27,7 +27,7 @@ const {fixture} = require('./workspace-ui-fixture.cjs');
     await navigationFixture.emit('desktop:status', {...info, sessions, sources: [], ...extra});
   }, {sessions, extra});
   // The general pages this platform carries, in the order of the shared index.
-  const GENERAL_PAGES = ['外观', '面板', '桌宠与会话', '启动与系统', '网络代理', '刷新与历史', '通知', 'Webhook', '高级', '更新与关于'];
+  const GENERAL_PAGES = ['外观', '面板', '桌宠与会话', '启动与系统', '网络代理', '刷新与历史', '通知', 'Webhook', '聊天渠道', '高级', '更新与关于'];
   try {
     // aieyes:// settings links accept the same general page keys as the settings index.
     {

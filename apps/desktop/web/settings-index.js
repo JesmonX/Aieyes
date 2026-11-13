@@ -1,8 +1,8 @@
 /* One list behind the general page chips, the search box and the aieyes:// settings
    links, so a new page cannot be missed in any of them. Mirrors SettingsIndex.swift. */
 (() => {
-  const generalPageKeys = ['appearance', 'panel', 'desktop', 'system', 'network', 'refresh', 'notifications', 'webhooks', 'advanced', 'updates'];
-  const pageTitles = { appearance: "外观", panel: "面板", desktop: "桌宠与会话", system: "启动与系统", network: "网络代理", refresh: "刷新与历史", notifications: "通知", advanced: "高级", updates: "更新与关于" };
+  const generalPageKeys = ['appearance', 'panel', 'desktop', 'system', 'network', 'refresh', 'notifications', 'webhooks', 'channels', 'advanced', 'updates'];
+  const pageTitles = { appearance: "外观", panel: "面板", desktop: "桌宠与会话", system: "启动与系统", network: "网络代理", refresh: "刷新与历史", notifications: "通知", channels: "聊天渠道", advanced: "高级", updates: "更新与关于" };
   const categoryTitles = { integrations: "接入与账户", hosts: "机器与采集", prices: "模型价格", wakeups: "定时唤醒" };
   const generalPageTitle = (key) => key === 'webhooks' ? 'Webhook' : AieyesI18n.t(pageTitles[key] ?? pageTitles.updates);
   const categoryTitle = (key) => AieyesI18n.t(categoryTitles[key] ?? "设置");
@@ -40,6 +40,7 @@
     entry("服务器告警", 'general', 'notifications', ["alert", "cpu", "memory", `内存`, `阈值`]),
     entry("发送 Webhook 通知", 'general', 'webhooks', ["webhook", "slack", "bark", `飞书`, `企业微信`]),
     entry("通知事件", 'general', 'webhooks', ["webhook", "event", `会话完成`, `等待输入`, `额度重置`]),
+    entry("飞书会话控制", 'general', 'channels', ["channel", "feishu", "lark", `私聊`, `配对`, `回复`, `中断`, `继续`]),
     entry("隐藏免费账户的额度卡片", 'general', 'advanced', ["free", "quota"]),
     entry("后台采样", 'general', 'advanced', ["sampling", "estimate", `估值`]),
     entry("检查更新", 'general', 'updates', ["update", "version", `版本`]),

@@ -11,7 +11,7 @@ use tauri::AppHandle;
 
 /// Settings › General page keys; the same list and order as `generalPageKeys` in
 /// web/settings-index.js (scripts/test-experience-ui.cjs compares them).
-pub(crate) const GENERAL_PAGES: [&str; 10] = [
+pub(crate) const GENERAL_PAGES: [&str; 11] = [
     "appearance",
     "panel",
     "desktop",
@@ -20,6 +20,7 @@ pub(crate) const GENERAL_PAGES: [&str; 10] = [
     "refresh",
     "notifications",
     "webhooks",
+    "channels",
     "advanced",
     "updates",
 ];

@@ -177,6 +177,18 @@ pub const METHODS: &[Method] = &[
     Method { name: "wakeups.suggest", lane: Lane::Wakeups, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "webhooks.dispatch", lane: Lane::Network, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "webhooks.test", lane: Lane::Network, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "channels.start", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "channels.status", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "channels.configure", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "channels.pair", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "channels.unpair", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "channels.sessions", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "channels.commands", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "channels.retry", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "channels.cancel", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "channels.automation.take", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "channels.automation.finish", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "channels.dispatch", lane: Lane::Network, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
 ];
 #[rustfmt::skip]
 pub const PROVIDERS: &[Provider] = &[
@@ -235,7 +247,7 @@ pub const SESSION_SOUND_TONES: &[(&str, &str, &str)] = &[
     ("droplet", "水滴", "droplet"),
     ("pulse", "电子", "pulse"),
 ];
-pub const CONTRACT_HASH: &str = "782d205c4778e409607adf229600b9b58f61caaa7b04df4fd3b40268a214e027";
+pub const CONTRACT_HASH: &str = "c12a715ae4710fb5b07f17ea416eb9948dcc6fc869944d2bcd43972693c09193";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

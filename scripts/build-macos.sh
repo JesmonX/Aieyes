@@ -31,8 +31,8 @@ rm -f "$APP_DIR/Contents/Resources/ReleaseNotes.md"
 if [ -f "$PROJECT_DIR/docs/release-notes/v$APP_VERSION.md" ]; then cp "$PROJECT_DIR/docs/release-notes/v$APP_VERSION.md" "$APP_DIR/Contents/Resources/ReleaseNotes.md"; fi
 # Declared localizations let AppKit localize the menus, panels and text menus it provides.
 for lproj in zh-Hans en; do mkdir -p "$APP_DIR/Contents/Resources/$lproj.lproj"; printf '"CFBundleDisplayName" = "Aieyes";\n' > "$APP_DIR/Contents/Resources/$lproj.lproj/InfoPlist.strings"; done
-printf '"NSAppleEventsUsageDescription" = "点击会话时，Aieyes 可定位到终端中对应的标签页或分屏。";\n' >> "$APP_DIR/Contents/Resources/zh-Hans.lproj/InfoPlist.strings"
-printf '"NSAppleEventsUsageDescription" = "When you click a session, Aieyes can select its terminal tab or split pane.";\n' >> "$APP_DIR/Contents/Resources/en.lproj/InfoPlist.strings"
+printf '"NSAppleEventsUsageDescription" = "Aieyes 可定位原会话的终端标签页或分屏，并在你启用聊天渠道终端控制后输入指令。";\n' >> "$APP_DIR/Contents/Resources/zh-Hans.lproj/InfoPlist.strings"
+printf '"NSAppleEventsUsageDescription" = "Aieyes can locate a session’s terminal tab or pane and enter instructions when you enable terminal control for chat channels.";\n' >> "$APP_DIR/Contents/Resources/en.lproj/InfoPlist.strings"
 if [ "$BUILD_MODE" = debug ]; then
   /usr/libexec/PlistBuddy -c "Add :AieyesDevelopmentDataDirectory string $PROJECT_DIR/.local/app" "$APP_DIR/Contents/Info.plist"
 fi

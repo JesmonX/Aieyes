@@ -289,6 +289,7 @@ struct AccountFlowResult {
     let resetNotifications = QuotaNotificationService()
     /// Webhook delivery, server alerts, minute history and the launch record.
     let outbound = OutboundEventService()
+    let channels = ChatChannelService()
     private let automaticEngine = EngineClient(configurationOnly: true)
     private var automaticTask: Task<Void, Never>?
     @Published var automaticSaving = false
@@ -879,6 +880,7 @@ struct AccountFlowResult {
             settings = try await engine.call("settings.get"); PanelAccountPreference.migrateAntigravity(settings.accountAliases ?? [:]); settingsDraft = settings; settingsLoaded = true
             resetNotifications.start()
             outbound.start(self)
+            channels.start(self)
             startSessionMonitoring()
             startRuntimeMonitoring()
             synchronizeAccountDeployments()
@@ -1501,7 +1503,7 @@ struct AccountFlowResult {
         sessionTask?.cancel(); sessionTask = nil
         runtimeTask?.cancel(); runtimeRefresh?.cancel(); summaryEngine.stop()
         if let runtimeObserver { NotificationCenter.default.removeObserver(runtimeObserver) }
-        automaticTask?.cancel(); automaticEngine.stop(); resetNotifications.stop(); outbound.stop()
+        automaticTask?.cancel(); automaticEngine.stop(); resetNotifications.stop(); outbound.stop(); channels.stop()
         filterRefresh?.cancel(); reloadTask?.cancel(); quotaScheduleTask?.cancel()
         deploymentSyncTask?.cancel(); settingsRefreshTask?.cancel(); generalSaveTask?.cancel(); petLibraryTask?.cancel()
         for task in antigravityRefreshTasks.values { task.cancel() }

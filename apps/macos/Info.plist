@@ -19,5 +19,5 @@
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
-<key>NSAppleEventsUsageDescription</key><string>点击会话时，Aieyes 可定位到终端中对应的标签页或分屏。</string>
+<key>NSAppleEventsUsageDescription</key><string>Aieyes 可定位原会话的终端标签页或分屏，并在你启用聊天渠道终端控制后输入指令。</string>
 </dict></plist>
