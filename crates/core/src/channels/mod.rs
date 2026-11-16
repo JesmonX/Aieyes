@@ -1,5 +1,8 @@
 //! Opt-in, personal Feishu channel. Only this module may persist conversation excerpts.
 //! The ordinary lifecycle observer and outbound webhooks remain metadata-only.
+mod actions;
+mod cards;
+pub mod claude;
 mod codex;
 mod config;
 mod content;

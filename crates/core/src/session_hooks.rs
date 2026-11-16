@@ -583,7 +583,7 @@ pub fn call(settings: &Settings, method: &str, params: &Value) -> Result<Value> 
 }
 /// The agent process (pid, start) and the argv verdict of the nearest
 /// ancestor that is the provider's own CLI.
-fn ancestry(provider: &str) -> (u32, u64, Option<&'static str>) {
+pub(crate) fn ancestry(provider: &str) -> (u32, u64, Option<&'static str>) {
     // Cursor, ZCode and CodeBuddy commonly run as Node; do not bind an arbitrary
     // Node ancestor's pid. Their argv is still matched by program name.
     let bind = !matches!(provider, "cursor" | "zcode" | "codebuddy");

@@ -227,22 +227,17 @@ fn login_persists_identity_before_success_and_retains_it_on_later_query_failure(
 }
 
 #[test]
-fn cli_renews_expired_access_and_supplies_all_three_model_groups() {
+fn valid_login_supplies_all_three_model_groups_without_rewriting_credentials() {
     let (root, mut engine, source) = identity_fixture();
     let path = root.path().join(".gemini/antigravity-oauth-token");
     let mut credential: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    credential["token"]["expiry"] = json!("2001-01-01T00:00:00Z");
+    credential["token"]["expiry"] = json!("2099-01-01T00:00:00Z");
     std::fs::write(&path, credential.to_string()).unwrap();
     std::fs::write(&source.agy_binary, r#"#!/usr/bin/env python3
 import json, os, pathlib, sys
 assert sys.argv[1:] == ['--log-file', os.devnull, '--print', '/usage', '--output-format', 'json']
 assert os.environ['AIEYES_INTERNAL'] == '1'
 assert list(pathlib.Path.cwd().iterdir()) == []
-path = pathlib.Path(__file__).parent / '.gemini/antigravity-oauth-token'
-credential = json.loads(path.read_text())
-credential['token']['expiry'] = '2099-01-01T00:00:00Z'
-credential['token']['access_token'] = 'fake-private-renewed'
-path.write_text(json.dumps(credential))
 groups = [{'name': name, 'buckets': [{'id': name + window, 'window': window, 'remaining_fraction': 0.8} for window in windows]}
           for name, windows in [('Gemini Models', ['5h', 'weekly']), ('Claude and GPT models', ['5h', 'weekly']), ('Gemini 4 Argon', ['weekly'])]]
 print(json.dumps({'status':'SUCCESS','command':{'name':'usage','data':{'groups':groups}}, 'private':'fake-private-output'}))
@@ -259,6 +254,74 @@ print(json.dumps({'status':'SUCCESS','command':{'name':'usage','data':{'groups':
         .collect();
     assert_eq!(groups.len(), 3);
     assert!(!rows.to_string().contains("fake-private"));
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        credential.to_string()
+    );
+}
+
+#[test]
+fn expired_background_checks_wait_for_explicit_manual_login() {
+    let (root, mut engine, source) = identity_fixture();
+    let path = root.path().join(".gemini/antigravity-oauth-token");
+    let mut credential: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    credential["token"]["expiry"] = json!("2001-01-01T00:00:00Z");
+    std::fs::write(&path, credential.to_string()).unwrap();
+    std::fs::write(
+        &source.agy_binary,
+        r#"#!/usr/bin/env python3
+import json, pathlib, sys, time
+root = pathlib.Path(__file__).parent
+if '--prompt-interactive' not in sys.argv:
+    (root / 'background-cli-started').touch()
+    print(json.dumps({'status':'SUCCESS','command':{'name':'usage','data':{'groups':[]}}}))
+else:
+    path = root / '.gemini/antigravity-oauth-token'
+    credential = json.loads(path.read_text())
+    credential['token']['expiry'] = '2099-01-01T00:00:00Z'
+    path.write_text(json.dumps(credential))
+    (root / 'manual-login-started').touch()
+    time.sleep(30)
+"#,
+    )
+    .unwrap();
+    let rows = engine.call("quotas.refresh", json!({})).unwrap();
+    assert!(rows[0]["error"].as_str().unwrap().contains("手动重新登录"));
+    engine
+        .call(
+            "accounts.status.refresh",
+            json!({"sourceId":source.id,"accountKey":"antigravity:existing-id"}),
+        )
+        .unwrap();
+    assert!(
+        engine
+            .call("agyAuth.inspect", json!({"sourceId":source.id}))
+            .is_err()
+    );
+    assert!(!root.path().join("background-cli-started").exists());
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        credential.to_string()
+    );
+
+    let start = engine
+        .call("agyAuth.start", json!({"sourceId":source.id}))
+        .unwrap();
+    let id = start["id"].as_str().unwrap();
+    poll(&mut engine, &source.id, id, "authorizing");
+    for _ in 0..100 {
+        if root.path().join("manual-login-started").exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(root.path().join("manual-login-started").exists());
+    engine
+        .call("agyAuth.verify", json!({"sourceId":source.id,"id":id}))
+        .unwrap();
+    let authenticated = poll(&mut engine, &source.id, id, "authenticated");
+    assert_eq!(authenticated["authenticated"], true);
+    assert_eq!(authenticated["identityConfirmed"], true);
 }
 
 #[test]
@@ -553,6 +616,9 @@ fn metadata_failure_preserves_new_quota_and_only_same_identity_subscription() {
         r#"#!/usr/bin/env python3
 import json, sys
 sys.stdin.read()
+if sys.argv[-1].endswith('/userinfo'):
+    print('{}')
+    sys.exit(0)
 if not sys.argv[-1].endswith(':retrieveUserQuotaSummary'): sys.exit(22)
 print(json.dumps({'groups':[{'displayName':'Gemini','buckets':[{'remainingFraction':0.4,'window':'5h'}]}]}))
 "#,
@@ -632,6 +698,9 @@ fn bound_account_does_not_accept_quota_without_a_confirmed_identity() {
         r#"#!/usr/bin/env python3
 import json, sys
 sys.stdin.read()
+if sys.argv[-1].endswith('/userinfo'):
+    print('{}')
+    sys.exit(0)
 if not sys.argv[-1].endswith(':retrieveUserQuotaSummary'): sys.exit(22)
 print(json.dumps({'groups':[{'displayName':'Gemini','buckets':[{'remainingFraction':0.1,'window':'5h'}]}]}))
 "#,

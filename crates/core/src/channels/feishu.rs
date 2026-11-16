@@ -116,20 +116,34 @@ impl Api {
             + Duration::from_secs(value["expire"].as_u64().unwrap_or(600).clamp(60, 7200) - 30);
         Ok(())
     }
-    pub fn send(&mut self, id: &str, chat: &str, parent: &str, body: &str) -> Result<String> {
+    pub fn send(
+        &mut self,
+        id: &str,
+        chat: &str,
+        parent: &str,
+        body: &str,
+        card: Option<&str>,
+    ) -> Result<String> {
         self.token()?;
-        let content = json!({"text":body}).to_string();
+        let message_type = if card.is_some() {
+            "interactive"
+        } else {
+            "text"
+        };
+        let content = card
+            .map(str::to_owned)
+            .unwrap_or_else(|| json!({"text":body}).to_string());
         let mut url = reqwest::Url::parse(&format!("{}/open-apis/im/v1/messages", self.base))?;
         let payload = if parent.is_empty() {
             url.query_pairs_mut()
                 .append_pair("receive_id_type", "chat_id");
-            json!({"receive_id":chat,"msg_type":"text","content":content,"uuid":id})
+            json!({"receive_id":chat,"msg_type":message_type,"content":content,"uuid":id})
         } else {
             url.path_segments_mut()
                 .map_err(|_| anyhow::anyhow!("飞书消息地址无效"))?
                 .push(parent)
                 .push("reply");
-            json!({"msg_type":"text","content":content,"uuid":id,"reply_in_thread":false})
+            json!({"msg_type":message_type,"content":content,"uuid":id,"reply_in_thread":false})
         };
         let response = self
             .client
@@ -157,8 +171,8 @@ impl Api {
 
 /// The stable UUID is persisted before I/O, and every retry uses the same Feishu idempotency key.
 pub(super) fn deliver(store: &Store, config: &Config, api: &mut Api) -> Result<()> {
-    let row: Option<(String,String,String,String,i64,i64)> = store.db.query_row("SELECT id,chat_id,reply_to,body,attempts,at FROM channel_outbox WHERE epoch=?1 AND sent_id IS NULL AND attempts<5 AND next_attempt<=?2 AND at>?3 ORDER BY at,rowid LIMIT 1",params![config.epoch,now(),now()-3300],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
-    let Some((id, chat, parent, body, attempts, _)) = row else {
+    let row: Option<(String,String,String,String,i64,Option<String>)> = store.db.query_row("SELECT o.id,o.chat_id,o.reply_to,o.body,o.attempts,c.payload FROM channel_outbox o LEFT JOIN channel_cards c ON c.outbox_id=o.id WHERE o.epoch=?1 AND o.sent_id IS NULL AND o.attempts<5 AND o.next_attempt<=?2 AND o.at>?3 ORDER BY o.at,o.rowid LIMIT 1",params![config.epoch,now(),now()-3300],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
+    let Some((id, chat, parent, body, attempts, card)) = row else {
         return Ok(());
     };
     let current = configuration(&store.db)?;
@@ -175,7 +189,7 @@ pub(super) fn deliver(store: &Store, config: &Config, api: &mut Api) -> Result<(
     if changed != 1 {
         return Ok(());
     }
-    match api.send(&id, &chat, &parent, &body) {
+    match api.send(&id, &chat, &parent, &body, card.as_deref()) {
         Ok(sent) => {
             store.db.execute(
                 "UPDATE channel_outbox SET sent_id=?1 WHERE id=?2",
@@ -269,11 +283,19 @@ pub(super) fn connection(
                     && let Some(bytes) = assembler.payload(&frame)?
                 {
                     // ACK only after the message's deduplication key and payload are durable.
-                    let accepted = payload(&frame, bytes)
-                        .and_then(|event| db::ingest(store, &c.epoch, &event));
+                    let accepted = payload(&frame, bytes).and_then(|event| {
+                        if event["header"]["event_type"] == "card.action.trigger" {
+                            super::actions::ingest(store, &c.epoch, &event).map(Some)
+                        } else {
+                            db::ingest(store, &c.epoch, &event).map(|_| None)
+                        }
+                    });
                     ws.send(Message::Binary(
                         frame
-                            .acknowledge(if accepted.is_ok() { 200 } else { 500 })
+                            .acknowledge_response(
+                                if accepted.is_ok() { 200 } else { 500 },
+                                accepted.as_ref().ok().and_then(|v| v.as_ref()),
+                            )
                             .into(),
                     ))?;
                 }

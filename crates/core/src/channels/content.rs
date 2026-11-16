@@ -18,6 +18,12 @@ pub(super) struct Excerpt {
     pub question: String,
     pub user_text: String,
     pub user_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub async_request: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claude_request: Option<Value>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub claude_answered_call: String,
 }
 
 pub(super) fn clip(text: &str, limit: usize) -> String {
@@ -128,6 +134,7 @@ pub(super) fn parse(values: impl IntoIterator<Item = Value>, target: &Session) -
     let mut out = Excerpt::default();
     let mut turn = String::new();
     let mut pending_call = String::new();
+    let mut pending_async = false;
     let codex = matches!(target.session.provider.as_str(), "codex" | "chatgpt-work");
     for v in values {
         if record_session(&v).is_some_and(|id| id != target.session.native_session)
@@ -148,6 +155,7 @@ pub(super) fn parse(values: impl IntoIterator<Item = Value>, target: &Session) -
         let explicit_turn = p["turn_id"]
             .as_str()
             .or_else(|| p["turnId"].as_str())
+            .or_else(|| p["internal_chat_message_metadata_passthrough"]["turn_id"].as_str())
             .unwrap_or(&turn);
         if codex && !target.session.turn_id.is_empty() && explicit_turn.is_empty() {
             continue;
@@ -174,29 +182,57 @@ pub(super) fn parse(values: impl IntoIterator<Item = Value>, target: &Session) -
             if v["type"] == "retained_context" && p["questions"].is_array() {
                 out.question = questions(&p["questions"]);
                 pending_call = p["call_id"].as_str().unwrap_or("").into();
+                pending_async = false;
+                out.async_request = None;
             }
             if v["type"] == "response_item"
                 && p["type"] == "function_call"
-                && p["name"]
-                    .as_str()
-                    .is_some_and(|n| n.ends_with("request_user_input"))
+                && p["name"].as_str().is_some_and(|n| {
+                    matches!(
+                        n.rsplit(['.', ':']).next(),
+                        Some("request_user_input" | "request_user_input_async")
+                    )
+                })
                 && let Some(args) = p["arguments"]
                     .as_str()
                     .and_then(|s| serde_json::from_str::<Value>(s).ok())
             {
                 out.question = questions(&args["questions"]);
                 pending_call = p["call_id"].as_str().unwrap_or("").into();
+                pending_async = p["name"]
+                    .as_str()
+                    .is_some_and(|n| n.ends_with("request_user_input_async"));
+                out.async_request = pending_async.then(
+                    || serde_json::json!({"callId":pending_call,"questions":args["questions"]}),
+                );
             }
             if v["type"] == "response_item"
                 && p["type"] == "function_call_output"
                 && !pending_call.is_empty()
                 && p["call_id"].as_str() == Some(&pending_call)
             {
-                out.question.clear();
-                pending_call.clear();
+                let accepted = pending_async
+                    && p["output"]
+                        .as_str()
+                        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                        .is_some_and(|v| v["accepted"] == true);
+                if !accepted {
+                    out.question.clear();
+                    pending_call.clear();
+                    out.async_request = None;
+                }
             }
             if v["type"] == "response_item" && p["type"] == "message" {
-                if p["role"] == "assistant" && p["phase"] == "final" {
+                if pending_async
+                    && crate::session_events::codex_async_answers(&v).contains(&pending_call)
+                {
+                    out.question.clear();
+                    pending_call.clear();
+                    out.async_request = None;
+                }
+                if p["role"] == "assistant"
+                    && matches!(p["phase"].as_str(), Some("final" | "final_answer"))
+                {
                     out.text = text_blocks(&p["content"]);
                 }
                 if p["role"] == "user" {
@@ -210,6 +246,12 @@ pub(super) fn parse(values: impl IntoIterator<Item = Value>, target: &Session) -
             }
             if v["type"] == "event_msg" && p["type"] == "agent_message" && p["phase"] == "final" {
                 out.text = p["message"].as_str().unwrap_or("").into();
+            }
+            if v["type"] == "event_msg"
+                && p["type"] == "task_complete"
+                && let Some(text) = p["last_agent_message"].as_str()
+            {
+                out.text = text.into();
             }
         } else {
             let message = v.get("message").filter(|m| m.is_object()).unwrap_or(&v);
@@ -234,6 +276,9 @@ pub(super) fn parse(values: impl IntoIterator<Item = Value>, target: &Session) -
                         if block["type"] == "tool_use" && block["name"] == "AskUserQuestion" {
                             out.question = questions(&block["input"]["questions"]);
                             pending_call = block["id"].as_str().unwrap_or("").into();
+                            out.claude_request = Some(
+                                serde_json::json!({"callId":pending_call,"input":block["input"]}),
+                            );
                         }
                     }
                 }
@@ -246,11 +291,14 @@ pub(super) fn parse(values: impl IntoIterator<Item = Value>, target: &Session) -
                 if message["content"].as_array().is_some_and(|a| {
                     a.iter().any(|b| {
                         b["type"] == "tool_result"
+                            && b["is_error"] != true
                             && b["tool_use_id"].as_str() == Some(&pending_call)
                     })
                 }) {
                     out.question.clear();
+                    out.claude_answered_call = pending_call.clone();
                     pending_call.clear();
+                    out.claude_request = None;
                 }
             }
         }

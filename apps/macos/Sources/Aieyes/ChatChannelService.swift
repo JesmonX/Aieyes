@@ -153,28 +153,21 @@ private struct ChatChannelJobResponse: Decodable { var job: ChatChannelJob? }
               info[kCGSessionOnConsoleKey as String] as? Bool == true else { return false }
         return info["CGSSessionScreenIsLocked"] as? Bool != true
     }
-    nonisolated static func foreground(pid: Int32, tty: String) -> Bool {
-        guard validTTY(tty), pid > 0 else { return false }
-        let descriptor = Darwin.open(tty, O_RDONLY | O_NOCTTY | O_NONBLOCK)
-        guard descriptor >= 0 else { return false }
-        defer { Darwin.close(descriptor) }
-        let group = getpgid(pid)
-        return group > 0 && tcgetpgrp(descriptor) == group
-    }
     static func deliver(_ session: LiveSession, text: String, client: EngineClient) async -> Outcome {
         guard session.machineId == "local", let pid = session.pid, let start = session.processStart, start > 0 else { return .init(status: "blocked", reason: "缺少原终端的进程身份") }
         guard unlocked() else { return .init(status: "blocked", reason: "桌面已锁定，指令已保留") }
         guard [.complete, .interrupted, .failed, .needsInput].contains(session.phase) else { return .init(status: "blocked", reason: "原终端仍在运行，请等待本轮结束后重试") }
         guard let target: SessionFocus.Target = try? await client.call("sessions.focusTarget", params: ["pid": Int(pid), "processStart": start]), target.status == "found", let tty = target.tty,
               let app = SessionFocus.application(for: (target.ancestors ?? []).map(\.pid)), let bundle = app.bundleIdentifier,
-              terminals.contains(bundle), foreground(pid: pid, tty: tty) else { return .init(status: "blocked", reason: "无法准确定位原终端，指令已保留") }
+              terminals.contains(bundle), target.foreground == true else { return .init(status: "blocked", reason: "无法准确定位原终端，指令已保留") }
         let permission = await Task.detached {
             let descriptor = NSAppleEventDescriptor(bundleIdentifier: bundle)
             return AEDeterminePermissionToAutomateTarget(descriptor.aeDesc, typeWildCard, typeWildCard, false)
         }.value
         guard permission == noErr else { return .init(status: "blocked", reason: "请在聊天渠道设置中授权终端自动化，然后重试") }
-        guard unlocked(), !app.isTerminated, foreground(pid: pid, tty: tty),
+        guard unlocked(), !app.isTerminated,
               let current: SessionFocus.Target = try? await client.call("sessions.focusTarget", params: ["pid": Int(pid), "processStart": start]), current.status == "found", current.tty == tty,
+              current.foreground == true,
               current.ancestors?.contains(where: { $0.pid == app.processIdentifier }) == true else { return .init(status: "blocked", reason: "原终端身份已改变，指令已保留") }
         guard let script = script(bundle: bundle) else { return .init(status: "blocked", reason: "此终端尚未适配") }
         let result = await Task.detached {

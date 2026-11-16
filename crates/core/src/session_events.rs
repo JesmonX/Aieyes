@@ -36,6 +36,10 @@ pub struct Event {
     pub failed: bool,
     pub interrupted: bool,
     pub notification: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub question_accepted: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub answered_calls: Vec<String>,
     /// Absolute working directory from a hook payload; the session header reads it back.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub workspace: String,
@@ -459,8 +463,37 @@ pub fn display_provider<'a>(provider: &'a str, activity: &Activity) -> &'a str {
     }
 }
 
+/// Only request identifiers cross the lifecycle boundary, never answer text.
+pub(crate) fn codex_async_answers(row: &Value) -> Vec<String> {
+    let p = &row["payload"];
+    if row["type"] != "response_item" || p["type"] != "message" || p["role"] != "user" {
+        return Vec::new();
+    }
+    p["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|part| {
+            let text = part["text"].as_str()?.trim();
+            let body = text
+                .strip_prefix("<send_user_message_question_reply>")?
+                .strip_suffix("</send_user_message_question_reply>")?;
+            serde_json::from_str::<Value>(body).ok()
+        })
+        .flat_map(|items| items.as_array().cloned().unwrap_or_default())
+        .filter_map(|item| {
+            let id: Value = serde_json::from_str(item["questionItemId"].as_str()?).ok()?;
+            (id[0] == "request_user_input_async")
+                .then(|| id[1].as_str().map(str::to_owned))
+                .flatten()
+        })
+        .filter(|id| !id.is_empty() && id.len() <= 256)
+        .collect()
+}
+
 pub fn codex(row: &Value) -> Option<Event> {
     let p = &row["payload"];
+    let answered_calls = codex_async_answers(row);
     let kind = match (row["type"].as_str()?, p["type"].as_str().unwrap_or("")) {
         ("session_meta", _) => "identity",
         ("event_msg", "task_started") => "start",
@@ -470,6 +503,7 @@ pub fn codex(row: &Value) -> Option<Event> {
         ("response_item", "reasoning") => "thinking",
         ("response_item", "function_call" | "custom_tool_call") => "tool",
         ("response_item", "function_call_output" | "custom_tool_call_output") => "output",
+        ("response_item", "message") if !answered_calls.is_empty() => "async_answers",
         _ => return None,
     };
     Some(Event {
@@ -497,9 +531,26 @@ pub fn codex(row: &Value) -> Option<Event> {
         } else {
             String::new()
         },
-        turn: field(p, &["turn_id"]),
+        turn: {
+            let turn = field(p, &["turn_id"]);
+            if turn.is_empty() {
+                field(
+                    &p["internal_chat_message_metadata_passthrough"],
+                    &["turn_id"],
+                )
+            } else {
+                turn
+            }
+        },
         call: field(p, &["call_id"]),
         tool: field(p, &["name"]),
+        // An async question's immediate receipt is not the user's answer.
+        question_accepted: kind == "output"
+            && p["output"]
+                .as_str()
+                .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                .is_some_and(|v| v["accepted"] == true),
+        answered_calls,
         at: row["timestamp"]
             .as_str()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
@@ -988,6 +1039,7 @@ pub struct Activity {
     pub pid: u32,
     pub process_start: u64,
     waiting: HashSet<String>,
+    async_questions: HashSet<String>,
     tools: HashSet<String>,
     anonymous_tools: u16,
     background: HashSet<String>,
@@ -999,6 +1051,16 @@ pub struct Activity {
     record_order: VecDeque<String>,
 }
 impl Activity {
+    pub fn input_request(&self) -> String {
+        let mut ids = self
+            .waiting
+            .iter()
+            .filter(|id| !id.is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids.join(":")
+    }
     pub fn turn_started_at(&self) -> u64 {
         self.turn_started
     }
@@ -1056,6 +1118,11 @@ impl Activity {
             return;
         }
         let starting = matches!(e.kind.as_str(), "start" | "UserPromptSubmit");
+        // A cold tail can start after task_started. Native per-record attribution
+        // still identifies the turn; its start time remains unknown.
+        if self.turn.is_empty() && !e.turn.is_empty() && !starting {
+            self.turn = e.turn.clone();
+        }
         if starting {
             if !e.turn.is_empty() && self.turn == e.turn {
                 return;
@@ -1068,6 +1135,7 @@ impl Activity {
             };
             self.turn_started = e.at;
             self.waiting.clear();
+            self.async_questions.clear();
             self.tools.clear();
             self.anonymous_tools = 0;
             self.background.clear();
@@ -1085,6 +1153,7 @@ impl Activity {
             if e.kind == "SessionStart" {
                 self.phase = None;
                 self.waiting.clear();
+                self.async_questions.clear();
                 self.tools.clear();
                 self.anonymous_tools = 0;
                 self.background.clear();
@@ -1102,12 +1171,25 @@ impl Activity {
                 }
             } else if !self.phase.is_some_and(Phase::terminal) {
                 match e.kind.as_str() {
+                    "async_answers" => {
+                        for call in &e.answered_calls {
+                            if self.async_questions.remove(call) {
+                                self.waiting.remove(call);
+                            }
+                        }
+                        self.phase = Some(if self.tools.is_empty() && self.anonymous_tools == 0 {
+                            Phase::Working
+                        } else {
+                            Phase::Tool
+                        });
+                    }
                     "unknown" => self.phase = Some(Phase::Unknown),
                     // A local slash command (`/model`, `/clear`) ran without a
                     // model request: the turn its command line opened is idle.
                     "local_command" => {
                         self.phase = None;
                         self.waiting.clear();
+                        self.async_questions.clear();
                         self.tools.clear();
                         self.anonymous_tools = 0;
                     }
@@ -1123,11 +1205,15 @@ impl Activity {
                         if matches!(
                             tool,
                             "request_user_input"
+                                | "request_user_input_async"
                                 | "AskUserQuestion"
                                 | "ask_question"
                                 | "ask_permission"
                         ) {
                             self.waiting.insert(e.call.clone());
+                            if tool == "request_user_input_async" {
+                                self.async_questions.insert(e.call.clone());
+                            }
                         }
                         self.phase = Some(Phase::Tool);
                     }
@@ -1145,7 +1231,10 @@ impl Activity {
                     }
                     "output" | "PostToolUse" | "PostToolUseFailure" | "PermissionDenied"
                     | "ElicitationResult" => {
-                        self.waiting.remove(&e.call);
+                        if !e.question_accepted || !self.async_questions.contains(&e.call) {
+                            self.waiting.remove(&e.call);
+                            self.async_questions.remove(&e.call);
+                        }
                         // CodeBuddy's permission hook may omit the call ID;
                         // its subsequent tool result still answers that prompt.
                         if e.kind != "ElicitationResult" {
@@ -1194,6 +1283,7 @@ impl Activity {
                                 Phase::Complete
                             });
                             self.waiting.clear();
+                            self.async_questions.clear();
                             self.tools.clear();
                             self.anonymous_tools = 0;
                         }
@@ -1201,12 +1291,14 @@ impl Activity {
                     "failed" | "StopFailure" => {
                         self.phase = Some(Phase::Failed);
                         self.waiting.clear();
+                        self.async_questions.clear();
                         self.tools.clear();
                         self.anonymous_tools = 0;
                     }
                     "interrupted" | "SessionEnd" => {
                         self.phase = Some(Phase::Interrupted);
                         self.waiting.clear();
+                        self.async_questions.clear();
                         self.tools.clear();
                         self.anonymous_tools = 0;
                     }

@@ -86,6 +86,7 @@ impl Service {
                     let mut api_key = String::new();
                     let mut last_confirm = Instant::now();
                     let mut last_cleanup = Instant::now() - Duration::from_secs(60);
+                    let mut last_hook_install = Instant::now() - Duration::from_secs(60);
                     while !worker_stop.load(Ordering::Acquire) {
                         let generation = signal.generation();
                         let work = (|| -> Result<()> {
@@ -93,6 +94,10 @@ impl Service {
                                 && configuration(&store.db)?.enabled
                             {
                                 db::process_inbox(&store)?;
+                                if last_hook_install.elapsed() >= Duration::from_secs(30) {
+                                    last_hook_install = Instant::now();
+                                    super::claude::install(&store)?;
+                                }
                                 // Update coordination waits for a concrete submission to finish.
                                 if let Ok(_operation) =
                                     crate::operations::enter("channels.dispatch")

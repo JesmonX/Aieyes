@@ -94,7 +94,7 @@ class Server:
                     if method == 'initialized':
                         continue
                     thread = dict(id=NATIVE, cwd='/different' if self.wrong_cwd else '/fixture', status=dict(type='active' if self.pending else 'idle', activeFlags=['waitingOnUserInput'] if self.pending else []))
-                    values = {'initialize': {}, 'thread/read': dict(thread=thread), 'thread/turns/list': dict(data=[dict(id='turn-new' if self.changed else 'turn-one')]), 'thread/resume': dict(thread=thread), 'thread/loaded/list': dict(data=[NATIVE]), 'turn/start': dict(turn=dict(id='turn-new', status='inProgress', error=None))}
+                    values = {'initialize': {}, 'thread/read': dict(thread=thread), 'thread/turns/list': dict(data=[dict(id='turn-new' if self.changed else 'turn-one')]), 'thread/resume': dict(thread=thread), 'thread/loaded/list': dict(data=[NATIVE]), 'turn/start': dict(turn=dict(id='turn-new', status='inProgress', error=None)), 'turn/steer': dict(turnId='turn-one')}
                     if method == 'turn/start' and self.lost:
                         return
                     self.send(stream, dict(id=value['id'], result=values[method]))
@@ -114,6 +114,49 @@ class Server:
 
 
 class ChannelTests(unittest.TestCase):
+    @unix_socket
+    def test_async_reply_steers_the_same_turn_and_follows_owned_socket_symlink(self):
+        for changed in (False,True):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory(dir='/tmp') as directory:
+                server=Server(directory,pending=True,changed=changed)
+                link=pathlib.Path(directory)/'app-server-control/app-server-control.sock'
+                real=pathlib.Path(directory)/'daemon.sock';link.rename(real);link.symlink_to(real)
+                row=target('needsInput')
+                value=dict(asyncRequest=dict(callId='ask',questions=[dict(title='测试问题',options=['收到','没有'])]))
+                request=m.async_request(row,value)
+                with patch.object(m,'excerpt',return_value=value):
+                    out=m.codex_send(dict(path=directory),row,'1',m.fingerprint(request))
+                server.join()
+                self.assertEqual(out['status'],'blocked' if changed else 'confirmed')
+                self.assertFalse(any(v.get('method') in ('turn/start','thread/resume') for v in server.calls))
+                sent=next((v['params'] for v in server.calls if v.get('method')=='turn/steer'),None)
+                if changed:self.assertIsNone(sent);continue
+                self.assertEqual(sent['expectedTurnId'],'turn-one')
+                self.assertEqual(sent['threadId'],NATIVE)
+                answer=json.loads(sent['input'][0]['text'].split('\n')[1])[0]
+                self.assertEqual(answer['answer'],'收到')
+                self.assertEqual(json.loads(answer['questionItemId']),['request_user_input_async','ask',0])
+
+    def test_async_question_receipt_is_not_an_answer_and_new_final_phase_is_readable(self):
+        records = [
+            dict(timestamp=1000, type='event_msg', payload=dict(type='task_started', turn_id='turn-one')),
+            dict(timestamp=1001, type='response_item', payload=dict(type='function_call', name='functions.request_user_input_async', call_id='ask', arguments=json.dumps(dict(questions=[dict(title='测试问题', options=['收到', '没有'])])))),
+            dict(timestamp=1002, type='response_item', payload=dict(type='function_call_output', call_id='ask', output='{"accepted":true}')),
+            dict(timestamp=1003, type='response_item', payload=dict(type='message', role='assistant', phase='final_answer', content=[dict(type='output_text', text='Current final')])),
+        ]
+        excerpt = m.parse(records, target())
+        self.assertEqual(excerpt['question'], '1: 测试问题\n  1. 收到\n  2. 没有')
+        self.assertEqual(excerpt['text'], 'Current final')
+        answer = dict(timestamp=1004, type='response_item', payload=dict(type='message', role='user', content=[dict(type='input_text', text='<send_user_message_question_reply>\n' + json.dumps([dict(answer='收到', questionItemId=json.dumps(['request_user_input_async','ask',0]))]) + '\n</send_user_message_question_reply>')]))
+        self.assertEqual(m.parse(records + [answer], target())['question'], '')
+        answer['payload']['content'][0]['text'] = answer['payload']['content'][0]['text'].replace('ask', 'other')
+        self.assertEqual(m.parse(records + [answer], target())['question'], excerpt['question'])
+        records.append(dict(timestamp=1004, type='event_msg', payload=dict(type='task_complete', turn_id='turn-one', last_agent_message='Completion final')))
+        records.append(dict(timestamp=1005, type='event_msg', payload=dict(type='task_complete', turn_id='other', last_agent_message='PRIVATE OTHER TURN')))
+        self.assertEqual(m.parse(records, target())['text'], 'Completion final')
+        records[2]['payload']['output'] = '{"accepted":false}'
+        self.assertEqual(m.parse(records, target())['question'], '')
+
     def test_unexpected_post_submission_errors_never_become_retryable(self):
         with patch.object(m, 'run', side_effect=TypeError('Malformed response after send')):
             self.assertEqual(m.guarded_run(dict(action='send'))['status'], 'uncertain')

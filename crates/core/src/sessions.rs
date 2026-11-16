@@ -101,6 +101,9 @@ pub struct LiveSession {
     pub background: bool,
     #[serde(skip)]
     pub event_at: u64,
+    /// Stable native question IDs; internal metadata, never question text.
+    #[serde(skip)]
+    pub input_request: String,
     #[serde(skip)]
     pub parent_id: String,
     #[serde(skip)]
@@ -1054,6 +1057,7 @@ impl Reader {
                 .into(),
                 background: cursor.activity.background_active(),
                 event_at: cursor.activity.at,
+                input_request: cursor.activity.input_request(),
                 parent_id: if cursor.activity.parent_session.is_empty() {
                     String::new()
                 } else {
@@ -2383,10 +2387,36 @@ pub fn focus_target(pid: u32, process_start: u64) -> serde_json::Value {
     }
     let observed_start = ancestors[0]["start"].as_u64().unwrap_or(process_start);
     let tty = process_tty(pid);
+    let foreground = tty
+        .as_deref()
+        .is_some_and(|tty| process_foreground(pid, tty));
     if !process_matches(pid, observed_start) {
         return json!({"status":"exited"});
     }
-    json!({"status":"found","ancestors":ancestors,"tty":tty})
+    json!({"status":"found","ancestors":ancestors,"tty":tty,"foreground":foreground})
+}
+
+#[cfg(unix)]
+fn process_foreground(pid: u32, tty: &str) -> bool {
+    let mut command = std::process::Command::new("/bin/ps");
+    command.args(["-p", &pid.to_string(), "-o", "pgid=,tpgid=,tty="]);
+    let Ok(bytes) = crate::process::run(command, vec![], Duration::from_secs(2)) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    foreground_listing_matches(&text, tty)
+}
+#[cfg(unix)]
+fn foreground_listing_matches(text: &str, tty: &str) -> bool {
+    let fields = text.split_whitespace().collect::<Vec<_>>();
+    fields.len() == 3
+        && fields[0].parse::<u32>().is_ok_and(|n| n > 0)
+        && fields[0] == fields[1]
+        && format!("/dev/{}", fields[2]) == tty
+}
+#[cfg(not(unix))]
+fn process_foreground(_pid: u32, _tty: &str) -> bool {
+    false
 }
 
 /// The controlling terminal, not stdin (which may be a pipe). Read only this scalar from ps.
@@ -2708,6 +2738,48 @@ mod tests {
         );
     }
     #[test]
+    fn cold_codex_tail_keeps_native_turn_and_stable_question_ids() {
+        let mut state = Activity::default();
+        let call = json!({"type":"response_item","payload":{"type":"function_call","name":"request_user_input_async","call_id":"ask","internal_chat_message_metadata_passthrough":{"turn_id":"native-turn"}}});
+        state.apply(session_events::codex(&call).unwrap());
+        assert_eq!(state.turn, "native-turn");
+        assert_eq!(state.turn_started_at(), 0);
+        assert_eq!(state.input_request(), "ask");
+        let receipt = json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"ask","output":"{\"accepted\":true}","internal_chat_message_metadata_passthrough":{"turn_id":"native-turn"}}});
+        state.apply(session_events::codex(&receipt).unwrap());
+        state.apply(session_events::codex(&json!({"type":"response_item","payload":{"type":"function_call","name":"other","call_id":"other","internal_chat_message_metadata_passthrough":{"turn_id":"native-turn"}}})).unwrap());
+        assert_eq!(state.phase, Some(Phase::NeedsInput));
+        assert_eq!(state.input_request(), "ask");
+    }
+
+    #[test]
+    fn async_question_remains_waiting_after_acceptance_until_turn_finishes() {
+        let call = json!({"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input_async","call_id":"ask"}}).to_string()+"\n";
+        let accepted = json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"ask","output":"{\"accepted\":true}"}}).to_string()+"\n";
+        let pending = call.clone() + &accepted + &row("response_item", "reasoning");
+        assert_eq!(parse(pending.as_bytes()), Some(Phase::NeedsInput));
+        let answer = json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":format!("<send_user_message_question_reply>\n{}\n</send_user_message_question_reply>",json!([{"answer":"PRIVATE ANSWER","questionItemId":json!(["request_user_input_async","ask",0]).to_string()}]))}]}}).to_string()+"\n";
+        assert_eq!(
+            parse((pending.clone() + &answer).as_bytes()),
+            Some(Phase::Working)
+        );
+        assert_eq!(
+            parse((pending.clone() + &answer.replace("ask", "other")).as_bytes()),
+            Some(Phase::NeedsInput)
+        );
+        assert_eq!(
+            parse((pending.clone() + &row("event_msg", "task_complete")).as_bytes()),
+            Some(Phase::Complete)
+        );
+        assert_eq!(
+            parse((pending + &row("event_msg", "task_started")).as_bytes()),
+            Some(Phase::Working)
+        );
+        let rejected = accepted.replace("true", "false");
+        assert_eq!(parse((call + &rejected).as_bytes()), Some(Phase::Working));
+    }
+
+    #[test]
     fn lifecycle_terminal_events_and_partial_records() {
         let mut log = row("event_msg", "task_started") + &row("response_item", "reasoning");
         assert_eq!(parse(log.as_bytes()), Some(Phase::Thinking));
@@ -2723,6 +2795,28 @@ mod tests {
         assert_eq!(parse(log.as_bytes()), Some(Phase::Interrupted));
         log += "\n";
         assert_eq!(parse(log.as_bytes()), Some(Phase::Working));
+    }
+    #[test]
+    #[cfg(unix)]
+    fn terminal_foreground_checks_match_the_process_group_and_exact_tty() {
+        assert!(foreground_listing_matches(
+            " 8512 8512 ttys002\n",
+            "/dev/ttys002"
+        ));
+        assert!(!foreground_listing_matches(
+            "2454 8512 ttys002",
+            "/dev/ttys002"
+        ));
+        assert!(!foreground_listing_matches(
+            "8512 8512 ttys002",
+            "/dev/ttys003"
+        ));
+        assert!(!foreground_listing_matches("-1 -1 ??", "/dev/??"));
+        assert!(!foreground_listing_matches(
+            "8512 8512 ttys002 extra",
+            "/dev/ttys002"
+        ));
+        assert!(!foreground_listing_matches("", "/dev/ttys002"));
     }
     #[test]
     fn focus_targets_walk_ancestors_and_reject_reused_or_exited_processes() {

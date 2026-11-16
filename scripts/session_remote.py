@@ -24,7 +24,7 @@ def trae_helper():
 
 def hook_names(provider):
     return CODEBUDDY if provider=='codebuddy' else CLAUDE if provider=='claude' else CURSOR if provider=='cursor' else ZCODE if provider=='zcode' else AGY
-EVENT_KEYS = {'kind', 'session', 'sessionSource', 'classification', 'originator', 'parentSession', 'parentSessionPath', 'turn', 'record', 'parent', 'call', 'tool', 'at', 'pid', 'processStart', 'fullyIdle', 'failed', 'interrupted', 'notification'}
+EVENT_KEYS = {'kind', 'session', 'sessionSource', 'classification', 'originator', 'parentSession', 'parentSessionPath', 'turn', 'record', 'parent', 'call', 'tool', 'at', 'pid', 'processStart', 'fullyIdle', 'failed', 'interrupted', 'notification', 'questionAccepted', 'answeredCalls'}
 
 def text(value):
     return value[:256] if isinstance(value, str) else ''
@@ -360,6 +360,21 @@ def milliseconds(value):
     try: return max(0, int(datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp() * 1000))
     except ValueError: return 0
 
+def codex_async_answers(v):
+    p = v.get('payload') or {}
+    if v.get('type') != 'response_item' or p.get('type') != 'message' or p.get('role') != 'user':return []
+    calls = []
+    for part in p.get('content') or []:
+        value = part.get('text', '').strip() if isinstance(part, dict) else ''
+        prefix, suffix = '<send_user_message_question_reply>', '</send_user_message_question_reply>'
+        if not value.startswith(prefix) or not value.endswith(suffix):continue
+        try:
+            for item in json.loads(value[len(prefix):-len(suffix)]):
+                key = json.loads(item['questionItemId'])
+                if key[0] == 'request_user_input_async' and isinstance(key[1], str) and 0 < len(key[1]) <= 256:calls.append(key[1])
+        except (ValueError, TypeError, KeyError, IndexError):pass
+    return calls
+
 def metadata(v, provider, hook):
     if hook: return [{k: value for k, value in v.items() if k in EVENT_KEYS}]
     if provider in ('pi','omp'):return pi_metadata(v)
@@ -370,8 +385,16 @@ def metadata(v, provider, hook):
         p = v.get('payload') or {}; key = (v.get('type'), p.get('type'))
         kinds = {('event_msg','task_started'):'start',('event_msg','task_complete'):'complete',('event_msg','turn_aborted'):'interrupted',('event_msg','error'):'failed',('response_item','reasoning'):'thinking',('response_item','function_call'):'tool',('response_item','custom_tool_call'):'tool',('response_item','function_call_output'):'output',('response_item','custom_tool_call_output'):'output'}
         kind = 'identity' if v.get('type') == 'session_meta' else kinds.get(key)
+        answered = codex_async_answers(v)
+        if answered:kind = 'async_answers'
         if not kind:return []
         row=dict(kind=kind,at=at,session=text(p.get('id')) if kind=='identity' else '',turn=text(p.get('turn_id')),call=text(p.get('call_id')),tool=text(p.get('name')))
+        if not row['turn']:row['turn']=text((p.get('internal_chat_message_metadata_passthrough') or {}).get('turn_id'))
+        if answered:row['answeredCalls']=answered
+        if kind=='output':
+            try:
+                if json.loads(p.get('output','{}')).get('accepted') is True:row['questionAccepted']=True
+            except (ValueError,TypeError,AttributeError):pass
         if kind=='identity':
             row['sessionSource']=text(p.get('source'))
             if text(p.get('originator')):row['originator']=text(p['originator'])

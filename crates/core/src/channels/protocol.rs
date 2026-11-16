@@ -54,14 +54,23 @@ impl Frame {
             ..Default::default()
         }
     }
-    pub fn acknowledge(mut self, code: u16) -> Vec<u8> {
+    #[cfg(test)]
+    pub fn acknowledge(self, code: u16) -> Vec<u8> {
+        self.acknowledge_response(code, None)
+    }
+    pub fn acknowledge_response(
+        mut self,
+        code: u16,
+        response: Option<&serde_json::Value>,
+    ) -> Vec<u8> {
+        use base64::Engine;
         self.headers.retain(|h| h.key != "biz_rt");
         self.headers.push(Header {
             key: "biz_rt".into(),
             value: "0".into(),
         });
         self.payload = Some(
-            serde_json::json!({"code":code,"headers":{},"data":null})
+            serde_json::json!({"code":code,"headers":{},"data":response.map(|v|base64::engine::general_purpose::STANDARD.encode(v.to_string()))})
                 .to_string()
                 .into_bytes(),
         );

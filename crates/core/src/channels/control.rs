@@ -1,4 +1,4 @@
-use super::{Command, Config, Session, codex, configuration, content, db, random_id};
+use super::{Command, Config, Session, cards, codex, configuration, content, db, random_id};
 use crate::{
     models::{Settings, Source, now},
     process,
@@ -144,6 +144,16 @@ fn saved_prompt(store: &Store, target: &Session) -> Result<Option<String>> {
 fn local_codex(store: &Store, source: &Source, target: &Session, text: &str) -> Outcome {
     let root = expand(&source.path);
     if let Ok(mut client) = codex::Client::open(&root) {
+        if target.session.phase == Phase::NeedsInput
+            && let Some(request) = codex::async_request(target, &content::local(source, target))
+        {
+            return match saved_prompt(store, target) {
+                Ok(Some(hash)) if hash == codex::fingerprint(&request) => {
+                    client.answer_async(target, &request, text)
+                }
+                _ => Outcome::blocked("问题已改变或尚未同步，请回复最新的问题通知"),
+            };
+        }
         let thread = match client.attach(target, target.session.phase == Phase::NeedsInput) {
             Ok(thread) => thread,
             Err(e) => return Outcome::blocked(&e.to_string()),
@@ -340,6 +350,12 @@ fn execute(store: &Store, c: &Config, target: &Session, text: &str) -> Outcome {
             Err(_) => Outcome::uncertain("远程连接中断，无法确认指令是否提交；请核对原会话"),
         };
     }
+    if source.provider == "claude"
+        && target.session.phase == Phase::NeedsInput
+        && content::local(&source, target).claude_request.is_some()
+    {
+        return super::claude::answer(store, &source, target, text);
+    }
     if matches!(source.provider.as_str(), "codex" | "chatgpt-work") {
         return local_codex(store, &source, target, text);
     }
@@ -376,7 +392,16 @@ fn record(store: &Store, c: &Config, command: &Command, outcome: &Outcome) -> Re
     let changed = tx.execute("UPDATE channel_commands SET status=?1,reason=?2,receipt=?3 WHERE epoch=?4 AND id=?5 AND status IN ('dispatching','submitted')", params![outcome.status,outcome.reason,outcome.receipt.to_string(),c.epoch,command.id])?;
     if changed == 1 && configuration(&tx)?.epoch == c.epoch {
         let language = db::language(&tx);
-        db::outbox_raw(
+        let title = crate::localization::translate(&language, status_label(&outcome.status));
+        let reason = crate::localization::translate(&language, &outcome.reason);
+        let card = cards::build(
+            &title,
+            cards::command_color(&outcome.status),
+            &command.id,
+            &reason,
+            "",
+        );
+        db::outbox_card(
             &tx,
             c,
             &command.reply_to,
@@ -387,6 +412,7 @@ fn record(store: &Store, c: &Config, command: &Command, outcome: &Outcome) -> Re
                 crate::localization::translate(&language, status_label(&outcome.status)),
                 crate::localization::translate(&language, &outcome.reason)
             ),
+            &card,
         )?;
     }
     tx.commit()?;
@@ -450,6 +476,7 @@ pub(super) fn process_event(store: &Store) -> Result<()> {
     let mut question = None;
     let mut prompt_hash = None;
     let mut approval = false;
+    let mut option_request = None;
     if let Ok(source) = source {
         if source.host_id.is_some() {
             if let Ok(value) = remote(&settings, &source, &target, "read", "", false, None) {
@@ -460,10 +487,24 @@ pub(super) fn process_event(store: &Store) -> Result<()> {
                     .map(str::to_owned);
                 prompt_hash = value["promptHash"].as_str().map(str::to_owned);
                 approval = value["approval"] == true;
+                option_request = value
+                    .get("questionRequest")
+                    .filter(|v| v.is_object())
+                    .cloned();
             }
         } else {
             excerpt = content::local(&source, &target);
+            let async_request = if source.provider == "claude" {
+                super::claude::request(&target, &excerpt)
+            } else {
+                codex::async_request(&target, &excerpt)
+            };
             if target.session.phase == Phase::NeedsInput
+                && let Some(request) = async_request
+            {
+                prompt_hash = Some(codex::fingerprint(&request));
+                option_request = Some(request);
+            } else if target.session.phase == Phase::NeedsInput
                 && matches!(source.provider.as_str(), "codex" | "chatgpt-work")
                 && let Ok(mut client) = codex::Client::open(&expand(&source.path))
                 && client.attach(&target, true).is_ok()
@@ -477,6 +518,9 @@ pub(super) fn process_event(store: &Store) -> Result<()> {
                         "item/commandExecution/requestApproval" | "item/fileChange/requestApproval"
                     )
                 );
+                if !approval {
+                    option_request = Some(request);
+                }
             }
         }
     }
@@ -509,7 +553,16 @@ pub(super) fn process_event(store: &Store) -> Result<()> {
                 target.key
             ))
         };
-        db::outbox_raw(
+        let title = tr(target.session.phase.label());
+        let context = target.title(&settings.appearance.language);
+        let card = cards::build(
+            &title,
+            cards::phase_color(target.session.phase),
+            &context,
+            &body,
+            &footer,
+        );
+        db::outbox_card(
             &tx,
             &c,
             "",
@@ -519,7 +572,11 @@ pub(super) fn process_event(store: &Store) -> Result<()> {
                 target.title(&settings.appearance.language),
                 tr(target.session.phase.label())
             ),
+            &card,
         )?;
+        if let Some(request) = option_request {
+            super::actions::attach(&tx, &request)?;
+        }
         if let Some(hash) = prompt_hash {
             let outgoing: String = tx.query_row(
                 "SELECT id FROM channel_outbox WHERE rowid=last_insert_rowid()",
@@ -554,6 +611,34 @@ pub(super) fn confirm(store: &Store) -> Result<()> {
         .into_iter()
         .take(5)
     {
+        if command.receipt["adapter"] == "claudeHook" {
+            let request = command.receipt["requestId"].as_str().unwrap_or("");
+            let accepted = store
+                .db
+                .query_row(
+                    "SELECT consumed=1 FROM channel_claude_requests WHERE id=?1 AND epoch=?2",
+                    params![request, c.epoch],
+                    |r| r.get::<_, bool>(0),
+                )
+                .optional()?
+                .unwrap_or(false);
+            let delivered = db::session(&store.db, &c.epoch, &command.session_id)?
+                .and_then(|target| {
+                    source(&settings, &target)
+                        .ok()
+                        .map(|source| content::local(&source, &target).claude_answered_call)
+                })
+                .is_some_and(|id| Some(id.as_str()) == command.receipt["callId"].as_str());
+            if accepted && delivered {
+                record(
+                    store,
+                    &c,
+                    &command,
+                    &Outcome::confirmed("原会话已接收回答", command.receipt.clone()),
+                )?;
+                continue;
+            }
+        }
         let target = db::session(&store.db, &c.epoch, &command.session_id)?;
         let excerpt = if let Some(target) = target
             && let Ok(source) = source(&settings, &target)

@@ -6,6 +6,9 @@ use std::{
 };
 
 fn main() {
+    if aieyes_core::channels::claude::run_if_requested() {
+        return;
+    }
     if aieyes_core::session_hooks::run_if_requested() {
         return;
     }

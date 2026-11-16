@@ -89,16 +89,15 @@ class IdentityTests(unittest.TestCase):
             self.assertAlmostEqual(agy.expiry_timestamp(current['token']['expiry']),
                                    agy.expiry_timestamp('2099-01-01T00:00:00Z') + float('0.' + fraction[:6]), places=5)
 
-    def test_expired_access_is_renewed_by_cli_and_owner_is_rechecked(self):
+    def test_expired_identity_only_reports_manual_login_without_running_cli(self):
         old = credential()
         old['token']['expiry'] = '2001-01-01T00:00:00Z'
-        new = credential()
-        self.native_mock.return_value = {'groups': []}
-        with patch.object(agy, 'read_credential', return_value=new):
-            self.assertEqual(agy.identity_credential(old), new)
-        with patch.object(agy, 'read_credential', return_value=credential('other')):
-            with self.assertRaisesRegex(agy.PublicError, '账户已变化'):
+        with patch.object(agy.subprocess, 'run', side_effect=AssertionError('no login process')):
+            with self.assertRaisesRegex(agy.PublicError, '手动重新登录'):
                 agy.identity_credential(old)
+            with patch.object(agy, 'read_credential', return_value=old):
+                self.assertEqual(agy.observe()['metadataError'], agy.RELOGIN)
+        self.native_mock.assert_not_called()
 
     def test_newer_same_owner_file_is_used_and_conflict_is_reported(self):
         with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {'HOME': root, 'USERPROFILE': root, 'SSH_CONNECTION': 'fixture'}, clear=True):
@@ -286,6 +285,36 @@ class IdentityTests(unittest.TestCase):
 
 
 class NativeUsageTests(unittest.TestCase):
+    def test_expired_and_revoked_logins_never_start_cli(self):
+        expired = credential()
+        expired['token']['expiry'] = '2001-01-01T00:00:00Z'
+        for current in [expired, credential()]:
+            calls = []
+            def run(args, **kwargs):
+                calls.append(args)
+                self.assertEqual(args[0], 'curl', 'background auth must never launch agy/browser')
+                return subprocess.CompletedProcess(args, 22, b'private-auth-response', b'401')
+            with patch.dict(os.environ, {'AIEYES_AGY_BINARY': '/fixture/agy'}), \
+                    patch.object(agy, 'read_credential', return_value=current), \
+                    patch.object(agy.subprocess, 'run', side_effect=run):
+                self.assertEqual(agy.quota(), {'error': agy.RELOGIN})
+            self.assertEqual(len(calls), 0 if current is expired else 1)
+
+    def test_network_failure_or_changed_login_does_not_start_cli(self):
+        current = credential()
+        with patch.dict(os.environ, {'AIEYES_AGY_BINARY': '/fixture/agy'}), \
+                patch.object(agy, 'read_credential', return_value=current), \
+                patch.object(agy.subprocess, 'run', return_value=subprocess.CompletedProcess([], 7, b'', b'000')) as run:
+            self.assertIn('网络连接失败', agy.quota()['error'])
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_args.args[0][0], 'curl')
+        with patch.dict(os.environ, {'AIEYES_AGY_BINARY': '/fixture/agy'}), \
+                patch.object(agy, 'read_credential', return_value=credential('other')), \
+                patch.object(agy, 'request_json', return_value={}), \
+                patch.object(agy.subprocess, 'run', side_effect=AssertionError('changed login must not start CLI')):
+            with self.assertRaisesRegex(agy.PublicError, '账户已变化'):
+                agy.native_quota(current)
+
     def test_only_builtin_usage_runs_in_empty_workspace_and_raw_output_is_not_returned(self):
         def run(args, **kwargs):
             self.assertEqual(args[1:], ['--log-file', os.devnull, '--print', '/usage', '--output-format', 'json'])
@@ -294,11 +323,17 @@ class NativeUsageTests(unittest.TestCase):
             self.assertEqual(kwargs['env']['AIEYES_INTERNAL'], '1')
             self.assertNotIn('fake-private', str(args))
             return subprocess.CompletedProcess(args, 0, b'{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[]}},"private":"discard"}')
-        with patch.dict(os.environ, {'AIEYES_AGY_BINARY': '/fixture/agy'}), patch.object(agy.subprocess, 'run', side_effect=run):
+        with patch.dict(os.environ, {'AIEYES_AGY_BINARY': '/fixture/agy'}), \
+                patch.object(agy, 'request_json', return_value={}) as preflight, \
+                patch.object(agy, 'read_credential', return_value=credential()), \
+                patch.object(agy.subprocess, 'run', side_effect=run):
             self.assertEqual(agy.native_quota(credential()), {'groups': []})
+            preflight.assert_called_once_with(credential(), agy.USERINFO_URL)
         with patch.object(agy.subprocess, 'run', side_effect=AssertionError('IDE must not run CLI')):
             self.assertIsNone(agy.native_quota({'_origin': 'ide'}))
         with patch.dict(os.environ, {'AIEYES_AGY_BINARY': '/fixture/agy'}), \
+                patch.object(agy, 'request_json', return_value={}), \
+                patch.object(agy, 'read_credential', return_value=credential()), \
                 patch.object(agy.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'{"status":"SUCCESS","response":"private"}')):
             with self.assertRaisesRegex(agy.PublicError, '未返回模型组'):
                 agy.native_quota(credential())

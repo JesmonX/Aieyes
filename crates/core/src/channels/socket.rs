@@ -238,10 +238,17 @@ pub(super) fn unix(path: &std::path::Path) -> Result<Socket> {
     };
     let meta = std::fs::symlink_metadata(path).context("原会话控制接口不可用")?;
     ensure!(
-        meta.file_type().is_socket() && meta.uid() == unsafe { libc::geteuid() },
+        (meta.file_type().is_socket() || meta.file_type().is_symlink())
+            && meta.uid() == unsafe { libc::geteuid() },
         "会话控制接口身份不符"
     );
-    let socket = UnixStream::connect(path).context("无法连接原会话控制接口")?;
+    let resolved = path.canonicalize().context("原会话控制接口不可用")?;
+    let target = std::fs::symlink_metadata(&resolved)?;
+    ensure!(
+        target.file_type().is_socket() && target.uid() == unsafe { libc::geteuid() },
+        "会话控制接口身份不符"
+    );
+    let socket = UnixStream::connect(&resolved).context("无法连接原会话控制接口")?;
     socket.set_read_timeout(Some(Duration::from_secs(3)))?;
     socket.set_write_timeout(Some(Duration::from_secs(3)))?;
     let timer = socket.try_clone()?;

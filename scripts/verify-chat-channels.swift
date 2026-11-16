@@ -18,7 +18,10 @@ import Foundation
         }
         precondition(SessionChannelAutomation.validTTY("/dev/ttys999"))
         precondition(SessionChannelAutomation.validTTY("/dev/pts/999"))
-        precondition(!SessionChannelAutomation.foreground(pid: -1, tty: "/dev/ttys999"))
+        let focus = try JSONDecoder().decode(SessionFocus.Target.self, from: Data(#"{"status":"found","tty":"/dev/ttys999","foreground":true}"#.utf8))
+        precondition(focus.foreground == true && focus.tty == "/dev/ttys999")
+        let legacyFocus = try JSONDecoder().decode(SessionFocus.Target.self, from: Data(#"{"status":"found","tty":"/dev/ttys999"}"#.utf8))
+        precondition(legacyFocus.foreground != true)
         precondition(SessionChannelAutomation.script(bundle: "unsupported") == nil)
         for bundle in SessionChannelAutomation.terminals {
             let script = SessionChannelAutomation.script(bundle: bundle)!

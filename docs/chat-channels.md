@@ -7,12 +7,14 @@ Aieyes 可通过飞书应用机器人，把已监测会话的问题和最终回�
 ## 配置
 
 1. 在飞书开放平台创建**企业自建应用**，添加机器人能力。
-2. 开通接收机器人单聊消息的权限 `im:message.p2p_msg:readonly`，以及以应用身份发送消息的权限 `im:message:send_as_bot`。事件订阅添加 `im.message.receive_v1`，接收方式选择**长连接**。Aieyes 会主动连接飞书，无需公网回调地址或入站端口。
+2. 开通接收机器人单聊消息的权限 `im:message.p2p_msg:readonly`，以及以应用身份发送消息的权限 `im:message:send_as_bot`。在**事件配置**中添加 `im.message.receive_v1`；在**回调配置**中添加新版卡片回传交互 `card.action.trigger`。两处接收方式均选择**长连接**。Aieyes 会主动连接飞书，无需公网回调地址或入站端口。
 3. 在 Aieyes **设置 → 聊天渠道**填写 App ID、App Secret，启用并保存。App Secret 存在操作系统凭据库，配置数据库只保存引用。编辑时密钥留空会保留已存凭据。
 4. 根据飞书后台要求完成应用版本发布和可用范围设置，使自己的账号可以私聊机器人。长连接显示已连接后，点击**创建配对码**，将完整 `/pair aieyes-…` 指令发送给机器人。
 5. 收到配对成功回复后，发送 `/sessions` 查看会话。Aieyes 和相关来源须保持运行、启用；SSH 来源还需要可用的 SSH 连接和目标机器上的 Python 3。
 
 配对码有效期为 10 分钟，最多尝试 5 次。一次只绑定一个 `open_id + chat_id + tenant_key`；群聊、其他应用、其他发送者、非文本消息均不进入指令队列。更换绑定账号须先在本机解除配对。更换 App ID 后需要重新配对。
+
+会话问题、完成通知和指令结果使用飞书消息卡片：橙色表示等待输入或待处理，绿色表示完成或已确认，红色表示失败。正文支持 Markdown 加粗、列表和代码块，会话信息与操作提示使用小号灰字。提供完整选项的结构化问题可直接点击按钮；多题逐题选择，选完后提交一次。按钮会高亮已选项，提交后禁用；过期卡片、其他账号或群聊点击不会提交。Claude 的多选题同样生成按钮：点击切换选中，可再次点击取消；含多选题的卡片底部有**提交**按钮，所有问题都有选择后点击才会提交。选项附带的预览（代码片段或等宽示意）以代码块显示在对应按钮上方，过长会截断，卡片超出飞书大小限制时只保留按钮。自由输入仍通过引用卡片后发送文本回答，多选题可回复 `1,3`，多题时逐行填写 `1=1,3`、`2=2`；审批请求保留原来的明确回复方式。
 
 macOS 的原生终端输入还需要开启**允许按终端适配输入**，并点击**授权终端自动化**。只有此按钮会请求系统自动化权限；后台收到指令不会弹出授权窗口。原生会话 API 不需要终端自动化权限。
 
@@ -39,11 +41,14 @@ macOS 的原生终端输入还需要开启**允许按终端适配输入**，并�
 | --- | --- |
 | Codex / ChatGPT Work，已有兼容的 app-server 控制接口 | 验证原 thread、工作目录和最新 turn 后，回答可重放的结构化问题或单次审批，或在同一 thread 开启下一轮 |
 | Codex，原生 socket 不可用，但已有 CLI 支持 `queue --thread … --message … --resume` | 核对当前原生记录后排队到同一 thread。只回执“已提交”，不能把 CLI 成功退出视为已执行；等待提问时不使用此回退 |
+| 本机 Claude CLI 的 `AskUserQuestion` | 配对后为启用的本机 Claude 来源安装独立的提问 hook；单选、多选题均生成按钮，选项预览以代码块显示，答案通过原 CLI 的 `PermissionRequest.updatedInput` 返回，不依赖终端自动化授权 |
 | 本机或 SSH Linux 的 tmux 会话 | 开启终端输入后，核对 PID、启动时间、TTY、父进程、唯一 pane 和已支持 Agent 的前台命令；提交文本并等待会话记录确认 |
 | macOS 原生前端中的 Ghostty、iTerm2、Terminal | 开启并授权终端输入后，按 TTY 唯一定位原标签页或分屏，再检查桌面解锁状态、原进程及前台进程组；通过应用自己的 Apple Events 输入 |
 | 其他 App、IDE、终端或 Agent | 发送可读取的问题、完成通知和最终回复；没有可靠控制接口时保留指令，说明不能提交的原因 |
 
 Codex 原生控制入口为该来源目录下的 `app-server-control/app-server-control.sock`。不会连接其他来源的 home，也不会新启动 app-server 替代原应用。较旧版本、Windows 上没有此 Unix socket 的安装、未加载的提问、未向新客户端重放的问题，会按实际能力保留指令或退到已有 CLI 队列。
+
+Claude 提问 hook 仅匹配 `AskUserQuestion`，保留已有 hooks 和权限配置，并在来源的 `.aieyes` 目录保存原设置备份。安装前已弹出的问题需要重新发起；如果当前 CLI 未加载新 hooks，退出并恢复原会话后再提问。只有渠道开启、已配对、来源启用且后台在线时才接收答案；逐次核对原进程、问题及工具调用 ID。关闭渠道或来源后不再回答问题，原 CLI 界面仍可操作。每次 hook 最长等待 24 小时；SSH Claude 的提问 hook 暂未接入。
 
 tmux 和 macOS 终端适配只在本轮结束或等待输入时提交。原 Agent 退出、PID 被复用、前台变成 shell、出现多个匹配分屏、桌面自动化缺少授权等情况会保留指令。SSH 上的图形化 App 自动化和非 Linux 远程终端控制不在第一版范围内。终端审批没有原生请求标识时，需要回原窗口处理。
 
@@ -77,4 +82,4 @@ Aieyes 退出、电脑休眠或 SSH 不可达时，控制能力会暂停。**已
 
 真实飞书账号、企业权限与发布流程、实际 app-server 对未决请求的重放，以及真实终端提交仍需按 [手动验证](manual-verification.md)完成验收。第一版没有将这些模拟测试描述为真实私聊已接通。
 
-实现依据：[飞书事件订阅](https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-)、[飞书官方长连接 SDK 协议](https://github.com/larksuite/oapi-sdk-go/tree/v3_main/ws)、[OpenAI app-server](https://learn.chatgpt.com/docs/app-server.md)、[Codex developer commands](https://learn.chatgpt.com/docs/developer-commands.md)。
+实现依据：[飞书事件订阅](https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-)、[飞书官方长连接 SDK 协议](https://github.com/larksuite/oapi-sdk-go/tree/v3_main/ws)、[OpenAI app-server](https://learn.chatgpt.com/docs/app-server.md)、[Codex developer commands](https://learn.chatgpt.com/docs/developer-commands.md)、[Claude Code hooks](https://code.claude.com/docs/en/hooks)。

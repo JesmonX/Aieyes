@@ -75,11 +75,31 @@ def record_session(value):
     return value.get('sessionId', value.get('session_id'))
 
 
+def async_answers(value):
+    p = value.get('payload') or {}
+    if value.get('type') != 'response_item' or p.get('type') != 'message' or p.get('role') != 'user':
+        return []
+    calls = []
+    for part in p.get('content') or []:
+        text = part.get('text', '').strip() if isinstance(part, dict) else ''
+        prefix, suffix = '<send_user_message_question_reply>', '</send_user_message_question_reply>'
+        if not text.startswith(prefix) or not text.endswith(suffix):
+            continue
+        try:
+            for item in json.loads(text[len(prefix):-len(suffix)]):
+                key = json.loads(item['questionItemId'])
+                if key[0] == 'request_user_input_async' and isinstance(key[1], str) and 0 < len(key[1]) <= 256:
+                    calls.append(key[1])
+        except (ValueError, TypeError, KeyError, IndexError):
+            pass
+    return calls
+
+
 def parse(records, target):
     out = dict(text='', question='', userText='', userAt=0)
     session = target['session']
     codex = session['provider'] in ('codex', 'chatgpt-work')
-    turn, call = '', ''
+    turn, call, pending_async = '', '', False
     for value in records:
         native = record_session(value)
         if (native is not None and native != session['nativeSession']) or value.get('isSidechain') or value.get('is_sidechain') or value.get('agentId'):
@@ -90,7 +110,7 @@ def parse(records, target):
             continue
         if codex and (value.get('type') == 'turn_context' or value.get('type') == 'event_msg' and p.get('type') == 'task_started'):
             turn = p.get('turn_id', '')
-        current = p.get('turn_id') or p.get('turnId') or turn
+        current = p.get('turn_id') or p.get('turnId') or (p.get('internal_chat_message_metadata_passthrough') or {}).get('turn_id') or turn
         if codex and session.get('turnId') and not current:
             continue
         if session.get('turnId') and current and current != session['turnId']:
@@ -101,17 +121,30 @@ def parse(records, target):
             continue
         if codex:
             if value.get('type') == 'retained_context' and isinstance(p.get('questions'), list):
-                out['question'] = questions(p['questions']); call = p.get('call_id', '')
-            if value.get('type') == 'response_item' and p.get('type') == 'function_call' and p.get('name', '').endswith('request_user_input'):
+                out['question'] = questions(p['questions']); call = p.get('call_id', ''); pending_async = False
+                out.pop('asyncRequest', None)
+            if value.get('type') == 'response_item' and p.get('type') == 'function_call' and p.get('name', '').rsplit('.', 1)[-1].rsplit(':', 1)[-1] in ('request_user_input', 'request_user_input_async'):
                 try:
                     out['question'] = questions(json.loads(p['arguments']).get('questions'))
                     call = p.get('call_id', '')
+                    pending_async = p.get('name', '').endswith('request_user_input_async')
+                    if pending_async:out['asyncRequest'] = dict(callId=call, questions=json.loads(p['arguments']).get('questions'))
+                    else:out.pop('asyncRequest', None)
                 except (KeyError, ValueError, TypeError):
                     pass
             if value.get('type') == 'response_item' and p.get('type') == 'function_call_output' and call and p.get('call_id') == call:
-                out['question'] = ''; call = ''
+                try:
+                    accepted = pending_async and json.loads(p.get('output', '{}')).get('accepted') is True
+                except (ValueError, TypeError, AttributeError):
+                    accepted = False
+                if not accepted:
+                    out['question'] = ''; call = ''
+                    out.pop('asyncRequest', None)
             if value.get('type') == 'response_item' and p.get('type') == 'message':
-                if p.get('role') == 'assistant' and p.get('phase') == 'final':
+                if pending_async and call in async_answers(value):
+                    out['question'] = ''; call = ''
+                    out.pop('asyncRequest', None)
+                if p.get('role') == 'assistant' and p.get('phase') in ('final', 'final_answer'):
                     out['text'] = text_blocks(p.get('content'))
                 if p.get('role') == 'user':
                     out['userText'] = text_blocks(p.get('content')); out['userAt'] = at
@@ -120,6 +153,8 @@ def parse(records, target):
                     out['userText'] = p.get('message', ''); out['userAt'] = at
                 if p.get('type') == 'agent_message' and p.get('phase') == 'final':
                     out['text'] = p.get('message', '')
+                if p.get('type') == 'task_complete' and isinstance(p.get('last_agent_message'), str):
+                    out['text'] = p['last_agent_message']
         else:
             message = value.get('message') if isinstance(value.get('message'), dict) else value
             role = message.get('role') or value.get('type')
@@ -227,6 +262,10 @@ class Rejected(Exception):
 class WebSocket:
     """Only the local Codex Unix socket; no internet listener, TLS or credentials."""
     def __init__(self, path):
+        meta = os.lstat(path)
+        if not (stat.S_ISSOCK(meta.st_mode) or stat.S_ISLNK(meta.st_mode)) or meta.st_uid != os.geteuid():
+            raise ValueError('会话控制接口身份不符')
+        path = pathlib.Path(path).resolve(strict=True)
         meta = os.lstat(path)
         if not stat.S_ISSOCK(meta.st_mode) or meta.st_uid != os.geteuid():
             raise ValueError('会话控制接口身份不符')
@@ -392,7 +431,7 @@ def describe(request, language='zh-CN'):
 
 def answer(request, text):
     p, method = request['params'], request['method']
-    if method in ('item/tool/requestUserInput', 'tool/requestUserInput'):
+    if method in ('item/tool/requestUserInput', 'tool/requestUserInput', 'aieyes/asyncQuestion'):
         items = p.get('questions') or []
         if not items:
             raise ValueError('原会话问题已不可用')
@@ -420,6 +459,22 @@ def answer(request, text):
     raise ValueError('此类输入需要回到原窗口处理，指令已保留')
 
 
+def async_request(target, value):
+    raw = value.get('asyncRequest') or {}
+    if not raw.get('callId') or not raw.get('questions'):return None
+    normalized = []
+    for i, q in enumerate(raw['questions']):
+        options = [dict(label=o if isinstance(o,str) else o.get('label','')) for o in q.get('options') or []]
+        normalized.append(dict(id=str(i+1), questionIndex=i, question=q.get('question') or q.get('title') or '', options=options))
+    return dict(method='aieyes/asyncQuestion', params=dict(threadId=target['session']['nativeSession'], turnId=target['session']['turnId'], itemId=raw['callId'], questions=normalized))
+
+
+def async_answer(request, text):
+    answers = answer(request, text)['answers']; p=request['params']
+    rows = [dict(answer=answers[q['id']]['answers'][0], question=q['question'], questionItemId=json.dumps(['request_user_input_async',p['itemId'],q['questionIndex']],separators=(',',':'),ensure_ascii=False)) for q in p['questions']]
+    return '<send_user_message_question_reply>\n'+json.dumps(rows,separators=(',',':'),ensure_ascii=False)+'\n</send_user_message_question_reply>'
+
+
 def codex_send(source, target, text, prompt_hash):
     root = pathlib.Path(os.path.expanduser(source['path']))
     ws = None
@@ -429,6 +484,22 @@ def codex_send(source, target, text, prompt_hash):
         pass
     if ws:
         try:
+            request = async_request(target, excerpt(source,target)) if target['session']['phase'] == 'needsInput' else None
+            if request:
+                if not prompt_hash or fingerprint(request) != prompt_hash:
+                    return result('blocked', '问题已改变或尚未同步，请回复最新的问题通知')
+                reply = async_answer(request,text)
+                if (ws.verify(target).get('status') or {}).get('type') != 'active':
+                    return result('blocked', '原会话状态已改变，指令已保留')
+                try:
+                    response = ws.call('turn/steer',dict(threadId=target['session']['nativeSession'],expectedTurnId=target['session']['turnId'],input=[dict(type='text',text=reply,text_elements=[])]))
+                    if response.get('turnId') == target['session']['turnId']:
+                        return result('confirmed','原会话已接收回答',adapter='codex',asyncAnswer=True,turnId=response['turnId'])
+                    return result('uncertain','原会话返回的执行结果不完整，请核对原窗口')
+                except Rejected:
+                    return result('blocked','原会话拒绝了指令，请核对原窗口')
+                except (OSError,ValueError,TimeoutError):
+                    return result('uncertain','回答可能已提交，请核对原会话')
             thread = ws.attach(target, target['session']['phase'] == 'needsInput')
             if target['session']['phase'] == 'needsInput':
                 request = ws.question(target)
@@ -566,7 +637,12 @@ def run(request):
     if source['id'] != session['sourceId'] or not provider_matches or (source.get('hostId') or 'local') != session['machineId']:
         return result('blocked', '会话来源身份不符')
     if request['action'] == 'read':
-        out = dict(excerpt=excerpt(source, target), question=None, promptHash=None, approval=False)
+        out = dict(excerpt=excerpt(source, target), question=None, promptHash=None, approval=False, questionRequest=None)
+        pending_async = async_request(target,out['excerpt']) if session['phase'] == 'needsInput' else None
+        if pending_async:
+            out['promptHash']=fingerprint(pending_async)
+            out['questionRequest']=pending_async
+            return out
         if session['provider'] in ('codex', 'chatgpt-work') and session['phase'] == 'needsInput':
             ws = None
             try:
@@ -576,6 +652,7 @@ def run(request):
                 if pending:
                     out['question'] = clip(describe(pending, request.get('language'))); out['promptHash'] = fingerprint(pending)
                     out['approval'] = pending['method'] in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval')
+                    if not out['approval']:out['questionRequest']=pending
             except (OSError, ValueError, Rejected, TimeoutError):
                 pass
             finally:

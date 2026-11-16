@@ -588,6 +588,38 @@ fn excerpts_ignore_reasoning_tools_children_other_turns_and_partial_jsonl() {
 }
 
 #[test]
+#[cfg(test)]
+fn codex_async_question_receipt_and_current_final_answer_are_readable() {
+    let (_dir, store, source) = fixture();
+    enabled(&store, true);
+    let row = observe(&store, live(&source, Phase::NeedsInput));
+    let at = row.session.turn_started_at + 1000;
+    let mut values = vec![
+        json!({"timestamp":at,"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-one"}}),
+        json!({"timestamp":at+1,"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input_async","call_id":"ask","arguments":json!({"questions":[{"title":"测试问题","options":["收到","没有"]}]}).to_string()}}),
+        json!({"timestamp":at+2,"type":"response_item","payload":{"type":"function_call_output","call_id":"ask","output":"{\"accepted\":true}"}}),
+        json!({"timestamp":at+3,"type":"response_item","payload":{"type":"function_call_output","call_id":"other","output":"PRIVATE TOOL RESULT"}}),
+    ];
+    assert_eq!(
+        content::parse(values.clone(), &row).question,
+        "1: 测试问题\n  1. 收到\n  2. 没有"
+    );
+    let mut answered = values.clone();
+    answered.push(json!({"timestamp":at+4,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":format!("<send_user_message_question_reply>\n{}\n</send_user_message_question_reply>",json!([{"answer":"收到","questionItemId":json!(["request_user_input_async","ask",0]).to_string()}]))}]}}));
+    assert!(content::parse(answered, &row).question.is_empty());
+    values.push(json!({"timestamp":at+4,"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Current final"}]}}));
+    assert_eq!(content::parse(values.clone(), &row).text, "Current final");
+    values.push(json!({"timestamp":at+5,"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-one","last_agent_message":"Completion final"}}));
+    values.push(json!({"timestamp":at+6,"type":"event_msg","payload":{"type":"task_complete","turn_id":"other-turn","last_agent_message":"PRIVATE OTHER TURN"}}));
+    assert_eq!(
+        content::parse(values.clone(), &row).text,
+        "Completion final"
+    );
+    values[2]["payload"]["output"] = json!("{\"accepted\":false}");
+    assert!(content::parse(values, &row).question.is_empty());
+}
+
+#[test]
 fn observer_does_not_handoff_child_transcripts() {
     let (_dir, store, source) = fixture();
     enabled(&store, true);
@@ -836,6 +868,667 @@ fn http_receiver(
 }
 
 #[test]
+fn claude_question_cards_and_hook_answers_preserve_original_input() {
+    let (_dir, store, mut source) = fixture();
+    source.provider = "claude".into();
+    store
+        .save_settings(&Settings {
+            sources: vec![source.clone()],
+            ..Default::default()
+        })
+        .unwrap();
+    let c = enabled(&store, true);
+    let mut s = live(&source, Phase::NeedsInput);
+    s.input_request = "question-tool".into();
+    s.process_start = Some(1);
+    s.pid = Some(1);
+    let mut target = observe(&store, s);
+    let input = json!({"questions":[{"question":"Which system?","header":"System","options":[{"label":"Linux","description":"One"},{"label":"macOS","description":"Two"}],"multiSelect":false}]});
+    let at = target.session.turn_started_at + 1000;
+    let rows = vec![
+        json!({"timestamp":at,"type":"assistant","sessionId":NATIVE,"message":{"role":"assistant","content":[{"type":"tool_use","name":"AskUserQuestion","id":"question-tool","input":input}]}}),
+    ];
+    let excerpt = content::parse(rows.clone(), &target);
+    assert!(excerpt.question.contains("Which system?"));
+    assert!(excerpt.claude_request.is_some());
+    let request = claude::request(&target, &excerpt).unwrap();
+    assert_eq!(request["method"], "aieyes/claudeQuestion");
+    assert_eq!(
+        request["params"]["questions"][0]["options"][1]["label"],
+        "macOS"
+    );
+    let answer = claude::updated_input(&input, "2").unwrap();
+    let result = &answer["hookSpecificOutput"];
+    assert_eq!(result["hookEventName"], "PermissionRequest");
+    assert_eq!(result["decision"]["behavior"], "allow");
+    assert_eq!(
+        result["decision"]["updatedInput"]["questions"],
+        input["questions"]
+    );
+    assert_eq!(
+        result["decision"]["updatedInput"]["answers"]["Which system?"],
+        "macOS"
+    );
+    assert!(result["decision"].get("updatedPermissions").is_none());
+    let card = cards::build("Question", "orange", "Claude", "Question", "Reply");
+    db::outbox_card(
+        &store.db,
+        &c,
+        "",
+        Some((&target.session.id, &target.state_key)),
+        "Question",
+        &card,
+    )
+    .unwrap();
+    actions::attach(&store.db, &request).unwrap();
+    let payload: String = store
+        .db
+        .query_row("SELECT payload FROM channel_cards", [], |r| r.get(0))
+        .unwrap();
+    assert!(payload.contains("macOS"));
+    assert!(payload.contains("button"));
+    let path = Path::new(&source.path).join("claude.jsonl");
+    save_rows(&path, &rows);
+    target.path = path.to_string_lossy().into();
+    target.log_paths = vec![];
+    store
+        .db
+        .execute(
+            "INSERT INTO kv(key,value) VALUES(?1,?2)",
+            params![
+                format!("channel.prompt:{}", target.session.id),
+                json!({"expected":target.state_key,"hash":codex::fingerprint(&request)})
+                    .to_string()
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        claude::answer(&store, &source, &target, "1").status,
+        "blocked"
+    );
+    let pid = std::process::id();
+    let mut system = sysinfo::System::new();
+    system.refresh_processes(
+        sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
+        true,
+    );
+    let start = system
+        .process(sysinfo::Pid::from_u32(pid))
+        .unwrap()
+        .start_time();
+    target.process = Some(ControlProcess { pid, start });
+    let mut hook_input = input.clone();
+    hook_input["additionalField"] = json!("must survive");
+    store.db.execute("INSERT INTO channel_claude_requests(id,epoch,source_id,native,question_hash,call_id,input,pid,process_start,at,heartbeat) VALUES('request',?1,?2,?3,?4,'question-tool',?5,?6,?7,?8,?9)",params![c.epoch,source.id,NATIVE,claude::question_hash(&input),hook_input.to_string(),pid,start,now(),now()-6]).unwrap();
+    assert_eq!(
+        claude::answer(&store, &source, &target, "2").status,
+        "blocked"
+    );
+    store
+        .db
+        .execute(
+            "UPDATE channel_claude_requests SET heartbeat=?1,call_id='other'",
+            [now()],
+        )
+        .unwrap();
+    assert_eq!(
+        claude::answer(&store, &source, &target, "2").status,
+        "blocked"
+    );
+    store
+        .db
+        .execute(
+            "UPDATE channel_claude_requests SET call_id='question-tool',process_start=?1",
+            [start + 1],
+        )
+        .unwrap();
+    assert_eq!(
+        claude::answer(&store, &source, &target, "2").status,
+        "blocked"
+    );
+    store
+        .db
+        .execute(
+            "UPDATE channel_claude_requests SET process_start=?1",
+            [start],
+        )
+        .unwrap();
+    let outcome = claude::answer(&store, &source, &target, "2");
+    assert_eq!(outcome.status, "submitted");
+    assert_eq!(outcome.receipt["adapter"], "claudeHook");
+    let response: String = store
+        .db
+        .query_row("SELECT response FROM channel_claude_requests", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let response: Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(
+        response["hookSpecificOutput"]["decision"]["updatedInput"]["answers"]["Which system?"],
+        "macOS"
+    );
+    assert_eq!(
+        response["hookSpecificOutput"]["decision"]["updatedInput"]["additionalField"],
+        "must survive"
+    );
+    assert_eq!(
+        claude::answer(&store, &source, &target, "1").status,
+        "blocked"
+    );
+    let mut answered = rows;
+    answered.push(json!({"timestamp":at+1,"type":"user","sessionId":NATIVE,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"question-tool","content":"Answered"}]}}));
+    let excerpt = content::parse(answered, &target);
+    assert!(excerpt.claude_request.is_none());
+    assert!(excerpt.question.is_empty());
+    assert_eq!(excerpt.claude_answered_call, "question-tool");
+}
+
+#[test]
+fn claude_hook_requires_all_questions_and_supports_multiselect_without_approval_changes() {
+    let input = json!({"questions":[{"question":"First","options":[{"label":"A"},{"label":"B"}],"multiSelect":true},{"question":"Second","options":[{"label":"X"},{"label":"Y"}],"multiSelect":false}],"extra":"retained"});
+    assert!(claude::updated_input(&input, "1=1").is_err());
+    let answer = claude::updated_input(&input, "1=1,2\n2=2").unwrap();
+    let result = &answer["hookSpecificOutput"]["decision"]["updatedInput"];
+    assert_eq!(result["answers"]["First"], "A, B");
+    assert_eq!(result["answers"]["Second"], "Y");
+    assert_eq!(result["extra"], "retained");
+}
+
+#[test]
+fn claude_question_hook_install_is_narrow_idempotent_and_preserves_foreign_settings() {
+    let (_dir, store, mut source) = fixture();
+    source.provider = "claude".into();
+    store
+        .save_settings(&Settings {
+            sources: vec![source.clone()],
+            ..Default::default()
+        })
+        .unwrap();
+    let original = json!({"env":{"SOME_SETTING":"keep"},"permissions":{"defaultMode":"default"},"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"foreign observer"}]}],"PermissionRequest":[{"matcher":"*","hooks":[{"type":"http","url":"http://127.0.0.1:23333/permission","timeout":600}]}]}});
+    let path = Path::new(&source.path).join("settings.json");
+    std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+    claude::install(&store).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(&path).unwrap()).unwrap(),
+        original
+    );
+    enabled(&store, true);
+    claude::install(&store).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let installed: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(installed["env"], original["env"]);
+    assert_eq!(installed["permissions"], original["permissions"]);
+    assert_eq!(
+        installed["hooks"]["PreToolUse"],
+        original["hooks"]["PreToolUse"]
+    );
+    assert_eq!(
+        installed["hooks"]["PermissionRequest"][0],
+        original["hooks"]["PermissionRequest"][0]
+    );
+    let own = &installed["hooks"]["PermissionRequest"][1];
+    assert_eq!(own["matcher"], "AskUserQuestion");
+    assert!(
+        own["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("--aieyes-claude-question")
+    );
+    assert_eq!(own["hooks"][0]["timeout"], 86400);
+    claude::install(&store).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let mut implicit = json!({"questions":[{"question":"Choose","options":[{"label":"A"}]}]});
+    let hash = claude::question_hash(&implicit);
+    implicit["questions"][0]["multiSelect"] = json!(false);
+    assert_eq!(claude::question_hash(&implicit), hash);
+}
+
+#[test]
+fn button_callbacks_are_owner_scoped_current_and_submit_once() {
+    let (_dir, store, source) = fixture();
+    let c = enabled(&store, true);
+    let target = observe(&store, live(&source, Phase::NeedsInput));
+    let request = codex::async_request(
+        &target,
+        &content::Excerpt {
+            async_request: Some(
+                json!({"callId":"ask","questions":[{"title":"Choose","options":["One","Two"]}]}),
+            ),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let card = cards::build("等待输入", "orange", "context", "Choose", "Quote to answer");
+    db::outbox_card(
+        &store.db,
+        &c,
+        "",
+        Some((&target.session.id, &target.state_key)),
+        "Choose",
+        &card,
+    )
+    .unwrap();
+    actions::attach(&store.db, &request).unwrap();
+    let id: String = store
+        .db
+        .query_row(
+            "SELECT id FROM channel_outbox WHERE rowid=last_insert_rowid()",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    store
+        .db
+        .execute(
+            "UPDATE channel_outbox SET sent_id='om_card' WHERE id=?1",
+            [&id],
+        )
+        .unwrap();
+    store.db.execute("INSERT INTO kv(key,value) VALUES(?1,?2)",params![format!("channel.prompt:{}",target.session.id),json!({"expected":target.state_key,"hash":codex::fingerprint(&request),"approval":false,"outboxId":id}).to_string()]).unwrap();
+    let event = json!({"header":{"event_id":"click","app_id":"cli_fixture","event_type":"card.action.trigger","create_time":(now()*1_000_000).to_string(),"tenant_key":"tenant"},"event":{"host":"im_message","operator":{"open_id":"ou_owner","tenant_key":"tenant"},"context":{"open_chat_id":"oc_owner","open_message_id":"om_card"},"action":{"tag":"button","value":{"action":"aieyes.answer","outboxId":id,"questionId":"1","option":0}}}});
+    for (path, value) in [
+        ("/header/app_id", json!("other")),
+        ("/event/operator/open_id", json!("other")),
+        ("/event/operator/tenant_key", json!("other")),
+        ("/event/context/open_chat_id", json!("other")),
+        ("/event/context/open_message_id", json!("other")),
+        ("/event/action/value/option", json!(99)),
+        ("/event/action/value/option", json!(-1)),
+        ("/event/action/value/questionId", json!("other")),
+        (
+            "/header/create_time",
+            json!(((now() - 301) * 1_000_000).to_string()),
+        ),
+    ] {
+        let mut bad = event.clone();
+        *bad.pointer_mut(path).unwrap() = value;
+        actions::ingest(&store, &c.epoch, &bad).unwrap();
+        assert_eq!(count(&store, "channel_commands"), 0);
+    }
+    actions::ingest(&store, "other-epoch", &event).unwrap();
+    assert_eq!(count(&store, "channel_commands"), 0);
+    let response = actions::ingest(&store, &c.epoch, &event).unwrap();
+    assert_eq!(response["toast"]["type"], "success");
+    let buttons = response["card"]["data"]["body"]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["tag"] == "button")
+        .collect::<Vec<_>>();
+    assert_eq!(buttons.len(), 2);
+    assert_eq!(buttons[0]["type"], "primary");
+    assert_eq!(buttons[1]["disabled"], true);
+    actions::ingest(&store, &c.epoch, &event).unwrap();
+    let mut repeated = event.clone();
+    repeated["header"]["event_id"] = json!("other-click");
+    repeated["event"]["action"]["value"]["option"] = json!(1);
+    actions::ingest(&store, &c.epoch, &repeated).unwrap();
+    assert_eq!(count(&store, "channel_commands"), 1);
+    let result: (String, String) = store
+        .db
+        .query_row("SELECT body,reply_to FROM channel_commands", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(result, ("1".into(), "om_card".into()));
+    let mut s = target.session;
+    s.phase = Phase::Complete;
+    observe(&store, s);
+    assert_eq!(
+        actions::ingest(&store, &c.epoch, &repeated).unwrap()["toast"]["type"],
+        "info"
+    );
+}
+
+#[test]
+fn multi_question_buttons_wait_for_all_choices_and_never_render_approvals() {
+    let (_dir, store, source) = fixture();
+    let c = enabled(&store, true);
+    let target = observe(&store, live(&source, Phase::NeedsInput));
+    let request=codex::async_request(&target,&content::Excerpt{async_request:Some(json!({"callId":"ask","questions":[{"title":"First","options":["A","B"]},{"title":"Second","options":["X","Y"]}]})),..Default::default()}).unwrap();
+    let card = cards::build("Question", "orange", "context", "Question", "Footer");
+    db::outbox_card(
+        &store.db,
+        &c,
+        "",
+        Some((&target.session.id, &target.state_key)),
+        "Question",
+        &card,
+    )
+    .unwrap();
+    actions::attach(&store.db, &request).unwrap();
+    let id: String = store
+        .db
+        .query_row(
+            "SELECT id FROM channel_outbox WHERE rowid=last_insert_rowid()",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    store
+        .db
+        .execute(
+            "UPDATE channel_outbox SET sent_id='om_card' WHERE id=?1",
+            [&id],
+        )
+        .unwrap();
+    store.db.execute("INSERT INTO kv(key,value) VALUES(?1,?2)",params![format!("channel.prompt:{}",target.session.id),json!({"expected":target.state_key,"hash":codex::fingerprint(&request),"approval":false}).to_string()]).unwrap();
+    let mut event = json!({"header":{"event_id":"first","app_id":"cli_fixture","event_type":"card.action.trigger","create_time":(now()*1_000_000).to_string()},"event":{"host":"im_message","operator":{"open_id":"ou_owner","tenant_key":"tenant"},"context":{"open_chat_id":"oc_owner","open_message_id":"om_card"},"action":{"tag":"button","value":{"action":"aieyes.answer","outboxId":id,"questionId":"1","option":1}}}});
+    actions::ingest(&store, &c.epoch, &event).unwrap();
+    assert_eq!(count(&store, "channel_commands"), 0);
+    event["header"]["event_id"] = json!("second");
+    event["event"]["action"]["value"]["questionId"] = json!("2");
+    event["event"]["action"]["value"]["option"] = json!(0);
+    actions::ingest(&store, &c.epoch, &event).unwrap();
+    let body: String = store
+        .db
+        .query_row("SELECT body FROM channel_commands", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(body, "1=2\n2=1");
+    db::outbox_card(
+        &store.db,
+        &c,
+        "",
+        Some((&target.session.id, &target.state_key)),
+        "Approval",
+        &card,
+    )
+    .unwrap();
+    let mut approval = request;
+    approval["method"] = json!("item/commandExecution/requestApproval");
+    actions::attach(&store.db, &approval).unwrap();
+    assert_eq!(count(&store, "channel_card_actions"), 1);
+}
+
+#[test]
+fn multiselect_buttons_toggle_until_submit_and_cards_show_option_previews() {
+    let (_dir, store, source) = fixture();
+    let c = enabled(&store, true);
+    let target = observe(&store, live(&source, Phase::NeedsInput));
+    let ask = |input: &Value| {
+        claude::request(
+            &target,
+            &content::Excerpt {
+                claude_request: Some(json!({"callId":"question-tool","input":input})),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    // Deliver a question card and make it the session's current prompt.
+    let publish = |request: &Value, message: &str| -> String {
+        let card = cards::build("Question", "orange", "context", "Question", "Footer");
+        db::outbox_card(
+            &store.db,
+            &c,
+            "",
+            Some((&target.session.id, &target.state_key)),
+            "Question",
+            &card,
+        )
+        .unwrap();
+        actions::attach(&store.db, request).unwrap();
+        let id: String = store
+            .db
+            .query_row(
+                "SELECT id FROM channel_outbox WHERE rowid=last_insert_rowid()",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        store
+            .db
+            .execute(
+                "UPDATE channel_outbox SET sent_id=?1 WHERE id=?2",
+                params![message, id],
+            )
+            .unwrap();
+        store.db.execute("INSERT INTO kv(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![format!("channel.prompt:{}",target.session.id),json!({"expected":target.state_key,"hash":codex::fingerprint(request),"approval":false}).to_string()]).unwrap();
+        id
+    };
+    let mut clicks = 0;
+    let mut click = |message: &str, value: Value| {
+        clicks += 1;
+        let event = json!({"header":{"event_id":format!("click-{clicks}"),"app_id":"cli_fixture","event_type":"card.action.trigger","create_time":(now()*1_000_000).to_string()},"event":{"host":"im_message","operator":{"open_id":"ou_owner","tenant_key":"tenant"},"context":{"open_chat_id":"oc_owner","open_message_id":message},"action":{"tag":"button","value":value}}});
+        actions::ingest(&store, &c.epoch, &event).unwrap()
+    };
+    let buttons = |card: &Value| {
+        card["body"]["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["tag"] == "button")
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    let input = json!({"questions":[
+        {"question":"Style?","options":[{"label":"Comprehension","preview":"```python\nsquares = [x * x for x in range(10)]\n```"},{"label":"Loop","preview":"+--+\n|  |\n+--+"}],"multiSelect":false},
+        {"question":"Features?","options":[{"label":"A"},{"label":"B"},{"label":"C"}],"multiSelect":true}]});
+    let request = ask(&input);
+    let id = publish(&request, "om_card");
+    let payload: String = store
+        .db
+        .query_row(
+            "SELECT payload FROM channel_cards WHERE outbox_id=?1",
+            [&id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let card: Value = serde_json::from_str(&payload).unwrap();
+    let text = card["body"]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["tag"] == "markdown")
+        .map(|e| e["content"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    // A code preview keeps its own fence; an unfenced mockup is fenced to stay monospace.
+    assert!(
+        text.contains(
+            &"**1. Comprehension**\n```python\nsquares = [x * x for x in range(10)]\n```"
+        )
+    );
+    assert!(text.contains(&"**2. Loop**\n```\n+--+\n|  |\n+--+\n```"));
+    assert!(text.contains(&format!("**2: Features?**{}", "（可多选）").as_str()));
+    let shown = buttons(&card);
+    assert_eq!(shown.len(), 6);
+    assert_eq!(shown[5]["behaviors"][0]["value"]["action"], "aieyes.submit");
+
+    let answer = |q: &str, option: usize| json!({"action":"aieyes.answer","outboxId":id,"questionId":q,"option":option});
+    let submit = json!({"action":"aieyes.submit","outboxId":id});
+    assert_eq!(click("om_card", submit.clone())["toast"]["type"], "warning");
+    click("om_card", answer("2", 2));
+    click("om_card", answer("2", 0));
+    click("om_card", answer("2", 2));
+    let toggled = click("om_card", answer("2", 1));
+    let shown = buttons(&toggled["card"]["data"]);
+    assert_eq!(
+        shown.iter().map(|b| &b["type"]).collect::<Vec<_>>(),
+        [
+            "default", "default", "primary", "primary", "default", "primary"
+        ]
+    );
+    assert_eq!(shown[2]["text"]["content"], "✓ A");
+    assert_eq!(click("om_card", submit.clone())["toast"]["type"], "warning");
+    // Completing every question does not submit while a multi-select can still change.
+    click("om_card", answer("1", 0));
+    assert_eq!(count(&store, "channel_commands"), 0);
+    let done = click("om_card", submit.clone());
+    assert_eq!(done["toast"]["type"], "success");
+    assert!(
+        buttons(&done["card"]["data"])
+            .iter()
+            .all(|b| b["disabled"] == true)
+    );
+    let body: String = store
+        .db
+        .query_row("SELECT body FROM channel_commands", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(body, "1=1\n2=1,2");
+    let answers = &claude::updated_input(&input, &body).unwrap()["hookSpecificOutput"]["decision"]
+        ["updatedInput"]["answers"];
+    assert_eq!(answers["Style?"], "Comprehension");
+    assert_eq!(answers["Features?"], "A, B");
+    assert_eq!(click("om_card", answer("2", 2))["toast"]["type"], "info");
+    assert_eq!(click("om_card", submit)["toast"]["type"], "info");
+    assert_eq!(count(&store, "channel_commands"), 1);
+
+    // One multi-select question replies without the `id=` prefix; previews share a bounded budget.
+    let large = "x".repeat(6000);
+    let single = json!({"questions":[{"question":"Pick","options":[{"label":"A","preview":large},{"label":"B","preview":large},{"label":"C","preview":large},{"label":"D","preview":large}],"multiSelect":true}]});
+    let request = ask(&single);
+    assert!(
+        request["params"]["questions"][0]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|o| o["preview"].as_str().unwrap().len() <= 2000)
+    );
+    let id = publish(&request, "om_second");
+    click(
+        "om_second",
+        json!({"action":"aieyes.answer","outboxId":id,"questionId":"1","option":3}),
+    );
+    click(
+        "om_second",
+        json!({"action":"aieyes.answer","outboxId":id,"questionId":"1","option":0}),
+    );
+    let done = click("om_second", json!({"action":"aieyes.submit","outboxId":id}));
+    assert_eq!(buttons(&done["card"]["data"]).len(), 5);
+    let body: String = store
+        .db
+        .query_row(
+            "SELECT body FROM channel_commands ORDER BY rowid DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(body, "1,4");
+    assert_eq!(
+        claude::updated_input(&single, &body).unwrap()["hookSpecificOutput"]["decision"]["updatedInput"]
+            ["answers"]["Pick"],
+        "A, D"
+    );
+    // A request without a multi-select question has no submit action.
+    let plain =
+        ask(&json!({"questions":[{"question":"One","options":[{"label":"A"},{"label":"B"}]}]}));
+    let id = publish(&plain, "om_third");
+    click("om_third", json!({"action":"aieyes.submit","outboxId":id}));
+    assert_eq!(count(&store, "channel_commands"), 2);
+}
+
+#[test]
+fn callback_ack_encodes_response_bytes_like_the_official_sdk() {
+    use base64::Engine;
+    let response = json!({"toast":{"type":"success","content":"已选择"}});
+    let bytes = protocol::Frame::default().acknowledge_response(200, Some(&response));
+    let frame = protocol::Frame::decode(bytes.as_slice()).unwrap();
+    let envelope: Value = serde_json::from_slice(frame.payload.as_ref().unwrap()).unwrap();
+    assert_eq!(envelope["code"], 200);
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(envelope["data"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&data).unwrap(), response);
+}
+
+#[test]
+#[cfg(test)]
+fn card_styles_separate_status_context_body_and_footer_without_changing_text() {
+    let card = cards::build(
+        "等待输入",
+        cards::phase_color(Phase::NeedsInput),
+        "s123 · Codex · <workspace>",
+        "**问题**\n\n1. 继续\n2. 停止\n\n```rust\nlet x = 1 < 2;\n```",
+        "引用此消息回复",
+    );
+    assert_eq!(card["schema"], "2.0");
+    assert_eq!(card["header"]["template"], "orange");
+    let elements = card["body"]["elements"].as_array().unwrap();
+    assert_eq!(elements[0]["text"]["tag"], "plain_text");
+    assert_eq!(elements[0]["text"]["content"], "s123 · Codex · <workspace>");
+    assert_eq!(elements[0]["text"]["text_size"], "notation");
+    assert_eq!(elements[0]["text"]["text_color"], "grey");
+    assert_eq!(elements[1]["tag"], "markdown");
+    assert!(
+        elements[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("let x = 1 < 2;")
+    );
+    assert_eq!(elements[1]["text_size"], "normal");
+    assert_eq!(elements[3]["text"]["text_size"], "notation");
+    assert_eq!(cards::phase_color(Phase::Complete), "green");
+    assert_eq!(cards::phase_color(Phase::Failed), "red");
+    assert_eq!(cards::command_color("confirmed"), "green");
+    let long = cards::build("完成", "green", "context", &"\\\"".repeat(16000), "提示");
+    assert!(long.to_string().len() <= 24000);
+    assert!(long.to_string().contains("内容已截断"));
+}
+
+#[test]
+fn card_delivery_retries_identically_keeps_quote_routing_and_cleans_up_payload() {
+    let (_dir, store, _) = fixture();
+    let c = enabled(&store, true);
+    let card = cards::build("已确认", "green", "c123", "原会话已接收回答", "");
+    db::outbox_card(
+        &store.db,
+        &c,
+        "om_parent",
+        Some(("session", "state")),
+        "Plain audit text",
+        &card,
+    )
+    .unwrap();
+    let outbox_id: String = store
+        .db
+        .query_row(
+            "SELECT id FROM channel_outbox WHERE rowid=last_insert_rowid()",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let saved: String = store
+        .db
+        .query_row(
+            "SELECT payload FROM channel_cards WHERE outbox_id=?1",
+            [&outbox_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&saved).unwrap(), card);
+    let (url, received, server) = http_receiver(vec![500, 200]);
+    let mut api = feishu::test_api(url);
+    feishu::deliver(&store, &c, &mut api).unwrap();
+    store
+        .db
+        .execute("UPDATE channel_outbox SET next_attempt=0", [])
+        .unwrap();
+    feishu::deliver(&store, &c, &mut api).unwrap();
+    let first = received.recv().unwrap();
+    let second = received.recv().unwrap();
+    assert_eq!(first, second);
+    assert!(first.0.contains("/om_parent/reply"));
+    assert_eq!(first.1["msg_type"], "interactive");
+    assert_eq!(
+        serde_json::from_str::<Value>(first.1["content"].as_str().unwrap()).unwrap(),
+        card
+    );
+    assert_eq!(first.1["reply_in_thread"], false);
+    assert_eq!(config::status(&store).unwrap()["undelivered"], 0);
+    server.join().unwrap();
+    store
+        .db
+        .execute(
+            "UPDATE channel_outbox SET at=?1",
+            [now() - db::RETENTION - 1],
+        )
+        .unwrap();
+    db::cleanup(&store.db).unwrap();
+    assert_eq!(count(&store, "channel_cards"), 0);
+}
+
+#[test]
 fn feishu_send_retries_same_uuid_and_preserves_quote_route() {
     let (_dir, store, _) = fixture();
     let c = enabled(&store, true);
@@ -951,6 +1644,7 @@ fn codex_server(
                 "turn/start" => {
                     json!({"turn":{"id":"turn-new","status":"inProgress","error":null}})
                 }
+                "turn/steer" => json!({"turnId":"turn-one"}),
                 other => panic!("Unexpected method {other}"),
             };
             ws.send(tungstenite::Message::Text(
@@ -973,6 +1667,10 @@ fn existing_codex_thread_is_verified_and_reused_without_policy_overrides() {
     enabled(&store, true);
     let row = observe(&store, live(&source, Phase::Complete));
     let (received, server) = codex_server(Path::new(&source.path), false, false);
+    let link = Path::new(&source.path).join("app-server-control/app-server-control.sock");
+    let resolved = Path::new(&source.path).join("daemon.sock");
+    std::fs::rename(&link, &resolved).unwrap();
+    std::os::unix::fs::symlink(&resolved, &link).unwrap();
     let mut client = codex::Client::open(Path::new(&source.path)).unwrap();
     client.attach(&row, false).unwrap();
     let outcome = client.followup(&row, "Keep this thread");
@@ -991,6 +1689,76 @@ fn existing_codex_thread_is_verified_and_reused_without_policy_overrides() {
         resume["params"],
         json!({"threadId":NATIVE,"excludeTurns":true})
     );
+}
+
+#[test]
+fn question_reference_survives_parallel_activity_but_changes_for_a_new_request() {
+    let (_dir, store, source) = fixture();
+    enabled(&store, true);
+    let mut s = live(&source, Phase::NeedsInput);
+    s.input_request = "ask-one".into();
+    let first = observe(&store, s.clone());
+    s.event_at += 1000;
+    s.updated_at += 1;
+    let next = observe(&store, s.clone());
+    assert_eq!(first.state_key, next.state_key);
+    assert_eq!(count(&store, "channel_events"), 1);
+    s.input_request = "ask-two".into();
+    assert_ne!(first.state_key, observe(&store, s).state_key);
+    assert_eq!(count(&store, "channel_events"), 2);
+}
+
+#[test]
+#[cfg(unix)]
+#[cfg(test)]
+fn async_answer_uses_the_original_active_turn_with_option_text_and_call_identity() {
+    for changed in [false, true] {
+        let (_dir, store, source) = fixture();
+        enabled(&store, true);
+        let row = observe(&store, live(&source, Phase::NeedsInput));
+        let excerpt = content::Excerpt {
+            async_request: Some(
+                json!({"callId":"ask","questions":[{"title":"测试问题","options":["收到","没有"]}]}),
+            ),
+            ..Default::default()
+        };
+        let request = codex::async_request(&row, &excerpt).unwrap();
+        let (received, server) = codex_server(Path::new(&source.path), changed, true);
+        let mut client = codex::Client::open(Path::new(&source.path)).unwrap();
+        let outcome = client.answer_async(&row, &request, "1");
+        assert_eq!(
+            outcome.status,
+            if changed { "blocked" } else { "confirmed" }
+        );
+        drop(client);
+        server.join().unwrap();
+        let sent = received.try_iter().collect::<Vec<_>>();
+        assert!(
+            !sent
+                .iter()
+                .any(|v| matches!(v["method"].as_str(), Some("thread/resume" | "turn/start")))
+        );
+        let steer = sent.iter().find(|v| v["method"] == "turn/steer");
+        if changed {
+            assert!(steer.is_none());
+            continue;
+        }
+        let p = &steer.unwrap()["params"];
+        assert_eq!(p["expectedTurnId"], "turn-one");
+        assert_eq!(p["threadId"], NATIVE);
+        let text = p["input"][0]["text"].as_str().unwrap();
+        let body = text
+            .strip_prefix("<send_user_message_question_reply>\n")
+            .unwrap()
+            .strip_suffix("\n</send_user_message_question_reply>")
+            .unwrap();
+        let answer: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(answer[0]["answer"], "收到");
+        assert_eq!(
+            answer[0]["questionItemId"],
+            json!(["request_user_input_async", "ask", 0]).to_string()
+        );
+    }
 }
 
 #[test]

@@ -3800,6 +3800,7 @@
   "Antigravity 查询地址不支持": "Unsupported Antigravity query endpoint.",
   "Antigravity 模型组格式不支持": "Unsupported Antigravity model-group format.",
   "Antigravity 登录已过期，请在 agy 中重新登录": "Antigravity sign-in has expired. Sign in again in agy.",
+  "Antigravity 登录已失效，请点击“登录 / 检查”手动重新登录": "Antigravity sign-in is no longer valid. Click Sign in / check to sign in again manually.",
   "Antigravity 登录有效期无法确认": "Could not confirm when the Antigravity sign-in expires.",
   "凭据格式无法识别": "Unrecognized credential format.",
   "发现多个不同的 CLI 登录身份，请在 agy 中确认当前账户": "Multiple CLI sign-in identities were found. Confirm the current account in agy.",
@@ -4366,5 +4367,15 @@
   "输入内容无效": "Invalid input content",
   "请引用最新的审批通知，再回复 /approve 或 /decline。": "Quote the latest approval notification, then reply /approve or /decline.",
   "{0} 条消息未送达": "{0} undelivered messages",
-  "无法确认原会话提交结果，请核对原窗口；系统不会重发": "Unable to confirm submission to the original session. Check its window; Aieyes will not resend."
+  "无法确认原会话提交结果，请核对原窗口；系统不会重发": "Unable to confirm submission to the original session. Check its window; Aieyes will not resend.",
+  "选项已失效，请回复最新的问题通知": "This option has expired. Reply to the latest question notification.",
+  "只能由已配对账号操作此卡片": "Only the paired account can use this card.",
+  "已收到选项，请勿重复提交": "Your choice was received. Do not submit it again.",
+  "已收到选项，正在核对原会话": "Choice received. Verifying the original session.",
+  "已选择，请继续选择其他问题": "Choice saved. Select an answer for the remaining questions.",
+  "已选择，选完后请点击提交": "Choice saved. Click Submit when you are done.",
+  "请先回答所有问题再提交": "Answer every question before submitting.",
+  "（可多选）": " (select multiple)",
+  "提交": "Submit",
+  "Claude 问题接口尚未就绪，请在原窗口重新提问后重试": "The Claude question interface is not ready. Ask the question again in the original window, then retry."
 }

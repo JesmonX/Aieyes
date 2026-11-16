@@ -5,7 +5,7 @@ import Carbon
 /// Automation is requested only after an explicit click; polling never asks for permissions.
 @MainActor enum SessionFocus {
     static let engine = EngineClient(configurationOnly: true)
-    struct Target: Decodable { var status: String; var ancestors: [Ancestor]?; var tty: String? }
+    struct Target: Decodable { var status: String; var ancestors: [Ancestor]?; var tty: String?; var foreground: Bool? }
     struct Ancestor: Decodable { var pid: Int32; var start: Double? }
     enum Outcome: Equatable {
         case session(String), pane(String), tab(String), window(String), application(String)

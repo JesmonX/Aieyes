@@ -1,7 +1,8 @@
 """Read agy's public account summary on the login machine (also used over SSH).
 
-No credentials are written, passed in argv, or returned by this helper. The CLI's
-built-in /usage may renew its own login. curl reads authorization through stdin.
+No credentials are written, passed in argv, or returned by this helper. Background
+checks require an existing valid login; only manual sign-in may authorize again.
+curl reads authorization through stdin.
 """
 import base64
 import datetime
@@ -24,7 +25,7 @@ USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo'
 ASSIST_URL = 'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist'
 QUOTA_URL = 'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary'
 USER_AGENT = 'antigravity (aieyes read-only quota)'
-RELOGIN = 'Antigravity 登录已过期，请在 agy 中重新登录'
+RELOGIN = 'Antigravity 登录已失效，请点击“登录 / 检查”手动重新登录'
 RELOGIN_IDE = 'Antigravity IDE 登录已过期，请在 IDE 中重新登录'
 IDE_INVALID = 'Antigravity IDE 登录凭据无法读取，请在 IDE 中重新登录'
 
@@ -366,7 +367,7 @@ def fetch_license(credential):
 
 
 def native_quota(credential):
-    """Delegate quota and renewal to the installed CLI, never a model prompt."""
+    """Query the built-in CLI quota only after checking the existing login."""
     if credential.get('_origin') == 'ide':
         return None
     if credential.get('auth_method') not in (None, '', 'consumer'):
@@ -377,6 +378,12 @@ def native_quota(credential):
         binary = str(installed) if installed.is_file() else None
     if not binary:
         return None
+    # Print mode can still start browser OAuth when the saved grant is expired
+    # or revoked. Never use the CLI to discover/renew background authentication.
+    # Check both local expiry and the server before allowing /usage to run.
+    request_json(credential, USERINFO_URL)
+    if not same_owner(credential, read_credential()):
+        raise PublicError('登录账户已变化，请重新检查')
     # The fixed built-in slash command returns a command result without asking
     # a model to run tools. Use an empty workspace and suppress CLI logs/updates.
     with tempfile.TemporaryDirectory(prefix='aieyes-agy-quota-') as directory:
@@ -404,16 +411,8 @@ def native_quota(credential):
 
 
 def identity_credential(credential):
-    try:
-        access_token(credential)
-    except PublicError as error:
-        if str(error) != RELOGIN or native_quota(credential) is None:
-            raise
-        current = read_credential()
-        if not same_owner(credential, current):
-            raise PublicError('登录账户已变化，请重新检查')
-        access_token(current)
-        return current
+    # Identity polling must not launch a CLI login as a side effect of expiry.
+    access_token(credential)
     return credential
 
 

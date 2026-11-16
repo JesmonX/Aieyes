@@ -30,8 +30,13 @@ pub(super) fn setup(db: &Connection) -> Result<()> {
         id TEXT PRIMARY KEY, epoch TEXT NOT NULL, chat_id TEXT NOT NULL, reply_to TEXT NOT NULL,
         session_id TEXT NOT NULL, expected TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL,
         sent_id TEXT UNIQUE, attempts INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS channel_cards (
+        outbox_id TEXT PRIMARY KEY REFERENCES channel_outbox(id) ON DELETE CASCADE,
+        payload TEXT NOT NULL) WITHOUT ROWID;
         CREATE INDEX IF NOT EXISTS channel_outbox_pending ON channel_outbox(epoch,sent_id,next_attempt);
         CREATE INDEX IF NOT EXISTS channel_sessions_recent ON channel_sessions(epoch,observed_at);")?;
+    super::actions::setup(db)?;
+    super::claude::setup(db)?;
     Ok(())
 }
 
@@ -119,16 +124,25 @@ pub(super) fn observe(store: &Store, snapshot: &Snapshot) -> Result<()> {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
-        let state_key = format!(
-            "{}:{}:{}",
-            s.phase.key(),
-            s.turn_id,
-            if s.phase == Phase::NeedsInput || s.turn_id.is_empty() {
-                s.event_at.max(s.updated_at.saturating_mul(1000))
-            } else {
-                s.turn_started_at
-            }
-        );
+        let state_key = if s.phase == Phase::NeedsInput && !s.input_request.is_empty() {
+            format!(
+                "{}:{}:{}",
+                s.phase.key(),
+                s.turn_id,
+                crate::models::hash(&s.input_request)
+            )
+        } else {
+            format!(
+                "{}:{}:{}",
+                s.phase.key(),
+                s.turn_id,
+                if s.phase == Phase::NeedsInput || s.turn_id.is_empty() {
+                    s.event_at.max(s.updated_at.saturating_mul(1000))
+                } else {
+                    s.turn_started_at
+                }
+            )
+        };
         let observed_at = snapshot
             .sources
             .iter()
@@ -333,6 +347,23 @@ pub(super) fn outbox_raw(
     let (session_id, expected) = session.unwrap_or(("", ""));
     db.execute("INSERT INTO channel_outbox(id,epoch,chat_id,reply_to,session_id,expected,body,at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
         params![random_id()?,c.epoch,owner.chat_id,reply_to,session_id,expected,super::content::clip(text,16000),now()])?;
+    Ok(())
+}
+
+pub(super) fn outbox_card(
+    db: &Connection,
+    c: &Config,
+    reply_to: &str,
+    session: Option<(&str, &str)>,
+    text: &str,
+    card: &Value,
+) -> Result<()> {
+    if c.owner.is_none() {
+        return Ok(());
+    }
+    outbox_raw(db, c, reply_to, session, text)?;
+    // WITHOUT ROWID preserves the original outbox row ID used by prompt references.
+    db.execute("INSERT INTO channel_cards(outbox_id,payload) SELECT id,?1 FROM channel_outbox WHERE rowid=last_insert_rowid()", [card.to_string()])?;
     Ok(())
 }
 
@@ -717,6 +748,10 @@ fn handle_message(db: &Connection, c: &Config, msg: &Incoming) -> Result<()> {
 
 pub(super) fn cleanup(db: &Connection) -> Result<()> {
     let before = now() - RETENTION;
+    db.execute(
+        "DELETE FROM channel_claude_requests WHERE at<?1 OR (response IS NULL AND heartbeat<?2)",
+        params![before, now() - 600],
+    )?;
     db.execute("DELETE FROM channel_inbox WHERE at<?1", [before])?;
     db.execute("DELETE FROM channel_outbox WHERE at<?1", [before])?;
     db.execute("DELETE FROM channel_events WHERE at<?1", [before])?;

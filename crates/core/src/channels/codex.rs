@@ -192,6 +192,52 @@ impl Client {
             json!({"adapter":"codex","answer":true}),
         )
     }
+    pub fn answer_async(&mut self, target: &Session, request: &Value, text: &str) -> Outcome {
+        let input = match async_answer(request, text) {
+            Ok(text) => text,
+            Err(error) => return Outcome::blocked(&error.to_string()),
+        };
+        match self.verify(target) {
+            Ok(thread) if thread["status"]["type"] == "active" => {}
+            Ok(_) => return Outcome::blocked("原会话状态已改变，指令已保留"),
+            Err(error) => return Outcome::blocked(&error.to_string()),
+        }
+        match self.call("turn/steer", json!({"threadId":target.session.native_session,"expectedTurnId":target.session.turn_id,"input":[{"type":"text","text":input,"text_elements":[]}]})) {
+            Ok(value) if value["turnId"].as_str() == Some(&target.session.turn_id) => Outcome::confirmed("原会话已接收回答", json!({"adapter":"codex","asyncAnswer":true,"turnId":target.session.turn_id})),
+            Ok(_) => Outcome::uncertain("原会话返回的执行结果不完整，请核对原窗口"),
+            Err(error) if error.to_string() == "原会话控制接口拒绝此请求" => Outcome::blocked("原会话拒绝了指令，请核对原窗口"),
+            Err(_) => Outcome::uncertain("回答可能已提交，请核对原会话"),
+        }
+    }
+}
+
+/// Local representation of the host's async question, scoped to its original turn.
+pub(super) fn async_request(target: &Session, excerpt: &content::Excerpt) -> Option<Value> {
+    let raw = excerpt.async_request.as_ref()?;
+    let call = raw["callId"].as_str().filter(|s| !s.is_empty())?;
+    let questions = raw["questions"].as_array()?.iter().enumerate().map(|(i,q)| {
+        let options = q["options"].as_array().map(|opts| opts.iter().map(|o| json!({"label":o.as_str().or_else(||o["label"].as_str()).unwrap_or("")})).collect::<Vec<_>>()).unwrap_or_default();
+        json!({"id":(i+1).to_string(),"questionIndex":i,"question":q["question"].as_str().or_else(||q["title"].as_str()).unwrap_or(""),"options":options})
+    }).collect::<Vec<_>>();
+    if questions.is_empty() {
+        return None;
+    }
+    Some(
+        json!({"method":"aieyes/asyncQuestion","params":{"threadId":target.session.native_session,"turnId":target.session.turn_id,"itemId":call,"questions":questions}}),
+    )
+}
+
+fn async_answer(request: &Value, text: &str) -> Result<String> {
+    let answers = answer(request, text)?;
+    let p = &request["params"];
+    let rows = p["questions"].as_array().context("原会话问题已不可用")?.iter().map(|q| {
+        let id = q["id"].as_str().unwrap_or("");
+        json!({"answer":answers["answers"][id]["answers"][0],"question":q["question"],"questionItemId":json!(["request_user_input_async",p["itemId"],q["questionIndex"]]).to_string()})
+    }).collect::<Vec<_>>();
+    Ok(format!(
+        "<send_user_message_question_reply>\n{}\n</send_user_message_question_reply>",
+        serde_json::to_string(&rows)?
+    ))
 }
 
 pub(super) fn valid_id(id: &str) -> bool {
@@ -231,7 +277,7 @@ pub(super) fn describe(request: &Value, language: &str) -> String {
     let p = &request["params"];
     let tr = |text: &str| crate::localization::translate(language, text).into_owned();
     match request["method"].as_str().unwrap_or("") {
-        "item/tool/requestUserInput" | "tool/requestUserInput" => {
+        "item/tool/requestUserInput" | "tool/requestUserInput" | "aieyes/asyncQuestion" => {
             let mut text = content::questions(&p["questions"]);
             if p["questions"].as_array().is_some_and(|q| q.len() > 1) {
                 text.push_str(&format!("\n\n{}", tr("请按「问题编号=答案」逐行回复。")));
@@ -268,7 +314,7 @@ pub(super) fn describe(request: &Value, language: &str) -> String {
 pub(super) fn answer(request: &Value, text: &str) -> Result<Value> {
     let p = &request["params"];
     match request["method"].as_str().unwrap_or("") {
-        "item/tool/requestUserInput" | "tool/requestUserInput" => {
+        "item/tool/requestUserInput" | "tool/requestUserInput" | "aieyes/asyncQuestion" => {
             let questions = p["questions"].as_array().context("原会话问题已不可用")?;
             ensure!(!questions.is_empty(), "原会话问题已不可用");
             let mut answers = serde_json::Map::new();
