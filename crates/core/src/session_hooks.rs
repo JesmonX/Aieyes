@@ -613,7 +613,9 @@ pub(crate) fn ancestry(provider: &str) -> (u32, u64, Option<&'static str>) {
         let name = process.name().to_string_lossy().to_lowercase();
         if bind
             && ((provider == "claude" && name.starts_with("claude"))
-                || (provider == "antigravity" && (name == "agy" || name == "agy.exe")))
+                || (provider == "antigravity" && (name == "agy" || name == "agy.exe"))
+                || (matches!(provider, "qoder" | "qoder-cn")
+                    && session_events::is_program(provider, &argv)))
         {
             return (pid.as_u32(), process.start_time(), verdict);
         }

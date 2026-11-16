@@ -20,6 +20,7 @@ fn questions(request: &Value) -> Option<&Vec<Value>> {
         Some(
             "aieyes/asyncQuestion"
                 | "aieyes/claudeQuestion"
+                | super::opencode::FORM
                 | "item/tool/requestUserInput"
                 | "tool/requestUserInput"
         )
@@ -33,7 +34,12 @@ fn questions(request: &Value) -> Option<&Vec<Value>> {
     }
     let mut total = 0;
     for item in q {
-        if item["multiSelect"] == true && request["method"] != "aieyes/claudeQuestion" {
+        if item["multiSelect"] == true
+            && !matches!(
+                request["method"].as_str(),
+                Some("aieyes/claudeQuestion" | super::opencode::FORM)
+            )
+        {
             return None;
         }
         let id = item["id"].as_str()?;

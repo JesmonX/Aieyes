@@ -370,23 +370,26 @@ fn extra_paths(provider: &str) -> Vec<String> {
         }
         "kiro" => {
             // kiro-cli's own database (read-only, never refreshed) and the IDE token.
-            let data = if cfg!(target_os = "macos") {
-                home.join("Library/Application Support")
-            } else if cfg!(windows) {
-                std::env::var_os("APPDATA")
-                    .map_or_else(|| home.join("AppData/Roaming"), PathBuf::from)
+            let mut paths = if cfg!(windows) {
+                kiro_windows_databases(
+                    &home,
+                    std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+                    std::env::var_os("APPDATA").map(PathBuf::from),
+                )
+            } else if cfg!(target_os = "macos") {
+                vec![home.join("Library/Application Support/kiro-cli/data.sqlite3")]
             } else {
-                std::env::var_os("XDG_DATA_HOME")
+                let data = std::env::var_os("XDG_DATA_HOME")
                     .map(PathBuf::from)
                     .filter(|p| p.is_absolute())
-                    .unwrap_or_else(|| home.join(".local/share"))
+                    .unwrap_or_else(|| home.join(".local/share"));
+                vec![data.join("kiro-cli/data.sqlite3")]
             };
-            vec![
-                data.join("kiro-cli/data.sqlite3").to_string_lossy().into(),
-                home.join(".aws/sso/cache/kiro-auth-token.json")
-                    .to_string_lossy()
-                    .into(),
-            ]
+            paths.push(home.join(".aws/sso/cache/kiro-auth-token.json"));
+            paths
+                .into_iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect()
         }
         "cursor" => {
             let base = if cfg!(target_os = "macos") {
@@ -408,6 +411,25 @@ fn extra_paths(provider: &str) -> Vec<String> {
         }
         _ => vec![],
     }
+}
+
+/// Native Windows installs use Local; keep the older Roaming store discoverable.
+/// Shared by discovery and file-change polling through `extra_paths`.
+fn kiro_windows_databases(
+    home: &Path,
+    local: Option<PathBuf>,
+    roaming: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    vec![
+        local
+            .filter(|p| p.is_absolute())
+            .unwrap_or_else(|| home.join("AppData/Local"))
+            .join("Kiro-Cli/data.sqlite3"),
+        roaming
+            .filter(|p| p.is_absolute())
+            .unwrap_or_else(|| home.join("AppData/Roaming"))
+            .join("kiro-cli/data.sqlite3"),
+    ]
 }
 /// Login rows other apps keep in SQLite, exposed as a small JSON document.
 /// The remote scanner sends the same projection, never a database file.
@@ -6102,6 +6124,109 @@ mod tests {
                 [*key, value.to_string().as_str()],
             )
             .unwrap();
+        }
+    }
+    #[test]
+    fn kiro_windows_database_paths_support_redirected_and_missing_appdata() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let local = dir.path().join("redirected-local");
+        let roaming = dir.path().join("redirected-roaming");
+        assert_eq!(
+            kiro_windows_databases(&home, Some(local.clone()), Some(roaming.clone())),
+            [
+                local.join("Kiro-Cli/data.sqlite3"),
+                roaming.join("kiro-cli/data.sqlite3")
+            ]
+        );
+        let fallback = [
+            home.join("AppData/Local/Kiro-Cli/data.sqlite3"),
+            home.join("AppData/Roaming/kiro-cli/data.sqlite3"),
+        ];
+        assert_eq!(kiro_windows_databases(&home, None, None), fallback);
+        assert_eq!(
+            kiro_windows_databases(&home, Some("relative".into()), Some(PathBuf::new())),
+            fallback
+        );
+    }
+    #[test]
+    fn kiro_windows_local_and_legacy_logins_are_read_and_wal_changes_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = kiro_windows_databases(dir.path(), None, None);
+        let before = file_signature(&paths);
+        for path in &paths {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            kiro_db(
+                path,
+                &[(
+                    "auth_kv",
+                    "kirocli:social:token",
+                    json!({"access_token":"PRIVATE_ACCESS","refresh_token":"PRIVATE_REFRESH",
+                        "expires_at":"2099-01-01T00:00:00Z","provider":"github",
+                        "profile_arn":"arn:aws:codewhisperer:us-east-1:1:profile/windows"}),
+                )],
+            );
+            let rows = extract("kiro", "local", &read_file("/native", path).unwrap()).unwrap();
+            assert_eq!(rows.len(), 1);
+            assert!(rows[0].connection.has_credential);
+            assert!(rows[0].connection.identity_key.is_some());
+            assert_eq!(
+                native_subscription(&rows[0].connection).unwrap().mode,
+                "usage"
+            );
+            assert!(!rows[0].secret.contains("PRIVATE_REFRESH"));
+        }
+        assert_ne!(
+            before,
+            file_signature(&paths),
+            "a new login store triggers discovery"
+        );
+        let db = rusqlite::Connection::open(&paths[0]).unwrap();
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+            .unwrap();
+        let created = file_signature(&paths);
+        let main = std::fs::read(&paths[0]).unwrap();
+        db.execute(
+            "UPDATE auth_kv SET value=?1 WHERE key='kirocli:social:token'",
+            [json!({"access_token":"ROTATED_ACCESS","provider":"github",
+                "profile_arn":"arn:aws:codewhisperer:us-east-1:1:profile/windows"})
+            .to_string()],
+        )
+        .unwrap();
+        assert_eq!(main, std::fs::read(&paths[0]).unwrap());
+        assert_ne!(
+            created,
+            file_signature(&paths),
+            "WAL-only updates trigger discovery"
+        );
+        let wal = PathBuf::from(format!("{}-wal", paths[0].display()));
+        let before_read = (
+            std::fs::read(&paths[0]).unwrap(),
+            std::fs::read(&wal).unwrap(),
+        );
+        let rows = extract("kiro", "local", &read_file("/native", &paths[0]).unwrap()).unwrap();
+        assert!(rows[0].secret.contains("ROTATED_ACCESS"));
+        assert_eq!(
+            before_read,
+            (
+                std::fs::read(&paths[0]).unwrap(),
+                std::fs::read(&wal).unwrap()
+            )
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn kiro_windows_discovery_and_polling_include_both_stores() {
+        let paths = kiro_windows_databases(
+            &crate::store::home(),
+            std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+            std::env::var_os("APPDATA").map(PathBuf::from),
+        );
+        let discovered = extra_paths("kiro");
+        let watched = watched_files("kiro", &Settings::default());
+        for path in paths {
+            assert!(discovered.contains(&path.to_string_lossy().into_owned()));
+            assert!(watched.contains(&path));
         }
     }
     #[test]

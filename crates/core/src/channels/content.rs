@@ -320,7 +320,7 @@ fn record_session(v: &Value) -> Option<&str> {
 }
 
 /// Validate the root session before reading text. A matching filename is insufficient for Codex.
-fn records(path: &Path, root: &Path, target: &Session) -> Result<(Vec<Value>, bool)> {
+pub(super) fn records(path: &Path, root: &Path, target: &Session) -> Result<(Vec<Value>, bool)> {
     let path = path.canonicalize().context("会话记录不可用")?;
     let root = root.canonicalize().context("会话来源目录不可用")?;
     ensure!(

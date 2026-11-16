@@ -9,7 +9,9 @@ mod content;
 mod control;
 mod db;
 mod feishu;
+mod opencode;
 mod protocol;
+mod readers;
 mod service;
 mod socket;
 

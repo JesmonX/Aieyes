@@ -106,6 +106,7 @@ impl Service {
                                     control::process_event(&store)?;
                                     if last_confirm.elapsed() >= Duration::from_secs(5) {
                                         control::confirm(&store)?;
+                                        super::opencode::poll(&store)?;
                                         last_confirm = Instant::now();
                                     }
                                 }

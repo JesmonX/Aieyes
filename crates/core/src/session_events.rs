@@ -768,6 +768,15 @@ pub fn native(provider: &str, row: &Value) -> Option<Event> {
                 "step/start" => "thinking",
                 "tool/call" => "tool",
                 "tool/result" => "output",
+                // An approval is keyed by its own identifier; the decision carries no call.
+                "approval/asked" => {
+                    event.call = format!("approval:{}", field(&row["data"], &["id"]));
+                    "PermissionRequest"
+                }
+                "approval/decided" => {
+                    event.call = format!("approval:{}", field(&row["data"], &["id"]));
+                    "ElicitationResult"
+                }
                 "turn/end" => match row["data"]["reason"]["kind"].as_str() {
                     Some("completed") => "complete",
                     Some("cancelled" | "interrupted" | "aborted") => "interrupted",
@@ -783,6 +792,9 @@ pub fn native(provider: &str, row: &Value) -> Option<Event> {
     if kind == "tool" || kind == "output" {
         let p = if provider == "kimi" {
             &row["event"]
+        } else if provider == "deepseek-harness" && kind == "output" {
+            // A result names its call inside the tool message.
+            &row["data"]["message"]
         } else if matches!(provider, "deepseek-harness" | "copilot") {
             &row["data"]
         } else {
@@ -1208,6 +1220,7 @@ impl Activity {
                                 | "request_user_input_async"
                                 | "AskUserQuestion"
                                 | "ask_question"
+                                | "ask_user_question"
                                 | "ask_permission"
                         ) {
                             self.waiting.insert(e.call.clone());
@@ -1476,6 +1489,41 @@ mod tests {
         assert_eq!(a.phase, Some(Phase::Working));
         a.apply(event("PostToolUseFailure", "tool", 201));
         assert_ne!(a.phase, Some(Phase::Failed));
+    }
+    #[test]
+    fn harness_questions_and_approvals_wait_until_their_own_result() {
+        use serde_json::json;
+        let mut activity = Activity::default();
+        let mut at = 100;
+        let mut apply = |mut row: Value| {
+            at += 1;
+            row["time"] = json!(at);
+            activity.apply(native("deepseek-harness", &row).unwrap());
+            activity.phase
+        };
+        apply(json!({"type":"turn/start","data":{"turn":1}}));
+        let call = |id: &str, name: &str| json!({"type":"tool/call","data":{"turn":1,"step":0,"callId":id,"name":name,"arguments":"{}"}});
+        let result = |id: &str| json!({"type":"tool/result","data":{"turn":1,"step":0,"message":{"role":"tool","id":"m","toolCallId":id,"content":[],"isError":false}}});
+        assert_eq!(apply(call("bash", "bash")), Some(Phase::Tool));
+        assert_eq!(
+            apply(call("ask", "ask_user_question")),
+            Some(Phase::NeedsInput)
+        );
+        // Another tool's result neither answers the question nor leaves its own call running.
+        assert_eq!(apply(result("bash")), Some(Phase::NeedsInput));
+        assert_eq!(apply(result("ask")), Some(Phase::Working));
+        assert_eq!(apply(call("write", "write")), Some(Phase::Tool));
+        assert_eq!(
+            apply(
+                json!({"type":"approval/asked","data":{"id":"a1","toolName":"write","callId":"write"}})
+            ),
+            Some(Phase::NeedsInput)
+        );
+        assert_eq!(
+            apply(json!({"type":"approval/decided","data":{"id":"a1","outcome":"allowed-once"}})),
+            Some(Phase::Tool)
+        );
+        assert_eq!(apply(result("write")), Some(Phase::Working));
     }
     #[test]
     fn codebuddy_parent_chain_binds_legacy_prompts_without_finishing_a_new_turn() {

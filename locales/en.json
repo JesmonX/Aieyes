@@ -4377,5 +4377,13 @@
   "请先回答所有问题再提交": "Answer every question before submitting.",
   "（可多选）": " (select multiple)",
   "提交": "Submit",
-  "Claude 问题接口尚未就绪，请在原窗口重新提问后重试": "The Claude question interface is not ready. Ask the question again in the original window, then retry."
+  "Claude 问题接口尚未就绪，请在原窗口重新提问后重试": "The Claude question interface is not ready. Ask the question again in the original window, then retry.",
+  "未找到 OpenCode 后台服务": "OpenCode background service not found",
+  "OpenCode 后台服务登记无效": "The OpenCode background service registration is invalid",
+  "OpenCode 后台服务响应过大": "The OpenCode background service response is too large",
+  "无法读取 OpenCode 的待处理请求": "Could not read OpenCode's pending requests",
+  "原会话已接收指令": "The original session received your command",
+  "回答不在可选项中，请回复选项编号": "That answer is not one of the options. Reply with an option number.",
+  "请回复一个数字": "Reply with a number",
+  "原会话仍在执行，请等待本轮结束后重试": "The original session is still running. Retry after this turn ends."
 }

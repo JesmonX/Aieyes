@@ -1,4 +1,5 @@
 //! AskUserQuestion replies use Claude's PermissionRequest updatedInput contract.
+//! Qoder CLI ships the same tool, transcript and hook contract, so it shares this path.
 //! The observer hooks remain metadata-only; this separate hook is channel opt-in.
 use super::{Session, codex, configuration, content, control::Outcome};
 use crate::{
@@ -17,6 +18,23 @@ use std::{
 
 const MARKER: &str = "--aieyes-claude-question";
 const PREVIEW_BUDGET: usize = 8000;
+
+/// Agents whose CLI answers `AskUserQuestion` through a `PermissionRequest` hook.
+pub(super) fn hooked(provider: &str) -> bool {
+    matches!(provider, "claude" | "qoder" | "qoder-cn")
+}
+
+/// The CLI configuration directory, or `None` for a source that is not one (Qoder desktop).
+fn home(source: &Source) -> Option<std::path::PathBuf> {
+    let home = expand(if source.path.is_empty() {
+        crate::contracts::provider(&source.provider).map_or("", |p| p.default_path)
+    } else {
+        &source.path
+    });
+    (source.provider == "claude"
+        || crate::qoder_desktop::database(&source.path).is_none() && home.join("projects").is_dir())
+    .then_some(home)
+}
 
 pub(super) fn question_hash(input: &Value) -> String {
     let mut questions = input["questions"].clone();
@@ -180,16 +198,14 @@ pub(super) fn install(store: &Store) -> Result<()> {
     for source in settings
         .sources
         .iter()
-        .filter(|s| s.provider == "claude" && s.host_id.is_none())
+        .filter(|s| hooked(&s.provider) && s.host_id.is_none())
     {
         if !settings.source_enabled(source) {
             continue;
         }
-        let home = expand(if source.path.is_empty() {
-            "~/.claude"
-        } else {
-            &source.path
-        });
+        let Some(home) = home(source) else {
+            continue;
+        };
         if !seen.insert(home.clone()) {
             continue;
         }
@@ -324,27 +340,18 @@ pub fn run_if_requested() -> bool {
         let c = configuration(&store.db)?;
         ensure!(c.enabled && c.owner.is_some(), "disabled");
         let settings = store.settings()?;
-        let source = settings
+        let installed = settings
             .sources
             .iter()
-            .find(|s| {
-                s.id == *source_id
-                    && s.provider == "claude"
-                    && s.host_id.is_none()
-                    && settings.source_enabled(s)
-            })
+            .find(|s| s.id == *source_id && hooked(&s.provider) && s.host_id.is_none())
             .context("source unavailable")?;
-        let (pid, start, kind) = crate::session_hooks::ancestry("claude");
+        let (pid, start, kind) = crate::session_hooks::ancestry(&installed.provider);
         ensure!(
             pid > 0 && start > 0 && kind != Some(crate::session_events::HEADLESS),
-            "not an interactive Claude process"
+            "not an interactive agent process"
         );
         // A copied hook must never bind a different source's native session.
-        let home = expand(if source.path.is_empty() {
-            "~/.claude"
-        } else {
-            &source.path
-        });
+        let home = home(installed).context("source unavailable")?;
         let transcript = input["transcript_path"]
             .as_str()
             .map(Path::new)
@@ -358,16 +365,26 @@ pub fn run_if_requested() -> bool {
         ensure!(service_alive(&store, &c.epoch), "service unavailable");
         let id = super::random_id()?;
         let hash = question_hash(raw);
-        let session_id = crate::models::hash(&format!("local:claude:{native}"));
+        let session_id = crate::models::hash(&format!("local:{}:{native}", installed.provider));
         let until_observed = Instant::now() + Duration::from_secs(5);
-        let call = loop {
-            if let Some(target) = super::db::session(&store.db, &c.epoch, &session_id)? {
+        // Several sources may share one configuration directory; the answer is looked up
+        // under the source that observed the session, not the one that installed the hook.
+        let (source_id, call) = loop {
+            if let Some(target) = super::db::session(&store.db, &c.epoch, &session_id)?
+                && let Some(source) = settings.sources.iter().find(|s| {
+                    s.id == target.session.source_id
+                        && s.provider == installed.provider
+                        && s.host_id.is_none()
+                        && settings.source_enabled(s)
+                        && self::home(s).as_ref() == Some(&home)
+                })
+            {
                 let excerpt = content::local(source, &target);
                 if let Some(request) = excerpt.claude_request
                     && question_hash(&request["input"]) == hash
                     && let Some(call) = request["callId"].as_str().filter(|s| !s.is_empty())
                 {
-                    break call.to_string();
+                    break (source.id.clone(), call.to_string());
                 }
             }
             ensure!(Instant::now() < until_observed, "question not observed");
@@ -386,7 +403,7 @@ pub fn run_if_requested() -> bool {
                     || !settings
                         .sources
                         .iter()
-                        .any(|s| s.id == *source_id && settings.source_enabled(s))
+                        .any(|s| s.id == source_id && settings.source_enabled(s))
                 {
                     break;
                 }

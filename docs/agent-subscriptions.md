@@ -219,7 +219,7 @@ Qoder 本机现有登录已完成真实额度和身份查询（套餐余额为 0
 
 ### Kiro（CLI 与 IDE，2026-10-31 核对）
 
-- 自动识别 `kiro-cli/data.sqlite3` 的 `auth_kv`、`state`，以及 `~/.aws/sso/cache/kiro-auth-token.json`。macOS 的 CLI DB 在 `~/Library/Application Support`；Linux 使用 `XDG_DATA_HOME` 或 `~/.local/share`。IDE 的 IAM Identity Center profile 从 `Kiro/User/globalStorage/kiro.kiroagent/profile.json` 只读补全。数据库以只读事务访问；不读 device registration secret，不保存/使用 refresh token。CLI 的 OIDC/social 两条记录选择最新有效项。
+- 自动识别 `kiro-cli/data.sqlite3` 的 `auth_kv`、`state`，以及 `~/.aws/sso/cache/kiro-auth-token.json`。macOS 的 CLI DB 在 `~/Library/Application Support`；Linux 使用 `XDG_DATA_HOME` 或 `~/.local/share`。Windows 同时扫描 `%LOCALAPPDATA%\Kiro-Cli\data.sqlite3` 和旧版 `%APPDATA%\kiro-cli\data.sqlite3`，环境变量缺失时回退到用户目录的 `AppData/Local`、`AppData/Roaming`；两处数据库及 WAL 变更均参与自动检测。IDE 的 IAM Identity Center profile 从 `Kiro/User/globalStorage/kiro.kiroagent/profile.json` 只读补全。数据库以只读事务访问；不读 device registration secret，不保存/使用 refresh token。CLI 的 OIDC/social 两条记录选择最新有效项。
 - 使用 `GetUsageLimits` 展示套餐积分、超额、有效试用/赠送、加购包及各自重置/到期时间；同一 profile 的 CLI/IDE 去重。接口失效不主动刷新 token。真实账户响应、企业订阅及区域覆盖尚未实测，解析以官方客户端消费的字段和合成 fixture 核对。
 - 仅本机 CLI 持有的 token 过期时，兜底运行 `kiro-cli chat --v2 --no-interactive /usage`，每 300 秒最多一次。`--v2` 用于让 `/usage` 留在 CLI 本地命令路径；不会把它作为 V3 模型提示。进程标记 `AIEYES_INTERNAL=1`，关闭自动更新，关闭 stdin，20 秒超时，在 Aieyes 的独立目录运行，并记录本次目录下新产生的会话 ID。同期用户新建的会话不会被排除。IDE-only/SSH 登录过期时等待对应客户端刷新，不启动本机的另一个账户。
 - 会话读取 CLI V2 `~/.kiro/sessions/cli/*.json`、CLI V3/IDE `~/.kiro/sessions/*/sess_*/session.json`。`KIRO_HOME` 支持绝对路径。只读元数据，消息文件只取修改时间；不会扫描 `.kiro/extensions`。CLI lock-holder 及父进程的 argv/AIEYES_INTERNAL/KIRO_API_KEY 参与无头判断；明确的 TUI 仍计入，缺乏信号默认计入。已观察到的无头判定在同一次监控生命周期中保留。

@@ -41,14 +41,20 @@ macOS 的原生终端输入还需要开启**允许按终端适配输入**，并�
 | --- | --- |
 | Codex / ChatGPT Work，已有兼容的 app-server 控制接口 | 验证原 thread、工作目录和最新 turn 后，回答可重放的结构化问题或单次审批，或在同一 thread 开启下一轮 |
 | Codex，原生 socket 不可用，但已有 CLI 支持 `queue --thread … --message … --resume` | 核对当前原生记录后排队到同一 thread。只回执“已提交”，不能把 CLI 成功退出视为已执行；等待提问时不使用此回退 |
-| 本机 Claude CLI 的 `AskUserQuestion` | 配对后为启用的本机 Claude 来源安装独立的提问 hook；单选、多选题均生成按钮，选项预览以代码块显示，答案通过原 CLI 的 `PermissionRequest.updatedInput` 返回，不依赖终端自动化授权 |
+| 本机 Claude CLI、Qoder CLI、Qoder CN CLI 的 `AskUserQuestion` | 配对后为启用的本机 CLI 来源安装独立的提问 hook；单选、多选题均生成按钮，选项预览以代码块显示，答案通过原 CLI 的 `PermissionRequest.updatedInput` 返回，不依赖终端自动化授权 |
+| 本机 OpenCode，会话由其后台服务托管 | 通过服务的本机回环接口读取待回答的表单和权限请求：表单生成单选、多选按钮，也可回复编号或文本，答案提交到原表单；权限请求需引用通知后回复 `/approve`（仅本次允许）或 `/decline`；本轮结束后可在同一会话下达下一步指令，最终回复也从该服务读取 |
+| 本机 Kiro CLI、DeepSeek Harness、Antigravity CLI、Qoder 桌面版 | 通知中显示待确认的工具审批或提问及其选项，以及本轮最终回复；这些 Agent 没有可核验的回答接口，回复仍经下面的 tmux 或 macOS 终端适配提交，否则保留指令 |
 | 本机或 SSH Linux 的 tmux 会话 | 开启终端输入后，核对 PID、启动时间、TTY、父进程、唯一 pane 和已支持 Agent 的前台命令；提交文本并等待会话记录确认 |
 | macOS 原生前端中的 Ghostty、iTerm2、Terminal | 开启并授权终端输入后，按 TTY 唯一定位原标签页或分屏，再检查桌面解锁状态、原进程及前台进程组；通过应用自己的 Apple Events 输入 |
 | 其他 App、IDE、终端或 Agent | 发送可读取的问题、完成通知和最终回复；没有可靠控制接口时保留指令，说明不能提交的原因 |
 
 Codex 原生控制入口为该来源目录下的 `app-server-control/app-server-control.sock`。不会连接其他来源的 home，也不会新启动 app-server 替代原应用。较旧版本、Windows 上没有此 Unix socket 的安装、未加载的提问、未向新客户端重放的问题，会按实际能力保留指令或退到已有 CLI 队列。
 
-Claude 提问 hook 仅匹配 `AskUserQuestion`，保留已有 hooks 和权限配置，并在来源的 `.aieyes` 目录保存原设置备份。安装前已弹出的问题需要重新发起；如果当前 CLI 未加载新 hooks，退出并恢复原会话后再提问。只有渠道开启、已配对、来源启用且后台在线时才接收答案；逐次核对原进程、问题及工具调用 ID。关闭渠道或来源后不再回答问题，原 CLI 界面仍可操作。每次 hook 最长等待 24 小时；SSH Claude 的提问 hook 暂未接入。
+Claude 提问 hook 仅匹配 `AskUserQuestion`，保留已有 hooks 和权限配置，并在来源的 `.aieyes` 目录保存原设置备份。安装前已弹出的问题需要重新发起；如果当前 CLI 未加载新 hooks，退出并恢复原会话后再提问。只有渠道开启、已配对、来源启用且后台在线时才接收答案；逐次核对原进程、问题及工具调用 ID。关闭渠道或来源后不再回答问题，原 CLI 界面仍可操作。每次 hook 最长等待 24 小时；SSH Claude 的提问 hook 暂未接入。Qoder CLI 与 Qoder CN CLI 使用相同的工具、记录格式和 hook 约定，按同样规则安装在各自的配置目录；同一目录被多个来源引用时只安装一次。Qoder 桌面版来源不是 CLI 配置目录，不安装 hook。
+
+OpenCode 的服务地址和口令取自该安装的 `state/opencode/service.json`。只连接本机回环地址，口令不会发往其他主机，也不写入 Aieyes 的数据或日志。回答前重新读取待处理请求并与通知时的问题比对，问题已变化、已被回答或服务拒绝时保留指令。服务不校验表单是否填完，Aieyes 要求每个可见字段都有答案；带显示条件的字段和外部链接字段需回原窗口处理。执行中的权限请求只存在于服务内存，后台每 5 秒查询一次并且每个请求只通知一次。以 `--standalone` 运行的 OpenCode 不由后台服务托管，按终端会话处理。
+
+Kiro 读取会话目录中的 `messages.jsonl`，DeepSeek Harness 读取压缩的会话日志，Antigravity 读取 `brain` 下的步骤记录，Qoder 桌面版只读打开其 `main.sqlite`。DeepSeek Harness 的 `ask_user_question` 和审批记录现在会把会话标记为等待输入，否则不会产生通知。
 
 tmux 和 macOS 终端适配只在本轮结束或等待输入时提交。原 Agent 退出、PID 被复用、前台变成 shell、出现多个匹配分屏、桌面自动化缺少授权等情况会保留指令。SSH 上的图形化 App 自动化和非 Linux 远程终端控制不在第一版范围内。终端审批没有原生请求标识时，需要回原窗口处理。
 
@@ -78,8 +84,8 @@ Aieyes 退出、电脑休眠或 SSH 不可达时，控制能力会暂停。**已
 
 ## 验证边界
 
-离线测试覆盖配对与鉴权、重复事件、引用路由、旧轮次拒绝、密钥隔离、崩溃恢复、分片与 ACK、同 UUID 发送重试、原生协议模拟、SSH 适配和两端设置页。macOS 通过安装的 Ghostty、Terminal 字典编译自动化脚本；测试不向真实会话输入。
+离线测试覆盖配对与鉴权、重复事件、引用路由、旧轮次拒绝、密钥隔离、崩溃恢复、分片与 ACK、同 UUID 发送重试、原生协议模拟、SSH 适配和两端设置页，以及 OpenCode 服务模拟、Qoder CLI hook 和各 Agent 记录读取。macOS 通过安装的 Ghostty、Terminal 字典编译自动化脚本；测试不向真实会话输入。
 
-真实飞书账号、企业权限与发布流程、实际 app-server 对未决请求的重放，以及真实终端提交仍需按 [手动验证](manual-verification.md)完成验收。第一版没有将这些模拟测试描述为真实私聊已接通。
+真实飞书账号、企业权限与发布流程、实际 app-server 对未决请求的重放、Qoder CLI 对提问 hook 的实际加载、OpenCode 的真实权限请求与后续指令，以及真实终端提交仍需按 [手动验证](manual-verification.md)完成验收。第一版没有将这些模拟测试描述为真实私聊已接通。
 
 实现依据：[飞书事件订阅](https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-)、[飞书官方长连接 SDK 协议](https://github.com/larksuite/oapi-sdk-go/tree/v3_main/ws)、[OpenAI app-server](https://learn.chatgpt.com/docs/app-server.md)、[Codex developer commands](https://learn.chatgpt.com/docs/developer-commands.md)、[Claude Code hooks](https://code.claude.com/docs/en/hooks)。

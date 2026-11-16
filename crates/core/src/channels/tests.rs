@@ -1850,3 +1850,714 @@ fn terminal_names_never_accept_shell_foreground() {
     }
     assert!(control::agent_foreground("claude", "/usr/bin/claude"));
 }
+
+/// A stand-in for OpenCode's background service: one session with pending requests.
+fn opencode_service(dir: &Path, state: Value) -> (Source, mpsc::Receiver<(String, Value)>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut state = state;
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                let mut b = [0];
+                if stream.read_exact(&mut b).is_err() {
+                    break;
+                }
+                head.push(b[0]);
+            }
+            let head = String::from_utf8_lossy(&head).into_owned();
+            let mut request = head.lines().next().unwrap_or("").split(' ');
+            let method = request.next().unwrap_or("");
+            let path = request.next().unwrap_or("").split('?').next().unwrap();
+            let header = |name: &str| {
+                head.lines().find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.eq_ignore_ascii_case(name)
+                        .then(|| value.trim().to_owned())
+                })
+            };
+            let mut bytes = vec![
+                0;
+                header("content-length")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0)
+            ];
+            stream.read_exact(&mut bytes).unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+            // "opencode:secret"
+            let authorized =
+                header("authorization").as_deref() == Some("Basic b3BlbmNvZGU6c2VjcmV0");
+            let (code, reply) = match (method, path.strip_prefix("/api/session/ses_fixture")) {
+                _ if !authorized => (401, Value::Null),
+                ("GET", Some("")) => (200, json!({"data":{"id":"ses_fixture"}})),
+                ("GET", Some("/form")) => (200, json!({"data":state["forms"]})),
+                ("GET", Some("/permission")) => (200, json!({"data":state["permissions"]})),
+                ("GET", Some("/message")) => (200, json!({"data":state["messages"]})),
+                ("POST", Some("/prompt")) => (200, json!({"data":{"id":"msg_new"}})),
+                ("POST", Some(rest)) if rest.ends_with("/reply") => {
+                    let kind = if rest.starts_with("/form/") {
+                        "forms"
+                    } else {
+                        "permissions"
+                    };
+                    let id = rest.split('/').nth(2).unwrap_or("");
+                    let rows = state[kind].as_array_mut().unwrap();
+                    let before = rows.len();
+                    rows.retain(|r| r["id"] != id);
+                    (if rows.len() < before { 204 } else { 409 }, Value::Null)
+                }
+                _ => (404, json!({"_tag":"SessionNotFoundError"})),
+            };
+            if method == "POST" {
+                sender.send((path.to_owned(), body)).unwrap();
+            }
+            let body = if reply.is_null() {
+                String::new()
+            } else {
+                reply.to_string()
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {code} Response\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    let home = dir.join("opencode-home");
+    let data = home.join("share/opencode");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("opencode.db"), b"").unwrap();
+    std::fs::create_dir_all(home.join("state/opencode")).unwrap();
+    std::fs::write(
+        home.join("state/opencode/service.json"),
+        json!({"url":url,"password":"secret","pid":1}).to_string(),
+    )
+    .unwrap();
+    let source = Source {
+        id: "opencode-source".into(),
+        provider: "opencode".into(),
+        path: data.to_string_lossy().into(),
+        ..Default::default()
+    };
+    (source, receiver)
+}
+
+fn opencode_fixture(
+    state: Value,
+) -> (
+    tempfile::TempDir,
+    Store,
+    Source,
+    mpsc::Receiver<(String, Value)>,
+) {
+    let (dir, store, _) = fixture();
+    let (source, calls) = opencode_service(dir.path(), state);
+    store
+        .save_settings(&Settings {
+            sources: vec![source.clone()],
+            ..Default::default()
+        })
+        .unwrap();
+    (dir, store, source, calls)
+}
+
+fn opencode_live(source: &Source, phase: Phase) -> LiveSession {
+    let mut s = live(source, phase);
+    s.native_session = "ses_fixture".into();
+    s
+}
+
+/// Mark the newest notification as delivered and return its outbox id and card.
+fn delivered(store: &Store, message: &str) -> (String, String) {
+    let id: String = store
+        .db
+        .query_row(
+            "SELECT id FROM channel_outbox ORDER BY rowid DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    store
+        .db
+        .execute(
+            "UPDATE channel_outbox SET sent_id=?1 WHERE id=?2",
+            params![message, id],
+        )
+        .unwrap();
+    let card = store
+        .db
+        .query_row(
+            "SELECT payload FROM channel_cards WHERE outbox_id=?1",
+            [&id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    (id, card)
+}
+
+fn command_status(store: &Store, reply_to: &str) -> String {
+    control::process_command(store).unwrap();
+    store
+        .db
+        .query_row(
+            "SELECT status FROM channel_commands WHERE reply_to=?1",
+            [reply_to],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+#[test]
+fn opencode_forms_become_cards_and_answers_reach_the_original_form() {
+    let form = json!({"id":"frm_one","sessionID":"ses_fixture","title":"Questions","metadata":{"kind":"question"},"fields":[
+        {"key":"q0","title":"Style","description":"Which style?","type":"string","options":[{"value":"comprehension","label":"Comprehension","description":"One line"},{"value":"loop","label":"Loop"}],"custom":true},
+        {"key":"q1","title":"Features","description":"Which features?","type":"multiselect","options":[{"value":"A","label":"A"},{"value":"B","label":"B"},{"value":"C","label":"C"}]},
+        {"key":"internal","type":"string","hidden":true}]});
+    let (_dir, store, source, calls) = opencode_fixture(json!({"forms":[form],"permissions":[]}));
+    let c = enabled(&store, true);
+    let mut s = opencode_live(&source, Phase::NeedsInput);
+    s.input_request = "question".into();
+    let target = observe(&store, s);
+    control::process_event(&store).unwrap();
+    let (id, card) = delivered(&store, "om_form");
+    assert!(card.contains("Which style?") && card.contains("Comprehension"));
+    assert!(card.contains("Which features?") && card.contains("aieyes.submit"));
+    assert!(!card.contains("internal"));
+    // The service accepts partial answers; the adapter must not.
+    for (message, body) in [
+        ("partial", "1=2"),
+        ("unlisted", "1=2\n2=Z"),
+        ("approve", "1=2\n2=/approve"),
+    ] {
+        ingest(&store, incoming(message, body, "om_form"));
+        assert_eq!(command_status(&store, message), "blocked");
+    }
+    assert!(calls.try_recv().is_err());
+    let click = |event: &str, value: Value| json!({"header":{"event_id":event,"app_id":"cli_fixture","event_type":"card.action.trigger","create_time":(now()*1_000_000).to_string(),"tenant_key":"tenant"},"event":{"host":"im_message","operator":{"open_id":"ou_owner","tenant_key":"tenant"},"context":{"open_chat_id":"oc_owner","open_message_id":"om_form"},"action":{"tag":"button","value":value}}});
+    for (event, value) in [
+        (
+            "style",
+            json!({"action":"aieyes.answer","outboxId":id,"questionId":"1","option":1}),
+        ),
+        (
+            "first",
+            json!({"action":"aieyes.answer","outboxId":id,"questionId":"2","option":0}),
+        ),
+        (
+            "third",
+            json!({"action":"aieyes.answer","outboxId":id,"questionId":"2","option":2}),
+        ),
+        ("submit", json!({"action":"aieyes.submit","outboxId":id})),
+    ] {
+        actions::ingest(&store, &c.epoch, &click(event, value)).unwrap();
+    }
+    assert_eq!(command_status(&store, "om_form"), "confirmed");
+    assert_eq!(
+        calls.try_recv().unwrap(),
+        (
+            "/api/session/ses_fixture/form/frm_one/reply".into(),
+            json!({"answer":{"q0":"loop","q1":["A","C"]}})
+        )
+    );
+    // The form is settled: a late answer to the same notification is not replayed elsewhere.
+    ingest(&store, incoming("late", "1=1\n2=2", "om_form"));
+    assert_eq!(command_status(&store, "late"), "blocked");
+    assert!(calls.try_recv().is_err());
+    assert_eq!(target.session.native_session, "ses_fixture");
+}
+
+#[test]
+fn opencode_answers_are_typed_and_unsupported_fields_stay_in_the_original_window() {
+    let request =
+        |questions: Value| json!({"method":"aieyes/opencodeForm","params":{"questions":questions}});
+    let fields = json!([
+        {"id":"1","key":"name","kind":"string","options":[]},
+        {"id":"2","key":"sure","kind":"boolean","options":[{"label":"Yes","value":true},{"label":"No","value":false}]},
+        {"id":"3","key":"count","kind":"integer","options":[]},
+        {"id":"4","key":"ratio","kind":"number","options":[]},
+        {"id":"5","key":"tags","kind":"multiselect","options":[{"label":"Red","value":"r"}],"custom":true}]);
+    assert_eq!(
+        opencode::answer(
+            &request(fields.clone()),
+            "1=Free text\n2=no\n3=4\n4=0.5\n5=1, custom"
+        )
+        .unwrap(),
+        json!({"answer":{"name":"Free text","sure":false,"count":4,"ratio":0.5,"tags":["r","custom"]}})
+    );
+    assert!(opencode::answer(&request(fields.clone()), "1=x\n2=maybe\n3=4\n4=0.5\n5=1").is_err());
+    assert!(opencode::answer(&request(fields), "1=x\n2=1\n3=four\n4=0.5\n5=1").is_err());
+    let permission = json!({"method":"aieyes/opencodePermission","params":{}});
+    assert_eq!(
+        opencode::answer(&permission, "/decline").unwrap(),
+        json!({"decision":"reject"})
+    );
+    assert!(opencode::answer(&permission, "always").is_err());
+    // A browser hand-off cannot be answered from chat.
+    let external = json!({"id":"frm_two","fields":[{"key":"login","type":"external","url":"https://example.com"}]});
+    let (_dir, store, source, calls) =
+        opencode_fixture(json!({"forms":[external],"permissions":[]}));
+    enabled(&store, true);
+    let mut s = opencode_live(&source, Phase::NeedsInput);
+    s.input_request = "question".into();
+    observe(&store, s);
+    control::process_event(&store).unwrap();
+    let (_, card) = delivered(&store, "om_external");
+    assert!(!card.contains("button"));
+    ingest(&store, incoming("answer", "done", "om_external"));
+    assert_eq!(command_status(&store, "answer"), "blocked");
+    assert!(calls.try_recv().is_err());
+}
+
+#[test]
+fn opencode_permission_requests_are_polled_once_and_need_an_explicit_decision() {
+    let permission = json!({"id":"per_one","sessionID":"ses_fixture","action":"shell","resources":["rm -rf build"]});
+    let (_dir, store, source, calls) =
+        opencode_fixture(json!({"forms":[],"permissions":[permission]}));
+    enabled(&store, true);
+    observe(&store, opencode_live(&source, Phase::Tool));
+    assert_eq!(count(&store, "channel_events"), 0);
+    opencode::poll(&store).unwrap();
+    assert_eq!(count(&store, "channel_events"), 1);
+    control::process_event(&store).unwrap();
+    let (_, card) = delivered(&store, "om_permission");
+    assert!(card.contains("rm -rf build") && card.contains("/approve"));
+    assert!(!card.contains("button"));
+    opencode::poll(&store).unwrap();
+    assert_eq!(count(&store, "channel_events"), 0);
+    ingest(&store, incoming("vague", "yes", "om_permission"));
+    assert_eq!(command_status(&store, "vague"), "blocked");
+    assert!(calls.try_recv().is_err());
+    ingest(&store, incoming("approve", "/approve", "om_permission"));
+    assert_eq!(command_status(&store, "approve"), "confirmed");
+    assert_eq!(
+        calls.try_recv().unwrap(),
+        (
+            "/api/session/ses_fixture/permission/per_one/reply".into(),
+            json!({"decision":"once"})
+        )
+    );
+    opencode::poll(&store).unwrap();
+    assert_eq!(count(&store, "channel_events"), 0);
+}
+
+#[test]
+fn opencode_final_reply_and_follow_up_use_the_service_only_for_its_own_sessions() {
+    let messages = json!([
+        {"type":"idle","outcome":"succeeded"},
+        {"type":"assistant","finish":"stop","content":[{"type":"reasoning","text":"PRIVATE REASONING"},{"type":"text","text":"Final answer"}]},
+        {"type":"assistant","finish":"tool-calls","content":[{"type":"text","text":"PRIVATE PROGRESS"},{"type":"tool","name":"read"}]},
+        {"type":"user","text":"Do it","time":{"created":1}},
+        {"type":"assistant","finish":"stop","content":[{"type":"text","text":"PREVIOUS TURN"}]}]);
+    let (dir, store, source, calls) =
+        opencode_fixture(json!({"forms":[],"permissions":[],"messages":messages}));
+    enabled(&store, true);
+    observe(&store, opencode_live(&source, Phase::Working));
+    let done = observe(&store, opencode_live(&source, Phase::Complete));
+    control::process_event(&store).unwrap();
+    let (_, card) = delivered(&store, "om_done");
+    assert!(card.contains("Final answer"));
+    assert!(!card.contains("PRIVATE") && !card.contains("PREVIOUS"));
+    ingest(&store, incoming("next", "Next step", "om_done"));
+    assert_eq!(command_status(&store, "next"), "confirmed");
+    assert_eq!(
+        calls.try_recv().unwrap(),
+        (
+            "/api/session/ses_fixture/prompt".into(),
+            json!({"text":"Next step"})
+        )
+    );
+    // A standalone process is unknown to the service and keeps the terminal path.
+    let mut other = opencode_live(&source, Phase::Complete);
+    other.id = "standalone".into();
+    other.native_session = "ses_standalone".into();
+    let other = observe(&store, other);
+    ingest(
+        &store,
+        incoming("standalone", &format!("/send {} Hello", other.key), ""),
+    );
+    assert_eq!(command_status(&store, "standalone"), "blocked");
+    // The password is only ever sent to a loopback service.
+    std::fs::write(
+        dir.path().join("opencode-home/state/opencode/service.json"),
+        json!({"url":"http://192.0.2.1:4096","password":"secret"}).to_string(),
+    )
+    .unwrap();
+    ingest(
+        &store,
+        incoming("remote", &format!("/send {} Hello", done.key), ""),
+    );
+    assert_eq!(command_status(&store, "remote"), "blocked");
+    assert!(calls.try_recv().is_err());
+}
+
+/// A local session of an agent whose record is read by `readers`.
+fn reader_session(
+    store: &Store,
+    provider: &str,
+    path: &Path,
+    native: &str,
+    phase: Phase,
+) -> (Source, Session) {
+    let source = Source {
+        id: format!("{provider}-source"),
+        provider: provider.into(),
+        path: path.to_string_lossy().into(),
+        ..Default::default()
+    };
+    store
+        .save_settings(&Settings {
+            sources: vec![source.clone()],
+            ..Default::default()
+        })
+        .unwrap();
+    let mut s = live(&source, phase);
+    s.id = format!("{provider}-{native}-{}", phase.key());
+    s.native_session = native.into();
+    (source, observe(store, s))
+}
+
+#[test]
+fn kiro_pending_approval_last_question_and_final_reply_are_readable() {
+    let (dir, store, _) = fixture();
+    enabled(&store, true);
+    let home = dir.path().join("kiro");
+    let folder = home.join("sessions/workspace/sess_fixture");
+    std::fs::create_dir_all(&folder).unwrap();
+    let row =
+        |payload: Value| json!({"id":"r","timestamp":"2026-11-16T08:00:00.000Z","payload":payload});
+    let mut rows = vec![
+        row(json!({"type":"user","content":"Old input"})),
+        row(json!({"type":"assistant","operationType":"Say","content":"PREVIOUS TURN"})),
+        row(json!({"type":"turn_end","stopReason":"end_turn"})),
+        row(json!({"type":"user","content":"Clean the build"})),
+        row(json!({"type":"turn_start","turnId":"t2"})),
+        row(json!({"type":"assistant","operationType":"Reasoning","content":"PRIVATE REASONING"})),
+        row(json!({"type":"assistant","operationType":"Say","content":"PRIVATE PROGRESS"})),
+        row(json!({"type":"tool_call","toolCallId":"call-1","toolName":"shell"})),
+        row(
+            json!({"type":"pending_interaction","interactionType":"tool_approval","toolCallId":"call-0","question":"Old approval","options":[{"optionId":"allow","name":"Yes","kind":"allow_once"}]}),
+        ),
+        row(
+            json!({"type":"interaction_resolved","toolCallId":"call-0","outcome":"selected","selectedOption":"allow"}),
+        ),
+        row(
+            json!({"type":"pending_interaction","interactionType":"tool_approval","toolCallId":"call-1","question":"Run rm -rf target?","options":[{"optionId":"allow","name":"Yes","kind":"allow_once"},{"optionId":"reject","name":"No","kind":"reject_once"}],"_meta":{"kiro":{"toolId":"shell"}}}),
+        ),
+    ];
+    save_rows(&folder.join("messages.jsonl"), &rows);
+    let (source, waiting) =
+        reader_session(&store, "kiro", &home, "sess_fixture", Phase::NeedsInput);
+    let excerpt = readers::excerpt(&source, &waiting).unwrap();
+    assert!(excerpt.question.contains("Run rm -rf target?"));
+    assert!(excerpt.question.contains("1. Yes") && excerpt.question.contains("2. No"));
+    assert!(!excerpt.question.contains("Old approval"));
+    assert_eq!(excerpt.user_text, "Clean the build");
+    assert!(excerpt.user_at > 1_700_000_000_000);
+    // The notification carries the approval instead of the generic placeholder.
+    control::process_event(&store).unwrap();
+    let (_, card) = delivered(&store, "om_kiro");
+    assert!(card.contains("Run rm -rf target?") && !card.contains("PRIVATE"));
+    // Once resolved, a waiting turn's question is the model's last message.
+    rows.push(row(
+        json!({"type":"interaction_resolved","toolCallId":"call-1","outcome":"selected","selectedOption":"allow"}),
+    ));
+    rows.push(row(
+        json!({"type":"assistant","operationType":"Say","content":"Which branch should I use?"}),
+    ));
+    rows.push(row(json!({"type":"turn_end","stopReason":"end_turn"})));
+    save_rows(&folder.join("messages.jsonl"), &rows);
+    assert_eq!(
+        readers::excerpt(&source, &waiting).unwrap().question,
+        "Which branch should I use?"
+    );
+    let (source, done) = reader_session(&store, "kiro", &home, "sess_fixture", Phase::Complete);
+    let excerpt = readers::excerpt(&source, &done).unwrap();
+    assert_eq!(excerpt.text, "Which branch should I use?");
+    assert!(excerpt.question.is_empty());
+    // Identifiers that could leave the source directory are never joined into a path.
+    let (source, outside) = reader_session(&store, "kiro", &home, "../workspace", Phase::Complete);
+    assert!(readers::excerpt(&source, &outside).is_none());
+}
+
+#[test]
+fn antigravity_pending_call_and_final_reply_are_readable() {
+    let (dir, store, _) = fixture();
+    enabled(&store, true);
+    let root = dir.path().join("agy");
+    let folder = root
+        .join("brain")
+        .join(NATIVE)
+        .join(".system_generated/logs");
+    std::fs::create_dir_all(&folder).unwrap();
+    let row = |kind: &str, extra: Value| {
+        let mut v = json!({"type":kind,"status":"DONE","created_at":"2026-11-16T08:00:00Z"});
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        v
+    };
+    let mut rows = vec![
+        row("USER_INPUT", json!({"content":"Old input"})),
+        row("PLANNER_RESPONSE", json!({"content":"PREVIOUS TURN"})),
+        row("USER_INPUT", json!({"content":"Ship it"})),
+        row(
+            "PLANNER_RESPONSE",
+            json!({"thinking":"PRIVATE REASONING","tool_calls":[
+                {"name":"view_file","args":{"AbsolutePath":"/fixture/a"}},
+                {"name":"run_command","args":{"CommandLine":"git push origin main","Cwd":"/fixture"}}]}),
+        ),
+        row("GENERIC", json!({"content":"PRIVATE TOOL RESULT"})),
+    ];
+    save_rows(&folder.join("transcript.jsonl"), &rows);
+    let (source, waiting) = reader_session(&store, "antigravity", &root, NATIVE, Phase::NeedsInput);
+    let excerpt = readers::excerpt(&source, &waiting).unwrap();
+    assert_eq!(excerpt.question, "run_command\ngit push origin main");
+    assert_eq!(excerpt.user_text, "Ship it");
+    // A question tool lists its options.
+    rows.push(row("GENERIC", json!({"content":"PRIVATE TOOL RESULT"})));
+    rows.push(row(
+        "PLANNER_RESPONSE",
+        json!({"tool_calls":[{"name":"ask_question","args":{"questions":[{"question":"Which target?","options":["Staging","Production"]}]}}]}),
+    ));
+    save_rows(&folder.join("transcript.jsonl"), &rows);
+    let question = readers::excerpt(&source, &waiting).unwrap().question;
+    assert!(question.contains("Which target?") && question.contains("2. Production"));
+    rows.push(row("GENERIC", json!({"content":"PRIVATE TOOL RESULT"})));
+    rows.push(row("PLANNER_RESPONSE", json!({"content":"Final answer"})));
+    save_rows(&folder.join("transcript.jsonl"), &rows);
+    let (source, done) = reader_session(&store, "antigravity", &root, NATIVE, Phase::Complete);
+    let excerpt = readers::excerpt(&source, &done).unwrap();
+    assert_eq!(excerpt.text, "Final answer");
+    assert!(excerpt.question.is_empty());
+}
+
+#[test]
+fn harness_compressed_log_exposes_pending_question_approval_and_final_reply() {
+    let (dir, store, _) = fixture();
+    enabled(&store, true);
+    let root = dir.path().join("dsh");
+    // The harness names a session after its folder.
+    let native = format!("session-{NATIVE}");
+    let folder = root.join("sessions/fixture").join(&native);
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("session.v4.jsonl.zstd");
+    let save = |rows: &[Value]| {
+        let text = rows.iter().map(|r| format!("{r}\n")).collect::<String>();
+        std::fs::write(&path, zstd::encode_all(text.as_bytes(), 0).unwrap()).unwrap();
+    };
+    let arguments = json!({"questions":[{"id":"q1","header":"Scope","question":"Which scope?","options":[{"label":"Small","description":"One file"},{"label":"Large","description":"Whole crate"}]}]}).to_string();
+    let mut rows = vec![
+        json!({"type":"session","id":native}),
+        json!({"type":"turn/start","time":1,"data":{"turn":1}}),
+        json!({"type":"user/message","time":2,"data":{"content":[{"type":"text","text":"Old input"}]}}),
+        json!({"type":"assistant/message","time":3,"data":{"turn":1,"message":{"content":[{"type":"text","text":"PREVIOUS TURN"}]}}}),
+        json!({"type":"turn/end","time":4,"data":{"turn":1,"reason":{"kind":"completed"}}}),
+        json!({"type":"turn/start","time":5,"data":{"turn":2}}),
+        json!({"type":"user/message","time":6,"data":{"content":[{"type":"text","text":"Refactor it"}]}}),
+        json!({"type":"assistant/message","time":7,"data":{"turn":2,"message":{"content":[{"type":"reasoning","text":"PRIVATE REASONING"},{"type":"text","text":"PRIVATE PROGRESS"}]}}}),
+        json!({"type":"tool/call","time":8,"data":{"turn":2,"step":0,"callId":"ask","name":"ask_user_question","arguments":arguments}}),
+    ];
+    save(&rows);
+    let source = |phase| {
+        let (source, mut target) =
+            reader_session(&store, "deepseek-harness", &root, &native, phase);
+        target.path = path.to_string_lossy().into();
+        (source, target)
+    };
+    let (dsh, waiting) = source(Phase::NeedsInput);
+    let excerpt = readers::excerpt(&dsh, &waiting).unwrap();
+    assert!(excerpt.question.contains("Which scope?") && excerpt.question.contains("2. Large"));
+    assert!(!excerpt.question.contains("PRIVATE"));
+    assert_eq!(
+        (excerpt.user_text.as_str(), excerpt.user_at),
+        ("Refactor it", 6)
+    );
+    rows.push(json!({"type":"tool/result","time":9,"data":{"turn":2,"step":0,"message":{"role":"tool","id":"m","toolCallId":"ask","content":[]}}}));
+    rows.push(json!({"type":"tool/call","time":10,"data":{"turn":2,"step":1,"callId":"write","name":"write","arguments":"{\"path\":\"/fixture/a\"}"}}));
+    rows.push(json!({"type":"approval/asked","time":11,"data":{"id":"a1","toolName":"write","callId":"write","reason":"outside workspace"}}));
+    save(&rows);
+    let question = readers::excerpt(&dsh, &waiting).unwrap().question;
+    assert!(question.starts_with("write\noutside workspace\n") && question.contains("/fixture/a"));
+    assert!(!question.contains("Which scope?"));
+    rows.push(
+        json!({"type":"approval/decided","time":12,"data":{"id":"a1","outcome":"allowed-once"}}),
+    );
+    rows.push(json!({"type":"assistant/message","time":13,"data":{"turn":2,"message":{"content":[{"type":"text","text":"Final answer"}]}}}));
+    rows.push(json!({"type":"turn/end","time":14,"data":{"turn":2,"reason":{"kind":"completed"}}}));
+    save(&rows);
+    let (dsh, done) = source(Phase::Complete);
+    let excerpt = readers::excerpt(&dsh, &done).unwrap();
+    assert_eq!(excerpt.text, "Final answer");
+    assert!(excerpt.question.is_empty());
+    // Another session's log is never read under this session's name.
+    rows[0] = json!({"type":"session","id":CHILD});
+    save(&rows);
+    assert!(readers::excerpt(&dsh, &done).is_none());
+}
+
+#[test]
+fn qoder_desktop_pending_question_and_final_reply_are_readable() {
+    let (dir, store, _) = fixture();
+    enabled(&store, true);
+    let folder = dir.path().join("qoder-desktop");
+    std::fs::create_dir_all(&folder).unwrap();
+    let db = rusqlite::Connection::open(folder.join("main.sqlite")).unwrap();
+    db.execute_batch("CREATE TABLE chat_session_messages(session_id TEXT, message_id TEXT, turn_id TEXT, sequence INTEGER, payload_json TEXT, status TEXT, created_at INTEGER, role TEXT)").unwrap();
+    let insert = |session: &str, sequence: i64, role: &str, payload: Value| {
+        db.execute(
+            "INSERT INTO chat_session_messages VALUES(?1,?2,'t',?3,?4,'completed',?5,?6)",
+            params![
+                session,
+                format!("m{sequence}"),
+                sequence,
+                payload.to_string(),
+                1_794_000_000_000 + sequence,
+                role
+            ],
+        )
+        .unwrap();
+    };
+    insert(
+        NATIVE,
+        1,
+        "user",
+        json!({"parts":[{"type":"text","id":"u","text":"Plan the release"}]}),
+    );
+    insert(
+        CHILD,
+        2,
+        "assistant",
+        json!({"parts":[{"type":"text","id":"x","text":"OTHER SESSION"}]}),
+    );
+    let question = json!({"questions":[{"question":"Which channel?","options":[{"label":"Beta","description":"Testers"},{"label":"Stable","description":"Everyone"}]}]});
+    insert(
+        NATIVE,
+        3,
+        "assistant",
+        json!({"parts":[
+        {"type":"thinking","id":"r","text":"PRIVATE REASONING"},
+        {"type":"tool","id":"p1","tool":{"id":"c0","name":"AskUserQuestion","input":{"questions":[{"question":"ANSWERED","options":[]}]},"status":"completed","completedAt":5}},
+        {"type":"tool","id":"p2","tool":{"id":"c1","name":"AskUserQuestion","input":question,"status":"running"}}]}),
+    );
+    let (source, waiting) = reader_session(&store, "qoder", &folder, NATIVE, Phase::NeedsInput);
+    let excerpt = readers::excerpt(&source, &waiting).unwrap();
+    assert!(excerpt.question.contains("Which channel?") && excerpt.question.contains("2. Stable"));
+    assert!(!excerpt.question.contains("ANSWERED"));
+    assert_eq!(excerpt.user_text, "Plan the release");
+    insert(
+        NATIVE,
+        4,
+        "assistant",
+        json!({"finalTextId":"f","parts":[
+        {"type":"text","id":"s","parentToolUseId":"task","text":"PRIVATE SUBAGENT"},
+        {"type":"text","id":"f","parentToolUseId":null,"text":"Final answer"},
+        {"type":"tool","id":"p3","tool":{"id":"c2","name":"Bash","status":"completed","completedAt":9}}]}),
+    );
+    let (source, done) = reader_session(&store, "qoder", &folder, NATIVE, Phase::Complete);
+    let excerpt = readers::excerpt(&source, &done).unwrap();
+    assert_eq!(excerpt.text, "Final answer");
+    assert!(excerpt.question.is_empty());
+}
+
+#[test]
+fn qoder_cli_shares_the_question_hook_and_desktop_sources_are_left_alone() {
+    let (dir, store, _) = fixture();
+    let root = dir.path().canonicalize().unwrap();
+    let cli = root.join("qoder-cli");
+    std::fs::create_dir_all(cli.join("projects/fixture")).unwrap();
+    let desktop = root.join("qoder-desktop");
+    std::fs::create_dir_all(&desktop).unwrap();
+    rusqlite::Connection::open(desktop.join("main.sqlite"))
+        .unwrap()
+        .execute_batch("CREATE TABLE chat_session_messages(session_id TEXT)")
+        .unwrap();
+    // A folder without transcripts is not a CLI configuration directory.
+    let other = root.join("qoder-other");
+    std::fs::create_dir_all(&other).unwrap();
+    let source = |id: &str, provider: &str, path: &Path| Source {
+        id: id.into(),
+        provider: provider.into(),
+        path: path.to_string_lossy().into(),
+        ..Default::default()
+    };
+    let sources = vec![
+        source("qoder-cli", "qoder", &cli),
+        source("qoder-cli-again", "qoder", &cli),
+        source("qoder-desktop", "qoder", &desktop),
+        source("qoder-other", "qoder-cn", &other),
+    ];
+    store
+        .save_settings(&Settings {
+            sources: sources.clone(),
+            ..Default::default()
+        })
+        .unwrap();
+    enabled(&store, true);
+    claude::install(&store).unwrap();
+    let installed: Value =
+        serde_json::from_slice(&std::fs::read(cli.join("settings.json")).unwrap()).unwrap();
+    let rows = installed["hooks"]["PermissionRequest"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["matcher"], "AskUserQuestion");
+    let command = rows[0]["hooks"][0]["command"].as_str().unwrap();
+    // The first source of a shared directory owns the hook.
+    assert!(
+        command.contains("--aieyes-claude-question")
+            && command.trim_end_matches(['\'', '"']).ends_with("qoder-cli")
+    );
+    assert!(!desktop.join("settings.json").exists() && !desktop.join(".aieyes").exists());
+    assert!(!other.join("settings.json").exists());
+
+    // The question becomes a card with buttons and the reply waits for the hook.
+    let input = json!({"questions":[{"question":"Which system?","header":"System","options":[{"label":"Linux","description":"One"},{"label":"macOS","description":"Two"}],"multiSelect":false}]});
+    let path = cli.join("projects/fixture").join(format!("{NATIVE}.jsonl"));
+    let mut s = live(&sources[0], Phase::NeedsInput);
+    s.input_request = "question-tool".into();
+    s.path = path.to_string_lossy().into();
+    let at = s.turn_started_at + 1000;
+    save_rows(
+        &path,
+        &[
+            json!({"timestamp":at,"type":"assistant","sessionId":NATIVE,"message":{"role":"assistant","content":[{"type":"tool_use","name":"AskUserQuestion","id":"question-tool","input":input}]}}),
+        ],
+    );
+    let mut target = observe(&store, s);
+    control::process_event(&store).unwrap();
+    let (_, card) = delivered(&store, "om_qoder");
+    assert!(card.contains("Which system?") && card.contains("macOS") && card.contains("button"));
+    ingest(&store, incoming("early", "2", "om_qoder"));
+    // No hook is waiting yet: nothing is typed into a terminal instead.
+    assert_eq!(command_status(&store, "early"), "blocked");
+    let pid = std::process::id();
+    let mut system = sysinfo::System::new();
+    system.refresh_processes(
+        sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
+        true,
+    );
+    let start = system
+        .process(sysinfo::Pid::from_u32(pid))
+        .unwrap()
+        .start_time();
+    target.process = Some(ControlProcess { pid, start });
+    let c = configuration(&store.db).unwrap();
+    store.db.execute("INSERT INTO channel_claude_requests(id,epoch,source_id,native,question_hash,call_id,input,pid,process_start,at,heartbeat) VALUES('request',?1,?2,?3,?4,'question-tool',?5,?6,?7,?8,?8)",params![c.epoch,sources[0].id,NATIVE,claude::question_hash(&input),input.to_string(),pid,start,now()]).unwrap();
+    let outcome = claude::answer(&store, &sources[0], &target, "2");
+    assert_eq!(outcome.status, "submitted");
+    let response: String = store
+        .db
+        .query_row("SELECT response FROM channel_claude_requests", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let response: Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(
+        response["hookSpecificOutput"]["decision"]["updatedInput"]["answers"]["Which system?"],
+        "macOS"
+    );
+}

@@ -124,7 +124,7 @@ fn remote(
     Ok(serde_json::from_slice(value)?)
 }
 
-fn saved_prompt(store: &Store, target: &Session) -> Result<Option<String>> {
+pub(super) fn saved_prompt(store: &Store, target: &Session) -> Result<Option<String>> {
     let value: Option<String> = store
         .db
         .query_row(
@@ -139,6 +139,13 @@ fn saved_prompt(store: &Store, target: &Session) -> Result<Option<String>> {
     Ok((value["expected"].as_str() == Some(&target.state_key))
         .then(|| value["hash"].as_str().map(str::to_owned))
         .flatten())
+}
+
+/// Agents without a Claude or Codex transcript have their own bounded readers.
+fn local_excerpt(source: &Source, target: &Session) -> content::Excerpt {
+    super::opencode::excerpt(source, target)
+        .or_else(|| super::readers::excerpt(source, target))
+        .unwrap_or_else(|| content::local(source, target))
 }
 
 fn local_codex(store: &Store, source: &Source, target: &Session, text: &str) -> Outcome {
@@ -350,7 +357,7 @@ fn execute(store: &Store, c: &Config, target: &Session, text: &str) -> Outcome {
             Err(_) => Outcome::uncertain("远程连接中断，无法确认指令是否提交；请核对原会话"),
         };
     }
-    if source.provider == "claude"
+    if super::claude::hooked(&source.provider)
         && target.session.phase == Phase::NeedsInput
         && content::local(&source, target).claude_request.is_some()
     {
@@ -358,6 +365,14 @@ fn execute(store: &Store, c: &Config, target: &Session, text: &str) -> Outcome {
     }
     if matches!(source.provider.as_str(), "codex" | "chatgpt-work") {
         return local_codex(store, &source, target, text);
+    }
+    if let Some(outcome) = super::opencode::execute(
+        &source,
+        target,
+        text,
+        saved_prompt(store, target).ok().flatten().as_deref(),
+    ) {
+        return outcome;
     }
     if !c.allow_terminal {
         return Outcome::blocked("此会话需要启用终端自动化，指令已保留");
@@ -493,8 +508,8 @@ pub(super) fn process_event(store: &Store) -> Result<()> {
                     .cloned();
             }
         } else {
-            excerpt = content::local(&source, &target);
-            let async_request = if source.provider == "claude" {
+            excerpt = local_excerpt(&source, &target);
+            let async_request = if super::claude::hooked(&source.provider) {
                 super::claude::request(&target, &excerpt)
             } else {
                 codex::async_request(&target, &excerpt)
@@ -518,6 +533,15 @@ pub(super) fn process_event(store: &Store) -> Result<()> {
                         "item/commandExecution/requestApproval" | "item/fileChange/requestApproval"
                     )
                 );
+                if !approval {
+                    option_request = Some(request);
+                }
+            } else if target.session.phase == Phase::NeedsInput
+                && let Some(request) = super::opencode::request(&source, &target)
+            {
+                question = Some(codex::describe(&request, &settings.appearance.language));
+                prompt_hash = Some(codex::fingerprint(&request));
+                approval = request["method"] == super::opencode::PERMISSION;
                 if !approval {
                     option_request = Some(request);
                 }
@@ -649,7 +673,7 @@ pub(super) fn confirm(store: &Store) -> Result<()> {
                     .and_then(|v| serde_json::from_value(v["excerpt"].clone()).ok())
                     .unwrap_or_default()
             } else {
-                content::local(&source, &target)
+                local_excerpt(&source, &target)
             }
         } else {
             // An unavailable target still has to leave the submitted state on timeout.

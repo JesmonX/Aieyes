@@ -277,14 +277,19 @@ pub(super) fn describe(request: &Value, language: &str) -> String {
     let p = &request["params"];
     let tr = |text: &str| crate::localization::translate(language, text).into_owned();
     match request["method"].as_str().unwrap_or("") {
-        "item/tool/requestUserInput" | "tool/requestUserInput" | "aieyes/asyncQuestion" => {
+        "item/tool/requestUserInput"
+        | "tool/requestUserInput"
+        | "aieyes/asyncQuestion"
+        | super::opencode::FORM => {
             let mut text = content::questions(&p["questions"]);
             if p["questions"].as_array().is_some_and(|q| q.len() > 1) {
                 text.push_str(&format!("\n\n{}", tr("请按「问题编号=答案」逐行回复。")));
             }
             text
         }
-        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+        "item/commandExecution/requestApproval"
+        | "item/fileChange/requestApproval"
+        | super::opencode::PERMISSION => {
             let operation = p["command"]
                 .as_str()
                 .map(str::to_owned)
