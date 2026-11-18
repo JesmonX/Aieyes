@@ -1,6 +1,6 @@
 import Foundation
 
-struct CoreInfo: Decodable { var contractHash: String?; var hostMonitoring: Bool?; var chatgptWorkInstalled: Bool? }
+struct CoreInfo: Decodable { var contractHash: String?; var hostMonitoring: Bool?; var hostSelection: Bool?; var chatgptWorkInstalled: Bool? }
 struct UpdateOperations: Decodable { var preparing: Bool; var protected: [String]; var active: Int }
 final class EngineClient: @unchecked Sendable {
     static let runtimeChanged = Notification.Name("AieyesRuntimeChanged")
@@ -865,6 +865,7 @@ struct AccountFlowResult {
     func acceptCoreInfo(_ info: CoreInfo) throws {
         if let hash = info.contractHash, hash != CoreContract.contractHash { throw ClientError.message(L("应用资源与核心版本不一致，请重新安装同一版本")) }
         hostMonitoringSupported = info.hostMonitoring == true
+        hostSelectionSupported = info.hostSelection == true
         chatgptWorkInstalled = info.chatgptWorkInstalled == true
     }
     func bootstrap() async {
@@ -1096,11 +1097,11 @@ struct AccountFlowResult {
     private func beginRefresh(_ key: String) {
         var state = refreshStates[key] ?? RefreshStatus(); state.busy = true; refreshStates[key] = state
     }
-    private func finishRefresh(_ key: String, failures: [ActionFailure], itemID: String? = nil) {
+    private func finishRefresh(_ key: String, failures: [ActionFailure], itemID: String? = nil, itemIDs: Set<String>? = nil) {
         var state = refreshStates[key] ?? RefreshStatus(); state.busy = false; state.error = failures.first?.reason
         if failures.isEmpty { state.succeededAt = Date() }
         var nextFailures = actionFailures
-        nextFailures.removeAll { $0.action == key && (itemID == nil || $0.itemID == itemID) }; nextFailures += failures
+        nextFailures.removeAll { $0.action == key && (itemIDs?.contains($0.itemID ?? "") ?? (itemID == nil || $0.itemID == itemID)) }; nextFailures += failures
         if actionFailures != nextFailures { actionFailures = nextFailures }
         state.error = nextFailures.first { $0.action == key }?.reason
         if refreshStates[key] != state { refreshStates[key] = state }
@@ -1220,6 +1221,7 @@ struct AccountFlowResult {
         if hosts != ordered { hosts = ordered }
     }
     private var hostMonitoringSupported = false
+    private var hostSelectionSupported = false
     private var hostMonitorObserver: NSObjectProtocol?
     private var hostMonitorTask: Task<Void, Never>?
     private var hostMonitorConfiguration = ""
@@ -1260,35 +1262,60 @@ struct AccountFlowResult {
             } catch { hostMonitorRetryAt = Date().addingTimeInterval(5); message = error.localizedDescription }
         }
     }
-    func sampleHosts(hostID: String? = nil) async {
+    func serverRefreshTargets(compact: Bool) -> [String] {
+        let defaults = UserDefaults.standard, hosts = settings.monitoredHosts
+        let ids = hosts.map(\.id)
+        func stored(_ panel: NativePanelKey, _ detail: NativePanelKey) -> String? {
+            defaults.string(forKey: NativePanelKey.scoped(panel, detail, compact: compact))
+        }
+        let saved = stored(.panelServerView, .detailServerView) ?? ""
+        let view = saved.isEmpty ? ServerView.migrate(selection: stored(.panelServerSelection, .detailServerSelection) ?? "all",
+                                                       filter: stored(.panelServerFilter, .detailServerFilter) ?? "all", hostIDs: ids)
+                                 : ServerView.resolve(saved, hostIDs: ids)
+        let now = Date().timeIntervalSince1970
+        return hosts.filter { host in
+            host.enabled && ServerView.matches(view, host: host, result: self.hosts.first { $0.id == host.id }, now: now)
+        }.map(\.id)
+    }
+    func sampleHosts(hostID: String? = nil, hostIDs: [String]? = nil) async {
+        guard hostIDs?.isEmpty != true else { return }
+        if let hostIDs, !hostSelectionSupported {
+            for id in hostIDs { await sampleHosts(hostID: id) }
+            return
+        }
+        let selection: [String: Any] = hostIDs.map { ["hostIds": $0] } ?? hostID.map { ["hostId": $0] } ?? [:]
+        let targets = hostIDs.map(Set.init)
+        func failures(_ reason: String) -> [ActionFailure] {
+            (hostIDs?.map(Optional.some) ?? [hostID]).map { ActionFailure(action: "hosts", itemID: $0, name: L("服务器"), reason: reason) }
+        }
         if hostMonitoringSupported {
             guard !installingUpdate, !hostMonitorRequestBusy else { return }
             hostMonitorRequestBusy = true; defer { hostMonitorRequestBusy = false }
             hostMonitorRetryAt = .distantPast; configureHostMonitor()
             if let task = hostMonitorTask { await task.value }
             do {
-                let snapshot: HostMonitorState = try await metricsEngine.call("hosts.monitor.refresh", params: hostID.map { ["hostId":$0] } ?? [:])
+                let snapshot: HostMonitorState = try await metricsEngine.call("hosts.monitor.refresh", params: selection)
                 acceptHostMonitor(snapshot)
-            } catch { finishRefresh("hosts", failures: [ActionFailure(action: "hosts", itemID: hostID, name: L("服务器"), reason: error.localizedDescription)]) }
+            } catch { finishRefresh("hosts", failures: failures(error.localizedDescription), itemID: hostID, itemIDs: targets) }
             return
         }
         guard !installingUpdate, !serverBusy, settings.monitoredHosts.contains(where: \.enabled) else { return }; serverBusy = true; beginRefresh("hosts")
         defer { lastMetrics = Date(); serverBusy = false }
         do {
-            let batch: HostSampleBatch = try await metricsEngine.call("hosts.sample", params: ["stream": true].merging(hostID.map { ["hostId": $0] } ?? [:]) { _, new in new }, onHostSample: { [weak self] row in Task { @MainActor in self?.acceptHostSamples([row]) } })
+            let batch: HostSampleBatch = try await metricsEngine.call("hosts.sample", params: selection.merging(["stream": true]) { _, new in new }, onHostSample: { [weak self] row in Task { @MainActor in self?.acceptHostSamples([row]) } })
             let results = batch.rows
             acceptHostSamples(results)
             if !results.contains(where: { $0.error != nil }), let lastHostError {
                 if message == lastHostError { message = nil }; self.lastHostError = nil
             }
-            finishRefresh("hosts", failures: results.compactMap { row in row.error.map { ActionFailure(action: "hosts", itemID: row.id, name: row.name, reason: $0) } }, itemID: hostID)
+            finishRefresh("hosts", failures: results.compactMap { row in row.error.map { ActionFailure(action: "hosts", itemID: row.id, name: row.name, reason: $0) } }, itemID: hostID, itemIDs: targets)
         } catch {
             let failure = error.localizedDescription; lastHostError = failure; message = failure
             hosts = settings.monitoredHosts.map { host in
                 let previous = hosts.first { $0.id == host.id }
-                return HostResult(id: host.id, name: host.name.isEmpty ? host.target : host.name, sample: previous?.sample, error: host.enabled && (hostID == nil || hostID == host.id) ? failure : previous?.error)
+                return HostResult(id: host.id, name: host.name.isEmpty ? host.target : host.name, sample: previous?.sample, error: host.enabled && (targets?.contains(host.id) ?? (hostID == nil || hostID == host.id)) ? failure : previous?.error)
             }
-            finishRefresh("hosts", failures: [ActionFailure(action: "hosts", itemID: hostID, name: L("服务器"), reason: failure)], itemID: hostID)
+            finishRefresh("hosts", failures: failures(failure), itemID: hostID, itemIDs: targets)
         }
     }
     func removalRequest(_ kind: String, id: String) -> RemovalRequest? {

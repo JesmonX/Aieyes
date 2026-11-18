@@ -73,17 +73,15 @@
     const content = document.querySelector('#content');if (!content) return;
     if (!root?.isConnected) {clear();root = document.createElement('div');root.className = 'server-list';content.replaceChildren(root);// Count and filter on the left, actions on the right; the panel keeps adding in its "more" menu and
       // refreshing in its header, so its toolbar only filters.
-      const head = document.createElement('div');head.className = 'section-head server-toolbar';head.innerHTML = `<div class="server-toolbar-start"><span class="muted" data-server-count></span></div>${PANEL ? '' : `<div class="server-toolbar-end"><button type="button" id="add-server" class="tinted">${AieyesI18n.t("添加 SSH 主机")}</button><button id="sample" title="${AieyesI18n.t("立即采样所有已启用的服务器")}">${AieyesI18n.t("刷新服务器")}</button></div>`}`;content.prepend(head);const tabs = document.createElement('div');tabs.className = 'agent-selector server-selector';tabs.setAttribute('role', 'group');tabs.setAttribute('aria-label', AieyesI18n.t("选择服务器"));tabs.dataset.serverSelector = '';content.prepend(tabs);tabs.setAttribute('aria-label', AieyesI18n.t("服务器筛选"));tabs.onclick = (event) => {const button = event.target.closest('[data-server-view]');if (button) setView(button.dataset.serverView);};if (!PANEL) {head.querySelector('#add-server').onclick = () => openSettings({ category: 'hosts', section: 'add-host' });head.querySelector('#sample').onclick = () => sample();}}
-    const hosts = monitoredHosts();for (const key of expansion.keys()) if (!hosts.some((h) => key === 'host:' + h.id || key.startsWith('group:' + h.id + ':'))) expansion.delete(key);const byID = new Map(state.hosts.map((row) => [row.id, row]));
-    const hostIds = hosts.map((h) => h.id),statuses = new Map(hosts.map((h) => [h.id, hostStatus(h, byID.get(h.id))]));
-    if (state.serverView == null && state.settings) setView(AieyesUI.migrateServerView({ selection: state.serverSelection, filter: state.serverFilter }, hostIds), false);
-    const view = AieyesUI.serverView(state.serverView, hostIds);if (view !== state.serverView && state.serverView != null) setView(view, false);
-    const issues = hosts.filter((h) => AieyesUI.serverViewMatches('errors', h, statuses.get(h.id))).length,paused = hosts.filter((h) => !h.enabled).length;
+      const head = document.createElement('div');head.className = 'section-head server-toolbar';head.innerHTML = `<div class="server-toolbar-start"><span class="muted" data-server-count></span></div>${PANEL ? '' : `<div class="server-toolbar-end"><button type="button" id="add-server" class="tinted">${AieyesI18n.t("添加 SSH 主机")}</button><button id="sample" title="${AieyesI18n.t("刷新当前筛选中已启用的主机")}" aria-label="${AieyesI18n.t("刷新当前筛选中已启用的主机")}">${AieyesI18n.t("刷新")}</button></div>`}`;content.prepend(head);const tabs = document.createElement('div');tabs.className = 'agent-selector server-selector';tabs.setAttribute('role', 'group');tabs.setAttribute('aria-label', AieyesI18n.t("选择服务器"));tabs.dataset.serverSelector = '';content.prepend(tabs);tabs.setAttribute('aria-label', AieyesI18n.t("服务器筛选"));tabs.onclick = (event) => {const button = event.target.closest('[data-server-view]');if (button) setView(button.dataset.serverView);};if (!PANEL) {head.querySelector('#add-server').onclick = () => openSettings({ category: 'hosts', section: 'add-host' });head.querySelector('#sample').onclick = () => userRefresh('hosts');}}
+    const snapshot = serverViewSnapshot(), { hosts, samples, view, issues, paused, selected } = snapshot;
+    for (const key of expansion.keys()) if (!hosts.some((h) => key === 'host:' + h.id || key.startsWith('group:' + h.id + ':'))) expansion.delete(key);
+    if (state.settings && view !== state.serverView) setView(view, false);
     const tabs = document.querySelector('[data-server-selector]');
     const choice = (id, label, count = null, title = label) => `<button type="button" data-server-view="${escapeHTML(id)}" aria-pressed="${view === id}" tabindex="${view === id ? 0 : -1}" title="${escapeHTML(title)}">${escapeHTML(label)}${count == null ? '' : `<span class="count" aria-label="${escapeHTML(AieyesI18n.t("{0} 台", count))}">${count}</span>`}</button>`;
     patch(tabs, `<div class="tab-scroller">${choice('all', AieyesI18n.t("全部"))}${choice('errors', AieyesI18n.t("异常"), issues)}${choice('paused', AieyesI18n.t("已暂停"), paused)}${hosts.length ? '<span class="server-view-divider" aria-hidden="true"></span>' : ''}${hosts.map((h) => choice(h.id, h.name || h.target)).join('')}</div>`);
-    patch(document.querySelector('[data-server-count]'), AieyesI18n.t("{0} 台主机", hosts.length) + ' ' + refreshIndicator('hosts'));
-    const selected = hosts.filter((h) => AieyesUI.serverViewMatches(view, h, statuses.get(h.id))),ids = new Set(selected.map((h) => h.id));
+    const ids = new Set(selected.map((h) => h.id));
+    patch(document.querySelector('[data-server-count]'), (view === 'all' ? AieyesI18n.t("共 {0} 台主机", hosts.length) : AieyesI18n.t("显示 {0} 台，共 {1} 台", selected.length, hosts.length)) + ' ' + refreshIndicator('hosts'));
     for (const [id, card] of cards) if (!ids.has(id)) {for (const g of card.groups.values()) g.list?.dispose();card.el.remove();cards.delete(id);}
     let previous = null;
     for (const host of selected) {
@@ -92,7 +90,7 @@
       // control is nested inside a <summary> and the toggle's name is just "设备明细".
       if (!card) {const el = document.createElement('section');el.className = 'card server-card';el.innerHTML = `<div class="server-summary"><div class="between server-heading"></div><div data-server-summary></div><div data-server-health></div></div><details class="server-more" data-agent-detail="host:${escapeHTML(host.id)}"><summary>${AieyesI18n.t("设备明细")}</summary><div data-server-details></div><div data-server-feedback></div></details>`;const disclosure = el.querySelector('.server-more');card = { el, disclosure, heading: el.querySelector('.server-heading'), summary: el.querySelector('[data-server-summary]'), health: el.querySelector('[data-server-health]'), details: el.querySelector('[data-server-details]'), feedback: el.querySelector('[data-server-feedback]'), groups: new Map() };cards.set(host.id, card);disclosure.open = expansion.get('host:' + host.id) ?? disclosureOpen('host:' + host.id, false);disclosure.addEventListener('toggle', () => {expansion.set('host:' + host.id, disclosure.open);try {localStorage.setItem('aieyes.disclosure.v3.' + (PANEL ? 'panel.' : 'detail.') + 'host:' + host.id, String(disclosure.open));} catch (_) {};card.signature = null;if (!disclosure.open) {for (const g of card.groups.values()) g.list?.dispose();card.groups.clear();card.details.replaceChildren();card.feedback.replaceChildren();}request();});}
       if (previous ? previous.nextSibling !== card.el : root.firstChild !== card.el) {if (previous) previous.after(card.el);else root.prepend(card.el);}previous = card.el;
-      if (visible(card.el) || !card.signature) paintCard(card, host, byID.get(host.id));
+      if (visible(card.el) || !card.signature) paintCard(card, host, samples.get(host.id));
     }
     let empty = root.querySelector('.empty');
     if (selected.length) empty?.remove();else
@@ -103,7 +101,7 @@
       if (filtered) empty.querySelector('#clear-server-filter').onclick = () => setView('all');else
       bindSetup();
     }
-    for (const list of lists) list.paint();updateHostStatuses();
+    for (const list of lists) list.paint();updateHostStatuses(snapshot);
   }
   document.addEventListener('click', (event) => {const button = event.target.closest('[data-host-settings]');if (button) {event.preventDefault();event.stopPropagation();void openSettings({ category: 'hosts', hostId: button.dataset.hostSettings });}});
   document.addEventListener('scroll', request, { capture: true, passive: true });window.addEventListener('resize', request);

@@ -4385,5 +4385,15 @@
   "原会话已接收指令": "The original session received your command",
   "回答不在可选项中，请回复选项编号": "That answer is not one of the options. Reply with an option number.",
   "请回复一个数字": "Reply with a number",
-  "原会话仍在执行，请等待本轮结束后重试": "The original session is still running. Retry after this turn ends."
+  "原会话仍在执行，请等待本轮结束后重试": "The original session is still running. Retry after this turn ends.",
+  "当前会话": "Current sessions",
+  "当前没有会话": "No current sessions",
+  "查看所有日期": "View all dates",
+  "共 {0} 台主机": "{0} hosts total",
+  "显示 {0} 台，共 {1} 台": "Showing {0} of {1} hosts",
+  "刷新当前筛选中已启用的主机": "Refresh enabled hosts in the current view",
+  "未选择模型": "No models selected",
+  "可见模型": "Visible models",
+  "可以同步最新日志。": "Sync the latest logs.",
+  "尝试清除筛选。": "Try clearing the filters."
 }

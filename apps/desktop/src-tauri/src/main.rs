@@ -183,7 +183,7 @@ fn refresh_feedback(
         return Some(serde_json::json!({"key":key,"busy":false,"noAttempt":true}));
     }
     let failures: Vec<Value> = match result {
-        Ok(rows) => rows.as_array().into_iter().flatten().map(|row| aieyes_core::codex_history::sync_status(row.clone(), false)).filter(|row| row["error"].is_string() || row["partial"] == true).map(|row| {
+        Ok(rows) => rows.get("rows").unwrap_or(rows).as_array().into_iter().flatten().map(|row| aieyes_core::codex_history::sync_status(row.clone(), false)).filter(|row| row["error"].is_string() || row["partial"] == true).map(|row| {
             let error = row["error"].as_str().map(str::to_owned).unwrap_or_else(|| row["issues"].as_array().into_iter().flatten().filter(|issue| issue["code"] != "unknownModel").filter_map(|issue| {
                 let message = issue["message"].as_str()?;
                 let location = issue["path"].as_str().unwrap_or_default();
@@ -255,6 +255,9 @@ async fn engine_call(
     }
     let finished_operation_id = operation_id.clone();
     let invalidation_id = operation_id.clone();
+    let host_ids = (method == "hosts.sample")
+        .then(|| params.get("hostIds").cloned())
+        .flatten();
     let refresh_item = ["sourceId", "accountId", "hostId"]
         .iter()
         .find_map(|key| params[*key].as_str())
@@ -340,7 +343,17 @@ async fn engine_call(
             serde_json::json!({"operationId":finished_operation_id,"busy":false}),
         );
     }
-    if let Some(feedback) = refresh_feedback(&changed, &result, refresh_item.as_deref()) {
+    if let Some(mut feedback) = refresh_feedback(&changed, &result, refresh_item.as_deref()) {
+        if let Some(ids) = &host_ids {
+            feedback["itemIds"] = ids.clone();
+            if let (Err(error), Some(ids)) = (&result, ids.as_array()) {
+                feedback["failures"] = Value::Array(
+                    ids.iter()
+                        .map(|id| serde_json::json!({"id":id,"name":"刷新失败","error":error}))
+                        .collect(),
+                );
+            }
+        }
         let _ = app.emit("desktop:refresh-status", feedback);
     }
     // Keep both webviews current without starting a second poller or broadcasting
@@ -355,7 +368,12 @@ async fn engine_call(
             serde_json::json!({"method":changed,"operationId":invalidation_id}),
         );
     }
-    for (event, payload) in invalidations {
+    for (event, mut payload) in invalidations {
+        if event == "desktop:hosts-error"
+            && let Some(ids) = &host_ids
+        {
+            payload = serde_json::json!({"error":payload,"hostIds":ids});
+        }
         let _ = app.emit(event, payload);
     }
     if network_broadcast && let Ok(snapshot) = &result {

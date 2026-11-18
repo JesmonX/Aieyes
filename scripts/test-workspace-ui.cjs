@@ -6,6 +6,113 @@ const {chromium}=require('../apps/desktop/node_modules/playwright');
 const {fixture}=require('./workspace-ui-fixture.cjs');
 const {serveFont}=require('./ui-test-helpers.cjs');
 
+async function checkScopedViews(page) {
+  await page.setViewportSize({width: 1200, height: 800});
+  for (const [language, all] of [['en', 'All'], ['zh-CN', '全部']]) {
+    await page.evaluate(language => setLanguage(language), language);
+    assert.equal(await page.locator('[data-overview-agent=""]').textContent(), all);
+    const labels = page.locator('.quota-style-label:visible');
+    await labels.first().waitFor();
+    assert.equal(await labels.count(), 3);
+    // Exercise the heading's actual available width independently of the screen.
+    await page.locator('.quota-heading').evaluate(el => { el.style.width = '265px'; });
+    await page.waitForFunction(() => !document.querySelector('.quota-heading').hasAttribute('data-show-labels'));
+    assert.equal(await labels.count(), 0);
+    await page.locator('.quota-heading').evaluate(el => el.style.removeProperty('width'));
+    await labels.first().waitFor();
+  }
+
+  await page.evaluate(() => {
+    state.page = 'servers';
+    state.serverView = 'all';
+    state.hostSelection = true;
+    state.settings.localMonitor = null;
+    state.settings.hosts = ['ok', 'failed', 'stale', 'off1', 'off2'].map(id => ({
+      id, name: id, target: id, metrics: [], monitoringEnabled: !id.startsWith('off')
+    }));
+    state.hosts = [
+      {id: 'ok', sample: {timestamp: Date.now()/1000}},
+      {id: 'failed', error: 'offline'},
+      {id: 'stale', sample: {timestamp: Date.now()/1000 - 30}}
+    ];
+    render();
+  });
+  for (const [view, count, ids] of [
+    ['paused', 2, []], ['errors', 2, ['failed', 'stale']], ['ok', 1, ['ok']], ['all', 5, ['ok', 'failed', 'stale']]
+  ]) {
+    await page.locator(`[data-server-view="${view}"]`).click();
+    assert.equal(await page.locator('.server-card').count(), count);
+    assert.match(await page.locator('[data-server-count]').textContent(), new RegExp(view === 'all' ? '共 5 台主机' : `显示 ${count} 台，共 5 台`));
+    assert.equal(await page.locator('#sample').isDisabled(), !ids.length);
+    if (ids.length) {
+      await page.locator('#sample').click();
+      assert.deepEqual(await page.evaluate(() => navigationFixture.calls.filter(c => c.args?.method === 'hosts.sample').at(-1).args.params.hostIds), ids);
+    }
+  }
+  assert.equal(await page.evaluate(() => {
+    const observer = new MutationObserver(() => {});
+    for (const pill of document.querySelectorAll('[data-host-status]')) observer.observe(pill, {attributes: true, childList: true, subtree: true});
+    updateHostStatuses();
+    const mutations = observer.takeRecords().length;
+    observer.disconnect();
+    return mutations;
+  }), 0, 'Unchanged host status pills receive no DOM writes');
+  await page.evaluate(() => {
+    state.hosts.find(h => h.id === 'ok').sample.timestamp -= 12;
+    updateHostStatuses();
+  });
+  await page.waitForFunction(() => document.querySelector('[data-host-status="ok"]').dataset.status === 'stale');
+
+  await page.evaluate(() => navigatePage('analysis'));
+  await page.evaluate(() => {
+    const days = Array.from({length: 365}, (_, i) => ({
+      ...state.dashboard.summary, key: new Date(Date.UTC(2025, 0, 1 + i)).toISOString().slice(0, 10)
+    }));
+    state.dashboard.trendDays = days;
+    state.dashboard.dayModels = days.flatMap(day => [
+      {day: day.key, model: 'A', usage: {...day, total: 80000, cost: 4}},
+      {day: day.key, model: 'B', usage: {...day, total: 20000, cost: 1, tokens: {input: 100, cacheRead: 300, cacheWrite: 0}}}
+    ]);
+    const prepare = prepareTrend;
+    window.prepareCalls = 0;
+    prepareTrend = (...args) => { window.prepareCalls++; return prepare(...args); };
+    state.trendDayIndex = 0;
+    render();
+  });
+  if (!await page.locator('.model-legend').evaluate(el => el.open)) await page.locator('.model-legend > summary').click();
+  await page.locator('[data-trend-model="A"]').click();
+  const builds = await page.evaluate(() => window.prepareCalls);
+  await page.evaluate(() => { trendGrowth = performance.now(); drawTrend(); });
+  await page.waitForFunction(() => trendGrowth === null);
+  await page.locator('#trend').focus();
+  for (let i = 0; i < 10; i++) await page.keyboard.press('ArrowRight');
+  assert.match(await page.locator('#trend-reading').textContent(), /2025-01-11.*20.0K Token · 1.00 USD.*75/);
+  await page.waitForFunction(() => document.querySelector('#announcer')?.textContent === document.querySelector('#trend-reading')?.textContent);
+  assert.equal(await page.evaluate(() => window.prepareCalls), builds);
+  await page.locator('[data-trend-model="B"]').click();
+  assert.equal(await page.locator('#trend-reading').textContent(), '未选择模型');
+
+  await page.evaluate(() => {
+    state.provider = 'codex'; state.model = 'fixture'; state.days = 365; state.dateRange = null;
+    Object.assign(state.dashboard, {summary: {...state.dashboard.summary, total: 0}, dayModels: [], trendDays: [], heatmap: []});
+    render();
+  });
+  await page.locator('#empty-range').click();
+  await page.waitForFunction(() => !state.dashboardPending && state.dateRange?.kind === 'all');
+  assert.deepEqual(await page.evaluate(() => [state.provider, state.model]), ['codex', 'fixture']);
+  await page.evaluate(() => {
+    Object.assign(state.dashboard, {summary: {...state.dashboard.summary, total: 0}, dayModels: [], trendDays: [], heatmap: []});
+    render();
+  });
+  assert.equal(await page.locator('#empty-range').count(), 0);
+  await page.evaluate(() => {
+    renderLiveSessions({sessions: ['working', 'needsInput'].map((phase, i) => ({id: String(i), provider: 'codex', phase, updatedAt: Date.now()/1000}))});
+    return navigatePage('sessions');
+  });
+  assert.match(await page.locator('[data-session-list="running"] h2').textContent(), /当前会话2/);
+  for (const id of ['running', 'waiting']) assert.equal(await page.locator(`[data-session-tile="${id}"] .stat-value`).textContent(), '1');
+}
+
 (async()=>{
   const root=path.resolve(__dirname,'../apps/desktop/web'),out=path.resolve(__dirname,'../.local/ui-redesign-20261015/web');
   fs.mkdirSync(out,{recursive:true});
@@ -340,6 +447,13 @@ const {serveFont}=require('./ui-test-helpers.cjs');
     const settingsJump=await panel.evaluate(()=>navigationFixture.calls.filter(c=>c.command==='desktop_action').at(-1).args.action);
     assert.equal(JSON.parse(settingsJump.slice('settings-target:'.length)).accountKey,'codex:a0','Panel account settings carries the failed account to the main window');
     await panel.emulateMedia({forcedColors:'active'});await snapshot(panel,'panel-high-contrast.png');
+    const scopedPage = await context.newPage();
+    scopedPage.on('pageerror', e => errors.push(String(e)));
+    await scopedPage.goto(url);await scopedPage.evaluate(() => AieyesApp.ready);
+    await scopedPage.locator('[data-page=agent]').click();
+    await scopedPage.waitForFunction(() => !state.dashboardPending);
+    await checkScopedViews(scopedPage);
+    await scopedPage.close();
     assert.deepEqual(errors,[]);
     console.log('Workspace UI: independent filters/context jumps, grouped quota summaries, disclosures, sessions, unified settings, persistence and minimum sizes passed');
   }finally{await browser.close();server.close();}

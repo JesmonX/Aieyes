@@ -81,7 +81,7 @@
     engine(method, p = {}) {
       const d = this.data,s = d.settings,now = Date.now() / 1000;
       switch (method) {
-        case 'hello': return { version: `${d.version}-preview`, runtimeInvalidations: true, hostMonitoring: true };
+        case 'hello': return { version: `${d.version}-preview`, runtimeInvalidations: true, hostMonitoring: true, hostSelection: true };
         case 'methods.manifest': return Object.values(this.methods);
         case 'runtime.revisions': return copy(this.revisions);
         case 'settings.get': return s;
@@ -140,7 +140,7 @@
         case 'credentials.save': return { path: `preview-credentials/${p.sourceId}.key` };
         case 'hosts.credentials.save': return { passwordRef: `preview-${crypto.randomUUID()}` };
         case 'hosts.credentials.delete': return null;
-        case 'hosts.sample': return this.hostRows().filter(v => !p.hostId || v.id === p.hostId);
+        case 'hosts.sample': return this.hostRows().filter(v => p.hostIds ? p.hostIds.includes(v.id) : !p.hostId || v.id === p.hostId);
         case 'hosts.monitor.configure': case 'hosts.monitor.refresh': return this.monitor();
         case 'hosts.discover': return { cpu: [{ id: 'cpu' }, { id: 'cpu0' }, { id: 'cpu1' }], memory: [{ id: 'memory' }], gpu: [{ id: '0', name: 'Preview GPU' }], network: [{ id: 'eth0' }], filesystems: [{ id: '/', type: 'ext4' }, { id: '/data', type: 'ext4' }], disk: [{ id: 'nvme0n1' }], errors: {} };
         case 'hosts.sshConfig.read': return { hosts: [{ alias: 'preview-lab', hostName: 'lab.example.invalid', user: 'preview', port: 22 }, { alias: 'preview-build', hostName: 'build.example.invalid', user: 'preview', port: 22 }], warnings: ['预览模式：这些 SSH 别名为合成数据。'] };

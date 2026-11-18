@@ -5,6 +5,9 @@
 .quota-style-switch { gap:1px; padding:1px; }
 .quota-style-switch > button { width:28px; min-height:0; height:22px; padding:0; color:var(--muted); }
 .quota-style-switch > button[aria-pressed=true] { color:var(--control-mark); }
+.quota-style-label { display:none; }
+.quota-heading[data-show-labels] .quota-style-switch > button { width:auto; padding-inline:6px; gap:4px; }
+.quota-heading[data-show-labels] .quota-style-label { display:inline; }
 .quota-style-switch svg { display:block; width:14px; height:14px; }
 
 .quota-rings { display:grid; gap:8px 4px; grid-auto-flow:dense; align-items:start; min-width:0; }

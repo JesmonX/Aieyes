@@ -35,6 +35,8 @@
 .heat-legend i { width:12px; height:12px; border-radius:var(--heat-cell-radius); }
 .heatmap button:hover,.heatmap button:active { transform:none; }
 #trend { color:color-mix(in srgb,var(--ink) calc(var(--chart-grid-opacity) * 100%),transparent); }
+.trend-plot { position:relative; }
+.trend-cursor { position:absolute; pointer-events:none; top:var(--chart-plot-top); bottom:var(--chart-plot-bottom); border-left:1px dashed var(--accent); }
 #trend-reading { min-height:var(--chart-reading-height); margin:8px 0 0; font-size:var(--font-secondary); line-height:var(--line-secondary); font-variant-numeric:tabular-nums; }
 .model-legend { margin-top:8px; font-size:var(--font-secondary); }
 .heat-table .table-scroll { max-height:280px; }

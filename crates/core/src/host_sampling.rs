@@ -7,6 +7,14 @@ use std::sync::{
     mpsc::sync_channel,
 };
 
+/// A missing selection means all enabled hosts. An explicit empty list selects none.
+pub(crate) fn selected_ids(params: &Value) -> Result<Option<std::collections::HashSet<String>>> {
+    if let Some(ids) = params.get("hostIds") {
+        return Ok(Some(serde_json::from_value(ids.clone())?));
+    }
+    Ok(params["hostId"].as_str().map(|id| [id.to_owned()].into()))
+}
+
 pub(crate) const CONCURRENCY: usize = 3;
 
 pub(crate) fn collect<F, G>(hosts: &[Host], fetch: F, mut receive: G)
@@ -57,10 +65,11 @@ impl Engine {
             .map(|h| h.id)
             .collect();
         self.previous_metrics.retain(|id, _| active.contains(id));
+        let ids = selected_ids(&params)?;
         let selected: Vec<_> = settings
             .monitored_hosts()
             .into_iter()
-            .filter(|h| h.enabled && params["hostId"].as_str().is_none_or(|id| h.id == id))
+            .filter(|h| h.enabled && ids.as_ref().is_none_or(|ids| ids.contains(&h.id)))
             .collect();
         self.host_generation += 1;
         let generation = self.host_generation;

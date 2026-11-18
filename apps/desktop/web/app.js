@@ -272,6 +272,11 @@ function announce(text) {
   region.textContent = '';setTimeout(() => {region.textContent = text;}, 50);
 }
 async function userRefresh(key, ...args) {
+  if (key === 'hosts' && !args.length && state.page === 'servers') {
+    const ids = serverViewSnapshot().targets;
+    if (!ids.length) return;
+    args = [ids];
+  }
   const before = state.refreshState[key] ?? {},success = before.success,failures = before.failures;
   await ({ scan, rescan, quotas, prices: syncPrices, hosts: sample })[key](...args);
   const r = state.refreshState[key] ?? {};
@@ -305,7 +310,7 @@ function updateActivity() {
   updateHeadingIndicators();
   for (const button of document.querySelectorAll('[data-refresh]')) {
     const key = button.dataset.refresh,r = state.refreshState[key] ?? {};
-    const disabled = Boolean((key === 'hosts' ? hostRefreshBusy() : r.busy) || state.settingsSaving || (key === 'quotas' ? state.quotaBusy : (key === 'scan' || key === 'prices') && (state.busy || engineBusy)));
+    const disabled = Boolean((key === 'hosts' ? hostRefreshBusy() || (state.page === 'servers' && !serverViewSnapshot().targets.length) : r.busy) || state.settingsSaving || (key === 'quotas' ? state.quotaBusy : (key === 'scan' || key === 'prices') && (state.busy || engineBusy)));
     if (button.disabled !== disabled) button.disabled = disabled;
     const html = '<span>' + refreshLabels[key] + '</span><small>' + (r.busy ? AieyesI18n.t("进行中…") : r.error ? AieyesI18n.t("失败 · 可重试") : r.success ? timeLabel(r.success) : AieyesI18n.t("尚未刷新")) + '</small>';
     if (refreshButtonHTML.get(button) !== html) {refreshButtonHTML.set(button, html);button.innerHTML = html;}
@@ -313,9 +318,10 @@ function updateActivity() {
   updateRescanStatus();
 }
 function showFailures(error, key, itemId = null) {
-  const failures = error?.failures ?? (error ? [{ id: itemId, name: refreshLabels[key] ?? AieyesI18n.t("操作"), error: error.message ?? String(error) }] : []);
+  const ids = Array.isArray(itemId) ? itemId : [itemId];
+  const failures = error?.failures ?? (error ? ids.map(id => ({ id, name: refreshLabels[key] ?? AieyesI18n.t("操作"), error: error.message ?? String(error) })) : []);
   const r = state.refreshState[key] ??= {};
-  r.failures = [...(itemId ? (r.failures ?? []).filter((row) => (row.accountId ?? row.id) !== itemId) : []), ...failures];
+  r.failures = [...(itemId ? (r.failures ?? []).filter((row) => !ids.includes(row.accountId ?? row.id)) : []), ...failures];
   r.error = r.failures.length ? AieyesI18n.t("读取失败") : null;
   renderFailures();
 }
@@ -766,25 +772,31 @@ function applyHostFailure(error, hostId = null) {
   const message = error.message ?? String(error),attemptedAt = Date.now();
   const rows = monitoredHosts().map((host) => {
     const previous = state.hosts.find((row) => row.id === host.id) ?? { id: host.id };
-    if (!host.enabled || hostId && host.id !== hostId) return previous;
+    if (!host.enabled || (Array.isArray(hostId) ? !hostId.includes(host.id) : hostId && host.id !== hostId)) return previous;
     const { sampleSession, sampleVersion, ...retained } = previous;
     return { ...retained, error: message, lastAttemptAt: attemptedAt };
   });
   applyHostSamples(rows);lastHostError = message;
 }
 async function sample(hostId) {
+  if (Array.isArray(hostId) && !state.hostSelection) {
+    for (const id of hostId) await sample(id);
+    return;
+  }
+  const target = Array.isArray(hostId) ? { hostIds: hostId } : typeof hostId === 'string' ? { hostId } : {};
+  if (target.hostIds?.length === 0) return;
   if (state.hostMonitoring) {
     if (window.AieyesUpdates?.busy || hostMonitorRequestBusy) return;
-    hostMonitorRequestBusy = true;
-    try {hostMonitorRetryAt = 0;await configureHostMonitor();applyHostMonitor(await api('hosts.monitor.refresh', typeof hostId === 'string' ? { hostId } : {}));}
-    catch (error) {applyHostFailure(error, typeof hostId === 'string' ? hostId : null);showFailures(error, 'hosts', typeof hostId === 'string' ? hostId : null);} finally
-    {hostMonitorRequestBusy = false;updateActivity();}
+    hostMonitorRequestBusy = true;updateHostStatuses();
+    try {hostMonitorRetryAt = 0;await configureHostMonitor();applyHostMonitor(await api('hosts.monitor.refresh', target));}
+    catch (error) {applyHostFailure(error, hostId);showFailures(error, 'hosts', hostId);} finally
+    {hostMonitorRequestBusy = false;updateActivity();updateHostStatuses();}
     return;
   }
   if (state.serverBusy || state.refreshState.hosts?.busy) return;state.serverBusy = true;beginRefresh('hosts');let failure = null;
-  try {const payload = await api('hosts.sample', { stream: true, ...(typeof hostId === 'string' ? { hostId } : {}) }),rows = Array.isArray(payload) ? payload : payload.rows;applyHostSamples(rows);failure = batchError(rows, AieyesI18n.t("刷新服务器"));}
-  catch (error) {failure = error;applyHostFailure(error, typeof hostId === 'string' ? hostId : null);} finally
-  {state.lastMetrics = Date.now();state.serverBusy = false;endRefresh('hosts', failure, typeof hostId === 'string' ? hostId : null);}
+  try {const payload = await api('hosts.sample', { stream: true, ...target }),rows = Array.isArray(payload) ? payload : payload.rows;applyHostSamples(rows);failure = batchError(rows, AieyesI18n.t("刷新服务器"));}
+  catch (error) {failure = error;applyHostFailure(error, hostId);} finally
+  {state.lastMetrics = Date.now();state.serverBusy = false;endRefresh('hosts', failure, hostId);updateHostStatuses();}
 }
 async function saveSettings(next, { refresh = true, section = state.settingsTab, submittedForms = null } = {}) {
   if (state.settingsSaving) throw new Error(AieyesI18n.t("设置正在保存，请稍后重试"));
@@ -1086,7 +1098,7 @@ function renderAnalysis() {
   <div class="section-head overview-heading"><h2>${!state.dateRange && state.days === 1 ? AieyesI18n.t("今日概览") : AieyesI18n.t("使用概览")} ${refreshIndicator('scan')}</h2></div>
   <div class="stats">${stat(AieyesI18n.t("总 Token"), compact(s.total), periodDetail(d, 'tokens'), '✧')}${stat(AieyesI18n.t("API 等价成本") + (s.total > 0 && s.pricedTokens < s.total ? ` <button id="repair-pricing" class="pricing-alert" aria-label="${AieyesI18n.t("计价未完成，设置模型价格")}" title="${AieyesI18n.t("部分 Token 尚未计价")}">!</button>` : ''), equivalentCostAvailable(s) ? money(s.cost) : '—', periodDetail(d, 'cost'), '$')}</div>${cacheCard(t)}${nativeCreditsHTML(s, models)}
   <div class="section-head"><h2>${!state.dateRange && state.days === 1 ? AieyesI18n.t("近 7 天趋势") : AieyesI18n.t("使用趋势")}</h2><div id="cost-mode" class="metric-picker" role="group" aria-label="${AieyesI18n.t("统计指标")}"><button type="button" data-cost-mode="false" aria-pressed="${!state.cost}">Token</button><button type="button" data-cost-mode="true" aria-pressed="${state.cost}">${AieyesI18n.t("API 等价成本")}</button></div></div>
-  <div class="chart-row"><div class="card"><h2>${AieyesI18n.t("每日用量")}</h2><canvas id="trend" role="img" aria-details="daily-usage" aria-label="${AieyesI18n.t("按模型堆叠的每日用量，下方有逐日数据")}${AieyesI18n.t("；左右键选择日期，回车查看精确值")}"></canvas><details class="model-legend" data-persist-disclosure="analysis:model-legend" ${disclosureOpen('analysis:model-legend', trendModels.length <= 8) ? 'open' : ''}><summary>${AieyesI18n.t("模型图例")}</summary><div class="model-key">${trendModels.map((m) => `<button data-trend-model="${escapeHTML(m)}" aria-label="${AieyesI18n.t("显示或隐藏模型 {0}", escapeHTML(modelName(m)))}"><i style="background:${color(m)}"></i>${escapeHTML(modelName(m))}</button>`).join('')}</div></details></div><div class="card"><h2>${AieyesI18n.t("模型分布")}</h2>${modelDistribution(models)}</div></div>
+  <div class="chart-row"><div class="card"><h2>${AieyesI18n.t("每日用量")}</h2><div class="trend-plot"><canvas id="trend" role="img" aria-details="daily-usage" aria-label="${AieyesI18n.t("按模型堆叠的每日用量，下方有逐日数据")}${AieyesI18n.t("；左右键选择日期，回车查看精确值")}"></canvas><span class="trend-cursor" hidden></span></div><details class="model-legend" data-persist-disclosure="analysis:model-legend" ${disclosureOpen('analysis:model-legend', trendModels.length <= 8) ? 'open' : ''}><summary>${AieyesI18n.t("模型图例")}</summary><div class="model-key">${trendModels.map((m) => `<button data-trend-model="${escapeHTML(m)}" aria-label="${AieyesI18n.t("显示或隐藏模型 {0}", escapeHTML(modelName(m)))}"><i style="background:${color(m)}"></i>${escapeHTML(modelName(m))}</button>`).join('')}</div></details></div><div class="card"><h2>${AieyesI18n.t("模型分布")}</h2>${modelDistribution(models)}</div></div>
   ${samplingBanner(d)}<div class="card"><details class="daily" data-agent-detail="daily"><summary><h2>${AieyesI18n.t("每日明细")}</h2></summary>${dailyTable(d.trendDays, d.dayModels)}</details></div>
   <div class="card"><h2>${state.dateRange ? AieyesI18n.t("所选日期用量") : AieyesI18n.t("过去 365 天")}</h2>${state.dateRange ? yearlyHeatmapHTML(d.heatmap) : heatmapHTML(d.heatmap)}</div>
   `;
@@ -1111,7 +1123,7 @@ function renderOverview() {
   if (state.provider && !enabledProviders.includes(state.provider)) {void changeFilters({ provider: '', accountKey: '' });return;}
   const visibleProviders = enabledProviders.map((key) => [key, providers[key]]);
   const stop = visibleProviders.some(([key]) => key === state.provider) ? state.provider : '';
-  const agentTabs = `<div class="agent-selector" role="group" aria-label="${AieyesI18n.t("选择 Agent")}"><div class="tab-scroller"><button data-overview-agent="" aria-pressed="${!state.provider}" tabindex="${stop ? -1 : 0}">${AieyesI18n.t("总览")}</button>${visibleProviders.map(([key, label]) => `<button data-overview-agent="${key}" data-provider="${key}" aria-pressed="${key === state.provider}" tabindex="${key === stop ? 0 : -1}">${escapeHTML(label)}</button>`).join('')}</div></div>`;
+  const agentTabs = `<div class="agent-selector" role="group" aria-label="${AieyesI18n.t("选择 Agent")}"><div class="tab-scroller"><button data-overview-agent="" aria-pressed="${!state.provider}" tabindex="${stop ? -1 : 0}">${AieyesI18n.t("全部")}</button>${visibleProviders.map(([key, label]) => `<button data-overview-agent="${key}" data-provider="${key}" aria-pressed="${key === state.provider}" tabindex="${key === stop ? 0 : -1}">${escapeHTML(label)}</button>`).join('')}</div></div>`;
   $('#content').innerHTML = `${state.settings.sources.length || state.settings.accounts.length ? '' : onboarding()}${agentTabs}<div class="overview-usage card"><div class="between usage-heading"><span class="muted usage-title">${AieyesI18n.t("今日用量 {0}", refreshIndicator('scan'))}</span><button id="open-detail" class="analysis-link">${AieyesI18n.t("查看分析 {0}", uiIcon('right'))}</button><span class="usage-actions">${s.total > 0 && s.pricedTokens < s.total ? `<button type="button" id="repair-pricing" class="pricing-alert" aria-label="${AieyesI18n.t("计价未完成，设置模型价格")}" title="${AieyesI18n.t("计价未完成：部分模型缺少价格，点击设置模型价格")}">!</button>` : ''}</span></div><div class="usage-inline">${tokenSummary(s, true)}<span>${AieyesI18n.t("API 等价成本 ")}<strong>${equivalentCostAvailable(s) ? money(s.cost) : '—'}</strong></span></div>${nativeCreditsHTML(s, [], true)}</div>${quotaSection(d)}${samplingBanner(d)}`;
   document.querySelectorAll('[data-overview-agent]').forEach((button) => button.onclick = () => changeFilters({ provider: button.dataset.overviewAgent, accountKey: '', sourceId: '', model: '' }));
   $('#open-detail').onclick = () => openAnalysis();
@@ -1131,9 +1143,9 @@ function shortenEmptyUsage(d) {
   if (chart) {
     const usage = AieyesUI.usageSources(state.settings),fresh = AieyesUI.freshness(state.settings, d),filtered = Boolean(state.provider || state.accountKey || state.sourceId || state.model),onlyQuota = state.settings.sources.every((s) => s.provider === 'deepseek');
     const title = onlyQuota ? AieyesI18n.t("此来源提供账户额度") : fresh.failed ? AieyesI18n.t("记录同步失败") : filtered ? AieyesI18n.t("没有匹配的用量记录") : !fresh.timestamp ? AieyesI18n.t("尚未同步用量记录") : AieyesI18n.t("此时间范围暂无用量");
-    const description = onlyQuota ? AieyesI18n.t("连接账户查看额度与余额；添加日志目录后分析用量。") : fresh.failed ? AieyesI18n.t("请在对应来源查看错误并重试，已有记录仍保留。") : filtered ? AieyesI18n.t("尝试清除筛选或扩大时间范围。") : !fresh.timestamp ? AieyesI18n.t("来源已配置，首次同步后将显示统计。") : AieyesI18n.t("可以扩大日期范围查看历史，或同步最新日志。");
-    const empty = document.createElement('div');empty.className = 'card empty-usage';empty.innerHTML = AieyesUI.emptyStateHTML({ icon: fresh.failed ? 'warning' : onlyQuota ? 'credit' : 'trend', tone: fresh.failed ? 'warn' : '', title, message: description, compact: PANEL, action: `<div class="actions">${onlyQuota ? `<button id="empty-add-source">${AieyesI18n.t("添加日志来源")}</button>` : `<button id="empty-sync">${AieyesI18n.t("同步记录")}</button><button id="empty-range">${AieyesI18n.t("扩大到最近一年")}</button>${filtered ? `<button id="empty-clear">${AieyesI18n.t("清除筛选")}</button>` : ''}`}</div>` });chart.replaceWith(empty);
-    if ($('#empty-sync')) $('#empty-sync').onclick = () => userRefresh('scan');if ($('#empty-add-source')) $('#empty-add-source').onclick = () => openSetup();if ($('#empty-range')) $('#empty-range').onclick = () => {state.days = 365;state.dateRange = null;savePanelView();return PANEL ? openDetail() : changeFilters({ days: 365, dateRange: null });};if ($('#empty-clear')) $('#empty-clear').onclick = () => changeFilters({ provider: '', accountKey: '', sourceId: '', model: '' });
+    const description = onlyQuota ? AieyesI18n.t("连接账户查看额度与余额；添加日志目录后分析用量。") : fresh.failed ? AieyesI18n.t("请在对应来源查看错误并重试，已有记录仍保留。") : filtered ? (state.dateRange?.kind === 'all' ? AieyesI18n.t("尝试清除筛选。") : AieyesI18n.t("尝试清除筛选或扩大时间范围。")) : !fresh.timestamp ? AieyesI18n.t("来源已配置，首次同步后将显示统计。") : state.dateRange?.kind === 'all' ? AieyesI18n.t("可以同步最新日志。") : AieyesI18n.t("可以扩大日期范围查看历史，或同步最新日志。");
+    const empty = document.createElement('div');empty.className = 'card empty-usage';empty.innerHTML = AieyesUI.emptyStateHTML({ icon: fresh.failed ? 'warning' : onlyQuota ? 'credit' : 'trend', tone: fresh.failed ? 'warn' : '', title, message: description, compact: PANEL, action: `<div class="actions">${onlyQuota ? `<button id="empty-add-source">${AieyesI18n.t("添加日志来源")}</button>` : `<button id="empty-sync">${AieyesI18n.t("同步记录")}</button>${state.dateRange?.kind === 'all' ? '' : `<button id="empty-range">${AieyesI18n.t("查看所有日期")}</button>`}${filtered ? `<button id="empty-clear">${AieyesI18n.t("清除筛选")}</button>` : ''}`}</div>` });chart.replaceWith(empty);
+    if ($('#empty-sync')) $('#empty-sync').onclick = () => userRefresh('scan');if ($('#empty-add-source')) $('#empty-add-source').onclick = () => openSetup();if ($('#empty-range')) $('#empty-range').onclick = () => changeFilters({ dateRange: { kind: 'all' } });if ($('#empty-clear')) $('#empty-clear').onclick = () => changeFilters({ provider: '', accountKey: '', sourceId: '', model: '' });
   }
   $('#cost-mode')?.closest('.section-head')?.remove();
   $('#content .daily')?.closest('.card')?.remove();
@@ -1296,14 +1308,42 @@ function markTrendGrowth() {
   const signature = JSON.stringify([state.appliedFilters ?? null, state.cost]),entering = renderedViewKey !== viewKey() || signature !== trendSignature;trendSignature = signature;
   if (entering && !matchMedia('(prefers-reduced-motion: reduce)').matches && !document.hidden) trendGrowth = performance.now();else if (entering) trendGrowth = null;
 }
+let trendData = null;
+function prepareTrend(dashboard, cost) {
+  const { trendDays: days, dayModels: rows } = dashboard;
+  const byDay = new Map(), totals = new Map();
+  let visible = false, filtered = false;
+  for (const row of rows) {
+    if (hiddenTrendModels.has(row.model)) { filtered = true; continue; }
+    visible = true;
+    if (!byDay.has(row.day)) {
+      byDay.set(row.day, []);
+      totals.set(row.day, { total: 0, cost: 0, tokens: { input: 0, cacheRead: 0, cacheWrite: 0 } });
+    }
+    byDay.get(row.day).push(row);
+    const sum = totals.get(row.day), usage = row.usage;
+    sum.total += usage.total;
+    sum.cost += usage.cost;
+    for (const key of Object.keys(sum.tokens)) sum.tokens[key] += usage.tokens?.[key] ?? 0;
+  }
+  const empty = { total: 0, cost: 0, tokens: { input: 0, cacheRead: 0, cacheWrite: 0 } };
+  const readings = days.map(day => filtered ? totals.get(day.key) ?? empty : day);
+  const values = days.map(day => totals.get(day.key)?.[cost ? 'cost' : 'total'] ?? 0);
+  return { days, rows, cost, byDay, readings, values, maximum: Math.max(cost ? 0 : 1, ...values) || 1, filtered, noneSelected: filtered && !visible };
+}
 function drawTrend() {
   const canvas = $('#trend');if (!canvas || !state.dashboard) return;
-  const width = canvas.clientWidth,height = canvas.clientHeight,dpr = window.devicePixelRatio || 1;canvas.width = width * dpr;canvas.height = height * dpr;
-  const ctx = canvas.getContext('2d');ctx.scale(dpr, dpr);
-  const days = state.dashboard.trendDays,rows = state.dashboard.dayModels.filter((r) => !hiddenTrendModels.has(r.model)),byDay = new Map();for (const row of rows) {if (!byDay.has(row.day)) byDay.set(row.day, []);byDay.get(row.day).push(row);}const values = days.map((d) => (byDay.get(d.key) ?? []).reduce((n, r) => n + (state.cost ? r.usage.cost : r.usage.total), 0));
+  const width = canvas.clientWidth,height = canvas.clientHeight,dpr = window.devicePixelRatio || 1;const pixelWidth = Math.round(width * dpr), pixelHeight = Math.round(height * dpr);
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) { canvas.width = pixelWidth; canvas.height = pixelHeight; }
+  const ctx = canvas.getContext('2d');ctx.setTransform(dpr, 0, 0, dpr, 0, 0);ctx.clearRect(0, 0, width, height);
+  const dashboard = state.dashboard;
+  if (!trendData || trendData.days !== dashboard.trendDays || trendData.rows !== dashboard.dayModels || trendData.cost !== state.cost) {
+    trendData = prepareTrend(dashboard, state.cost);
+  }
+  const { days, byDay, values, readings, filtered, noneSelected } = trendData;
   const style = getComputedStyle(canvas),metric = (name) => Number.parseFloat(style.getPropertyValue('--' + name)),muted = style.getPropertyValue('--muted');
   const left = metric('chart-plot-left'),top = metric('chart-plot-top'),bottom = metric('chart-plot-bottom'),plot = height - top - bottom,space = (width - left) / Math.max(1, days.length);
-  const axis = trendAxis(Math.max(state.cost ? 0 : 1, ...values) || 1, Math.floor(plot / 28), !state.cost),max = axis.top,ticks = Math.round(axis.top / axis.step),tickLabel = state.cost ? axisMoney(axis.step) : axisToken;
+  const axis = trendAxis(trendData.maximum, Math.floor(plot / 28), !state.cost),max = axis.top,ticks = Math.round(axis.top / axis.step),tickLabel = state.cost ? axisMoney(axis.step) : axisToken;
   if (trendGrowth != null && !canvas.getClientRects().length) trendGrowth = null;
   const elapsed = trendGrowth == null ? 1 : Math.min(1, (performance.now() - trendGrowth) / (metric('motion-slow') || 320)),growth = 1 - (1 - elapsed) ** 3;
   if (elapsed >= 1) trendGrowth = null;else if (!trendFrame) trendFrame = requestAnimationFrame(() => {trendFrame = 0;drawTrend();});
@@ -1330,16 +1370,25 @@ function drawTrend() {
       }
     }
   });
-  if (Number.isInteger(state.trendDayIndex) && days[state.trendDayIndex]) {const x = left + (state.trendDayIndex + .5) * space;ctx.save();ctx.strokeStyle = style.getPropertyValue('--accent');ctx.lineWidth = 1;ctx.setLineDash([3]);ctx.beginPath();ctx.moveTo(x, top);ctx.lineTo(x, height - bottom);ctx.stroke();ctx.restore();}
   canvas.tabIndex = 0;
+  const plotElement = canvas.parentElement, cursor = plotElement.querySelector('.trend-cursor');
   let selected = Math.min(state.trendDayIndex ?? 0, Math.max(0, days.length - 1));
-  // The caption below the chart follows the pointer silently; only focus and arrow keys speak the selected day.
-  const describe = (i, speak = false) => {const day = days[i];if (!day) return;const changed = state.trendDayIndex !== i;state.trendDayIndex = i;const label = day.key + ' · ' + trendUsage(day);canvas.removeAttribute('title');let reading = $('#trend-reading');if (!reading) {reading = document.createElement('p');reading.id = 'trend-reading';reading.className = 'muted tiny';canvas.after(reading);}reading.textContent = label;if (speak) announce(label);if (changed) drawTrend();};
+  const describe = (i, speak = false) => {
+    const day = days[i];if (!day) return;
+    state.trendDayIndex = i;
+    cursor.hidden = noneSelected;
+    cursor.style.left = (left + (i + .5) * space) + 'px';
+    const text = noneSelected ? AieyesI18n.t("未选择模型") : [day.key, filtered ? AieyesI18n.t("可见模型") : '', trendUsage(readings[i])].filter(Boolean).join(' · ');
+    let reading = $('#trend-reading');
+    if (!reading) {reading = document.createElement('p');reading.id = 'trend-reading';plotElement.after(reading);}
+    if (reading.textContent !== text) reading.textContent = text;
+    if (speak) announce(text);
+  };
   canvas.onmousemove = (e) => {const i = Math.floor((e.offsetX - left) / space);if (days[i]) describe(i);};
   canvas.onfocus = () => describe(selected, true);
   canvas.onkeydown = (e) => {if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {e.preventDefault();selected = e.key === 'Home' ? 0 : e.key === 'End' ? days.length - 1 : Math.max(0, Math.min(days.length - 1, (state.trendDayIndex ?? selected) + (e.key === 'ArrowLeft' ? -1 : 1)));describe(selected, true);} else if (e.key === 'Enter' && days[state.trendDayIndex ?? selected]) showUsageDay(days[state.trendDayIndex ?? selected]);};
   // A background redraw or metric switch keeps the user's selected date readable.
-  if (state.trendDayIndex != null && days.length) describe(selected);
+  if ((state.trendDayIndex != null || noneSelected) && days.length) describe(selected);
 
 }
 function resourcePercent(value) {return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : null;}
@@ -1361,15 +1410,54 @@ function hostStatus(host, result) {
   if (!Number.isFinite(timestamp) || timestamp <= 0 || Date.now() - timestamp * 1000 > 10000) return 'stale';
   return Object.keys(result.sample.errors ?? {}).length ? 'partial' : 'ok';
 }
-function updateHostStatuses() {
-  if (state.page !== 'servers' || !state.settings) return;
-  for (const element of document.querySelectorAll('[data-host-status]')) {
-    const host = monitoredHosts().find((row) => row.id === element.dataset.hostStatus);if (!host) continue;
-    const status = hostStatus(host, state.hosts.find((row) => row.id === host.id)),label = AieyesI18n.t(hostStatusLabels[status]),text = element.querySelector('[data-host-status-label]');element.onclick = () => userRefresh('hosts', host.id);element.title = AieyesI18n.t("{0} · 点击刷新服务器", label);
-    // Background samples must not disable the pill: it would flicker and drop keyboard focus. sample() ignores repeat requests.
-    element.setAttribute('aria-busy', String(hostRefreshBusy(host.id)));element.setAttribute('aria-disabled', String(hostRefreshBusy()));
-    if (element.dataset.status !== status || text.textContent !== label) {element.dataset.status = status;text.textContent = label;}
+// The toolbar, cards and status timer share one classification of the current samples.
+function serverViewSnapshot() {
+  const hosts = monitoredHosts(), ids = hosts.map(host => host.id);
+  const samples = new Map(state.hosts.map(row => [row.id, row]));
+  const previous = state.serverView ?? AieyesUI.migrateServerView({ selection: state.serverSelection, filter: state.serverFilter }, ids);
+  const view = AieyesUI.serverView(previous, ids);
+  const statuses = new Map(), selected = [], targets = [];
+  let issues = 0, paused = 0;
+  for (const host of hosts) {
+    const status = hostStatus(host, samples.get(host.id));
+    statuses.set(host.id, status);
+    if (AieyesUI.serverIssue(status)) issues++;
+    if (!host.enabled) paused++;
+    if (AieyesUI.serverViewMatches(view, host, status)) {
+      selected.push(host);
+      if (host.enabled) targets.push(host.id);
+    }
   }
+  return { hosts, samples, view, statuses, selected, targets, issues, paused };
+}
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-host-status]');
+  if (button) void userRefresh('hosts', button.dataset.hostStatus);
+});
+function updateHostStatuses(snapshot) {
+  if (state.page !== 'servers' || !state.settings) return;
+  const { statuses, targets, issues } = snapshot ?? serverViewSnapshot();
+  const disabled = String(hostRefreshBusy());
+  for (const element of document.querySelectorAll('[data-host-status]')) {
+    const id = element.dataset.hostStatus, status = statuses.get(id);
+    if (!status) continue;
+    const label = AieyesI18n.t(hostStatusLabels[status]);
+    const busy = String(hostRefreshBusy(id)), title = AieyesI18n.t("{0} · 点击刷新服务器", label);
+    if (element.title !== title && element.dataset.hint !== title) element.title = title;
+    if (element.getAttribute('aria-busy') !== busy) element.setAttribute('aria-busy', busy);
+    if (element.getAttribute('aria-disabled') !== disabled) element.setAttribute('aria-disabled', disabled);
+    if (element.dataset.status !== status) element.dataset.status = status;
+    const text = element.querySelector('[data-host-status-label]');
+    if (text.textContent !== label) text.textContent = label;
+  }
+  const refresh = $('#sample');
+  if (refresh) {
+    const unavailable = hostRefreshBusy() || !targets.length;
+    if (refresh.disabled !== unavailable) refresh.disabled = unavailable;
+  }
+  // The clock alone can move hosts across the stale threshold between samples.
+  const badge = document.querySelector('[data-server-view="errors"] .count');
+  if (badge && Number(badge.textContent) !== issues) window.AieyesServers.request();
 }
 function hostShows(host, key) {return host.details == null || host.details.includes(key);}
 function hostDevices(host, key, rows) {
@@ -2017,7 +2105,7 @@ async function listenForSharedState() {
     const previous = state.refreshState[payload.key] ?? {};
     if (payload.noAttempt) {state.refreshState[payload.key] = { ...previous, busy: false };updateActivity();return;}
     if (payload.busy) state.refreshState[payload.key] = { ...previous, busy: true };else
-    {if (payload.key === 'hosts') state.hostRefreshItem = payload.itemId ?? null;state.refreshState[payload.key] = { ...previous, busy: false, success: payload.success ?? previous.success };showFailures(payload.failures?.length ? { failures: payload.failures } : null, payload.key, payload.itemId ?? null);}
+    {if (payload.key === 'hosts') state.hostRefreshItem = payload.itemIds ?? payload.itemId ?? null;state.refreshState[payload.key] = { ...previous, busy: false, success: payload.success ?? previous.success };showFailures(payload.failures?.length ? { failures: payload.failures } : null, payload.key, payload.itemIds ?? payload.itemId ?? null);}
     updateActivity();
   });
   await events.listen('desktop:status', ({ payload }) => {
@@ -2063,7 +2151,7 @@ async function listenForSharedState() {
   await events.listen('desktop:quotas', ({ payload }) => applyQuotaSamples(payload));
   await events.listen('desktop:hosts', ({ payload }) => {applyHostSamples(payload);});
   await events.listen('hosts:changed', ({ payload }) => {applyHostMonitor(payload);});
-  await events.listen('desktop:hosts-error', ({ payload }) => {applyHostFailure(payload, state.hostRefreshItem);});
+  await events.listen('desktop:hosts-error', ({ payload }) => {applyHostFailure(payload?.error ?? payload, payload?.hostIds ?? state.hostRefreshItem);});
   await events.listen('desktop:data-changed', ({ payload }) => {if (state.revisionEvents) return;invalidateQuotaSchedule();
     if (PANEL && window.AieyesContract.methods[payload]?.invalidates.includes('settings')) return; // desktop:settings owns this invalidation.
     if (PANEL || !state.busy && !state.settingsSaving && !state.settingsCommitting && !editorSaving) return refreshExternalData(window.AieyesContract.methods[payload]?.invalidates.includes('settings'), payload);
@@ -2078,7 +2166,7 @@ async function boot() {
   try {
     if (!window.__TAURI__) throw new Error(AieyesI18n.t("通过 Aieyes 桌面应用打开"));
     await listenForSharedState();
-    const info = await api('hello');state.revisionEvents = Boolean(info.runtimeInvalidations);state.hostMonitoring = Boolean(info.hostMonitoring);state.chatgptWorkInstalled = info.chatgptWorkInstalled === true;const version = $('#app-version');if (version) version.textContent = info.version;
+    const info = await api('hello');state.revisionEvents = Boolean(info.runtimeInvalidations);state.hostMonitoring = Boolean(info.hostMonitoring);state.hostSelection = Boolean(info.hostSelection);state.chatgptWorkInstalled = info.chatgptWorkInstalled === true;const version = $('#app-version');if (version) version.textContent = info.version;
     if (info.contractHash && info.contractHash !== window.AieyesContract.contractHash) throw new Error(AieyesI18n.t("应用资源与核心版本不一致，请重新安装同一版本"));
     if (PANEL && state.revisionEvents) {const shell = await window.__TAURI__.core.invoke('desktop_info');state.panelOpen = Boolean(shell.panelOpen);state.panelPage = shell.panelPage ?? state.panelPage;}
     state.settings = await api('settings.get');migrateProviderState();AieyesUI.observePanelAccounts(state.settings);void window.AieyesAgentSettings?.refreshStatuses(true, null, true);
@@ -2209,7 +2297,22 @@ async function refreshQuotaDialog() {
   if (expanded && dialog.querySelector('details')) dialog.querySelector('details').open = true;
   if (focus) document.getElementById(focus)?.focus({ preventScroll: true });
 }
+let quotaHeadingObserver;
 function bindQuotaTools() {
+  quotaHeadingObserver?.disconnect();
+  const heading = document.querySelector('.quota-heading');
+  if (!PANEL && heading?.querySelector('.quota-style-switch')) {
+    const fit = () => {
+      heading.toggleAttribute('data-show-labels', true);
+      const title = heading.querySelector('h2'), actions = heading.querySelector('.section-actions');
+      const gap = parseFloat(getComputedStyle(heading).columnGap) || 0;
+      heading.toggleAttribute('data-show-labels', title.scrollWidth + actions.scrollWidth + gap <= heading.clientWidth);
+    };
+    fit();
+    quotaHeadingObserver = new ResizeObserver(fit);
+    quotaHeadingObserver.observe(heading);
+    quotaHeadingObserver.observe(heading.querySelector('h2'));
+  }
   document.querySelectorAll('[data-empty-panel-accounts]').forEach((button) => button.onclick = openPanelAccounts);
   document.querySelectorAll('[data-retry-quota]').forEach((button) => button.onclick = () => quotas(button.dataset.retryQuota));
   document.querySelectorAll('[data-view-analysis]').forEach((b) => b.onclick = () => openAnalysis(b.dataset.viewAnalysis, b.dataset.viewAnalysis.split(':')[0]));

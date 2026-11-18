@@ -194,16 +194,19 @@ impl HostMonitor {
         publish(&self.shared);
         result
     }
-    pub(crate) fn refresh(&self, host: Option<&str>) -> Result<Value> {
+    pub(crate) fn refresh(
+        &self,
+        hosts: Option<&std::collections::HashSet<String>>,
+    ) -> Result<Value> {
         let mut state = self.shared.state.lock().unwrap();
         ensure!(
-            host.is_none_or(|id| state.entries.contains_key(id)),
+            hosts.is_none_or(|ids| ids.iter().all(|id| state.entries.contains_key(id))),
             "服务器不存在或监控已暂停"
         );
         for entry in state
             .entries
             .values_mut()
-            .filter(|entry| host.is_none_or(|id| entry.host.id == id))
+            .filter(|entry| hosts.is_none_or(|ids| ids.contains(&entry.host.id)))
         {
             // An in-flight sample already satisfies a simultaneous refresh.
             if entry.running.is_none() {
@@ -574,6 +577,46 @@ mod tests {
     }
 
     #[test]
+    fn filtered_refresh_only_reschedules_selected_hosts() {
+        let (tx, rx) = mpsc::channel();
+        let mut monitor = HostMonitor::new(Arc::new(|_, _| Ok(json!({"ok":true}))));
+        monitor.set_sink(Arc::new(move |value| {
+            let _ = tx.send(value);
+        }));
+        monitor.configure(
+            vec![host("a"), host("b"), host("c")],
+            Duration::from_secs(60),
+            false,
+        );
+        let before = wait_snapshot(&rx, |s| {
+            s["rows"].as_array().is_some_and(|rows| {
+                rows.len() == 3 && rows.iter().all(|row| row["sample"]["ok"] == true)
+            })
+        });
+        let versions = |s: &Value| {
+            s["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| {
+                    (
+                        row["id"].as_str().unwrap().to_owned(),
+                        row["sampleVersion"].as_u64().unwrap(),
+                    )
+                })
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+        let previous = versions(&before);
+        let ids = crate::host_sampling::selected_ids(&json!({"hostIds":["a","c"]})).unwrap();
+        monitor.refresh(ids.as_ref()).unwrap();
+        let after = wait_snapshot(&rx, |s| {
+            let v = versions(s);
+            v["a"] > previous["a"] && v["c"] > previous["c"]
+        });
+        assert_eq!(versions(&after)["b"], previous["b"]);
+    }
+
+    #[test]
     fn paused_sample_keeps_the_last_success_and_resumes_with_a_new_baseline() {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = calls.clone();
@@ -598,7 +641,7 @@ mod tests {
         let hosts = vec![host("peer")];
         monitor.configure(hosts.clone(), Duration::from_secs(60), false);
         let initial = wait_snapshot(&rx, |value| value["rows"][0]["sample"]["call"] == 0);
-        monitor.refresh(Some("peer")).unwrap();
+        monitor.refresh(Some(&["peer".to_owned()].into())).unwrap();
         started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         monitor.configure(hosts.clone(), Duration::from_secs(60), true);
         let paused = wait_snapshot(&rx, |value| {

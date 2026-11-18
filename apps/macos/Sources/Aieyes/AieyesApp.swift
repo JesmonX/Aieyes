@@ -240,7 +240,13 @@ struct AieyesCommands: Commands {
     @objc private func detailAction() { openDetail() }
     func menuOpenSettings() { model.openSettings(.init(category: "general")) }
     func menuShowPage(_ page: String) { openDetail(page: page) }
-    func menuRefresh() { Task { if model.detailPage == "servers" { await model.sampleHosts() } else { await model.scan() } } }
+    func menuRefresh() {
+        if model.detailPage == "servers" { refreshVisibleServers() } else { Task { await model.scan() } }
+    }
+    private func refreshVisibleServers() {
+        let ids = model.detailPage == "servers" ? model.serverRefreshTargets(compact: false) : nil
+        Task { await model.sampleHosts(hostIDs: ids) }
+    }
     @objc private func settingsAction() { model.openSettings(.init(category: "general")) }
     @objc private func updateAction() { AppUpdater.shared.check() }
     @objc private func togglePetAction() {
@@ -324,10 +330,10 @@ struct AieyesCommands: Commands {
         return item
     }
     private func refreshTitles() -> [String] { [L("同步记录"), L("刷新额度"), L("同步价格"), L("刷新服务器")] }
-    @objc private func toolbarRefresh(_ sender: NSMenuItem) { Task { switch sender.tag { case 0: await model.scan(); case 1: await model.refreshQuotas(); case 2: await model.syncPrices(); default: await model.sampleHosts() } } }
+    @objc private func toolbarRefresh(_ sender: NSMenuItem) { Task { switch sender.tag { case 0: await model.scan(); case 1: await model.refreshQuotas(); case 2: await model.syncPrices(); default: refreshVisibleServers() } } }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         guard item.action == #selector(toolbarRefresh(_:)) else { return true }
-        switch item.tag { case 1: return !model.quotaBusy; case 3: return !model.serverBusy; default: return !model.busy }
+        switch item.tag { case 1: return !model.quotaBusy; case 3: return !model.hostRefreshBusy() && (model.detailPage != "servers" || !model.serverRefreshTargets(compact: false).isEmpty); default: return !model.busy }
     }
     private func openSettings() {
         openDetail(page: "settings")

@@ -462,7 +462,7 @@ struct RootView: View, Equatable {
     }
     private var analysisAction: some View { HStack { Button(L("查看分析"),systemImage:"arrow.up.right") { model.openAnalysis(from:scope) }.font(AppFont.caption).tint(.primary).fixedSize(); PricingWarning { model.openPricing() }.opacity(usageDashboard.summary.pricedTokens < usageDashboard.summary.total ? 1 : 0).allowsHitTesting(usageDashboard.summary.pricedTokens < usageDashboard.summary.total).disabled(usageDashboard.summary.pricedTokens >= usageDashboard.summary.total).accessibilityHidden(usageDashboard.summary.pricedTokens >= usageDashboard.summary.total) }.fixedSize() }
     @ViewBuilder private var agentButtons: some View {
-        agentButton("all", title: L("总览"))
+        agentButton("all", title: L("全部"))
         ForEach(model.overviewAgentProviders, id: \.self) { provider in agentButton(provider, title: Format.provider(provider)) }
     }
     private func agentButton(_ provider: String, title: String) -> some View {
@@ -537,11 +537,11 @@ struct RootView: View, Equatable {
         let onlyQuota = model.settings.sources.allSatisfy { $0.provider == "deepseek" }
         let failed = usageDashboard.sources.contains { $0.enabled && $0.status?.failureReason != nil }
         return Surface(title: onlyQuota ? L("此来源提供账户额度") : failed ? L("记录同步失败") : hasActiveFilters ? L("没有匹配的用量记录") : model.dataTime == 0 ? L("尚未同步用量记录") : L("此时间范围暂无用量")) {
-            Text(onlyQuota ? L("连接账户查看额度与余额；添加日志目录后分析用量。") : failed ? L("请检查对应来源的错误后重试。") : L("保留筛选与日期入口，可同步记录或扩大范围。")).font(AppFont.secondary).foregroundStyle(.secondary)
-            HStack { if onlyQuota { Button(L("添加日志来源")) { model.openSettings(.init(provider: "codex", section: "machines")) } } else { Button(L("同步记录")) { Task { await model.scan() } }; Button(L("扩大到最近一年")) { filters.rangeChoice = "365"; if compact { model.showDetailPage?("agent") } }; if hasActiveFilters { Button(L("清除筛选")) { filters.provider = "all"; filters.account = "all"; filters.source = "all"; filters.model = "all" } } } }
+            Text(onlyQuota ? L("连接账户查看额度与余额；添加日志目录后分析用量。") : failed ? L("请检查对应来源的错误后重试。") : filters.rangeChoice == "all" ? (hasActiveFilters ? L("尝试清除筛选。") : L("可以同步最新日志。")) : L("保留筛选与日期入口，可同步记录或扩大范围。")).font(AppFont.secondary).foregroundStyle(.secondary)
+            HStack { if onlyQuota { Button(L("添加日志来源")) { model.openSettings(.init(provider: "codex", section: "machines")) } } else { Button(L("同步记录")) { Task { await model.scan() } }; if filters.rangeChoice != "all" { Button(L("查看所有日期")) { filters.rangeChoice = "all" } }; if hasActiveFilters { Button(L("清除筛选")) { filters.provider = "all"; filters.account = "all"; filters.source = "all"; filters.model = "all" } } } }
         }
     }
-    private var hasActiveFilters: Bool { filters.provider != "all" || filters.source != "all" || filters.model != "all" || !filters.isToday }
+    private var hasActiveFilters: Bool { filters.provider != "all" || filters.source != "all" || filters.model != "all" || filters.account != "all" }
     private var hasUsageData: Bool {
         usageDashboard.summary.total > 0 || usageDashboard.summary.hasNativeCredits || usageDashboard.trendDays.contains { $0.total > 0 || $0.hasNativeCredits } || usageDashboard.heatmap.contains { $0.total > 0 || $0.hasNativeCredits }
     }
@@ -558,7 +558,7 @@ struct RootView: View, Equatable {
         Button(L("配置向导"), systemImage: "checklist") { model.showDetailPage?("setup") }
     }
     @ViewBuilder private var activeFilters: some View {
-        if hasActiveFilters {
+        if hasActiveFilters || !filters.isToday {
             filterChips
         }
     }
@@ -657,9 +657,9 @@ struct RootView: View, Equatable {
             if ringStyle != nil { QuotaRingLegend().padding(.leading, 4) }
         }.fixedSize()
     }
-    private var quotaActions: some View {
+    private func quotaActions(labels: Bool = false) -> some View {
         HStack(spacing: 8) {
-            QuotaStylePicker(selection: $quotaStyle)
+            QuotaStylePicker(showsLabels: labels, selection: $quotaStyle)
             Button { model.openSettings(.init(category: "general", section: "panel")) } label: { Image(systemName: "arrow.up.arrow.down") }.help(L("调整账户顺序")).accessibilityLabel(L("调整账户顺序"))
             QuotaRefreshButton(model: model)
         }.fixedSize()
@@ -667,10 +667,11 @@ struct RootView: View, Equatable {
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             ViewThatFits(in: .horizontal) {
-                HStack { quotaHeading; Spacer(minLength: 8); quotaActions }
+                HStack { quotaHeading; Spacer(minLength: 8); quotaActions(labels: !compact) }
+                HStack { quotaHeading; Spacer(minLength: 8); quotaActions() }
                 VStack(alignment: .leading, spacing: 6) {
                     quotaHeading
-                    HStack { Spacer(minLength: 0); quotaActions }
+                    HStack { Spacer(minLength: 0); quotaActions() }
                 }
             }
             if let ringStyle {
@@ -724,7 +725,15 @@ struct RootView: View, Equatable {
     }
     @ViewBuilder private var serverContent: some View {
         serverSelector
-        HStack { if compact { Text(L("服务器")).font(AppFont.section) }; Text(L("{0} 台主机" , model.settings.monitoredHosts.filter(\.enabled).count)).font(AppFont.secondary).foregroundStyle(.secondary); RefreshIndicator(model: model, key: "hosts"); Spacer(); Button { model.openSettings(.init(category: "servers", section: "add-host")) } label: { Image(systemName: "plus") }.help(L("添加 SSH 主机")).accessibilityLabel(L("添加 SSH 主机")) }
+        HStack { if compact { Text(L("服务器")).font(AppFont.section) }; Text(currentServerView == "all" ? L("共 {0} 台主机", model.settings.monitoredHosts.count) : L("显示 {0} 台，共 {1} 台", filteredHosts.count, model.settings.monitoredHosts.count)).font(AppFont.secondary).foregroundStyle(.secondary); RefreshIndicator(model: model, key: "hosts"); Spacer()
+            if !compact {
+                Button(L("刷新")) {
+                    let targets = filteredHosts.filter(\.enabled).map(\.id)
+                    Task { await model.sampleHosts(hostIDs: targets) }
+                }.disabled(model.hostRefreshBusy() || !filteredHosts.contains(where: \.enabled))
+                    .help(L("刷新当前筛选中已启用的主机")).accessibilityLabel(L("刷新当前筛选中已启用的主机"))
+            }
+            Button { model.openSettings(.init(category: "servers", section: "add-host")) } label: { Image(systemName: "plus") }.help(L("添加 SSH 主机")).accessibilityLabel(L("添加 SSH 主机")) }
         if model.settings.monitoredHosts.isEmpty {
             EmptyState(icon: "server.rack", title: L("尚未添加服务器"), message: L("通过 SSH 采集日志或监控服务器资源。"), actionTitle: L("添加服务器"),
                        action: { model.openSettings(.init(category: "servers", section: "add-host")) }, compact: compact)
@@ -764,7 +773,10 @@ private struct SurfaceHeader: View {
                 Button(model.refreshLabel("scan")) { Task { await model.scan() } }.disabled(model.busy)
                 Button(model.refreshLabel("quotas")) { Task { await model.refreshQuotas() } }.disabled(model.quotaBusy)
                 Button(model.refreshLabel("prices")) { Task { await model.syncPrices() } }.disabled(model.busy || model.quotaBusy)
-                Button(model.refreshLabel("hosts")) { Task { await model.sampleHosts() } }.disabled(model.hostRefreshBusy())
+                Button(model.refreshLabel("hosts")) {
+                    let ids = activePage == "servers" ? model.serverRefreshTargets(compact: compact) : nil
+                    Task { await model.sampleHosts(hostIDs: ids) }
+                }.disabled(model.hostRefreshBusy() || (activePage == "servers" && model.serverRefreshTargets(compact: compact).isEmpty))
             } label: {
                 Image(systemName: "arrow.clockwise").font(AppFont.secondary)
             }.menuStyle(.borderlessButton).menuIndicator(.hidden).tint(Color.primary).frame(width: DesignTokens.panelHeadIconSize, height: DesignTokens.panelHeadIconSize).help(L("刷新")).accessibilityLabel(L("刷新选项"))
@@ -984,6 +996,7 @@ struct UsageChart: View, Equatable {
         .onKeyPress(.rightArrow) { move(1); return .handled }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(L("每日用量"))
+        .accessibilityValue(readingText ?? "")
         .accessibilityHint(L("左右方向键选择日期，下方提供精确读数"))
     }
     private func usageBar(_ row: DayModel) -> some ChartContent {
@@ -1019,12 +1032,23 @@ struct UsageChart: View, Equatable {
             }
         }
     }
+    private var readingText: String? {
+        let filtered = models.contains { hidden.contains($0) }
+        if filtered && models.allSatisfy(hidden.contains) { return L("未选择模型") }
+        guard let day = days.first(where: { $0.key == selected }) else { return nil }
+        if !filtered { return day.key + " · " + (cost ? String(format: "%.2f USD", day.cost) : Format.compact(day.total) + " Token") }
+        var total = 0.0, amount = 0.0, read = 0.0, input = 0.0
+        for row in data.grouped[day.key] ?? [] where !hidden.contains(row.model) {
+            total += row.usage.total
+            amount += row.usage.cost
+            read += row.usage.tokens.cacheRead
+            input += row.usage.tokens.allInput
+        }
+        return day.key + " · " + L("可见模型") + " · " + L("{0} Token · {1} USD · 读取命中率 {2}", Format.compact(total), String(format: "%.2f", amount), Format.percent(input > 0 ? 100 * read / input : nil))
+    }
     private var selectedReading: some View {
         Group {
-            if let day = days.first(where: { $0.key == selected }) {
-                Text(day.key + " · " + (cost ? String(format: "%.2f USD", day.cost) : Format.compact(day.total) + " Token"))
-                    .font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
-            }
+            if let readingText { Text(readingText).font(AppFont.secondary).monospacedDigit().textSelection(.enabled) }
         }.frame(height: DesignTokens.chartReadingHeight, alignment: .leading)
     }
     private var modelLegend: some View {
@@ -1036,7 +1060,9 @@ struct UsageChart: View, Equatable {
         UsageModelLegendButton(name: name, title: modelNames[name] ?? name,
                               color: Palette.model(name, preset: chartPalette, contrast: chartContrast), hidden: $hidden)
     }
-    private func move(_ offset: Int) { guard !days.isEmpty else { return }; let index = selected.flatMap { key in days.firstIndex { $0.key == key } } ?? 0; selected = days[min(days.count - 1, max(0, index + offset))].key }
+    private func move(_ offset: Int) { guard !days.isEmpty else { return }; let index = selected.flatMap { key in days.firstIndex { $0.key == key } } ?? 0; selected = days[min(days.count - 1, max(0, index + offset))].key
+        if let readingText { AccessibilityNotification.Announcement(readingText).post() }
+    }
 }
 
 /// Each retained ForEach item observes the live selection instead of capturing a rendered value.

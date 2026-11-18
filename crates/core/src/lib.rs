@@ -657,7 +657,7 @@ impl Engine {
                 pet_import::current(&self.store, false)
             }
             "hello" => Ok(
-                json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1,"runtimeInvalidations":true,"hostMonitoring":true,"dashboardStatus":true,"chatgptWorkInstalled":provider_paths::chatgpt_work_installed(),"contractHash":contracts::CONTRACT_HASH}),
+                json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1,"runtimeInvalidations":true,"hostMonitoring":true,"hostSelection":true,"dashboardStatus":true,"chatgptWorkInstalled":provider_paths::chatgpt_work_installed(),"contractHash":contracts::CONTRACT_HASH}),
             ),
             "hosts.credentials.save" => Ok(
                 json!({"passwordRef": credentials::save(params["password"].as_str().context("请输入服务器密码")?)?}),
@@ -878,7 +878,8 @@ impl Engine {
                         false,
                     );
                 }
-                self.host_monitor.refresh(params["hostId"].as_str())
+                self.host_monitor
+                    .refresh(host_sampling::selected_ids(&params)?.as_ref())
             }
             "hosts.sample" => self.sample_hosts(params),
             _ => anyhow::bail!("未知方法：{method}"),

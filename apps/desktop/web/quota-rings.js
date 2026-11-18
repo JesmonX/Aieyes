@@ -324,7 +324,7 @@
   }
   function switchHTML(current = style()) {
     const names = { card: t("卡片样式"), dial: t("表盘样式"), tile: t("双列样式") };
-    return `<div class="segmented quota-style-switch" role="group" aria-label="${esc(t("额度显示样式"))}">${STYLES.map((s) => `<button type="button" data-quota-style="${s}" aria-pressed="${s === current}" tabindex="${s === current ? 0 : -1}" title="${esc(names[s])}" aria-label="${esc(names[s])}">${GLYPH[s]}</button>`).join('')}</div>`;
+    return `<div class="segmented quota-style-switch" role="group" aria-label="${esc(t("额度显示样式"))}">${STYLES.map((s) => `<button type="button" data-quota-style="${s}" aria-pressed="${s === current}" tabindex="${s === current ? 0 : -1}" title="${esc(names[s])}" aria-label="${esc(names[s])}">${GLYPH[s]}<span class="quota-style-label">${esc(({ card: t("卡片"), dial: t("表盘"), tile: t("双列") })[s])}</span></button>`).join('')}</div>`;
   }
 
   // ---- Live updates ----

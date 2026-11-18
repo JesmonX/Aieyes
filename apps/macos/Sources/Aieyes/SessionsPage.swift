@@ -69,7 +69,7 @@ struct SessionsPage: View {
                     }
                 } else {
                     if !visible.isEmpty { summary }
-                    list(L("进行中"), running, empty: L("当前没有进行中的会话"), live: true)
+                    list(L("当前会话"), running, empty: L("当前没有会话"), live: true)
                     list(L("最近结束"), ended, empty: L("暂无最近结束的会话"), live: false)
                 }
                 if !processSources.isEmpty {

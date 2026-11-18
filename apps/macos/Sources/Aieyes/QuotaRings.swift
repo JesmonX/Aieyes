@@ -513,18 +513,50 @@ struct QuotaTileLayout: Layout {
     }
 }
 
-/// Card / dial / two-column switch beside the quota heading.
-struct QuotaStylePicker: View {
+/// AppKit segments can display the symbol and title together at their intrinsic width.
+struct QuotaStylePicker: NSViewRepresentable {
+    var showsLabels = false
     @Binding var selection: String
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
-    var body: some View {
-        let _ = interfaceLanguage
-        Picker(L("额度显示样式"), selection: Binding(get: { QuotaCardStyle(rawValue: selection) ?? .card }, set: { style in withMotion(.standard) { selection = style.rawValue } })) {
-            ForEach(QuotaCardStyle.allCases) { style in
-                Image(systemName: style.symbol).help(style.help).accessibilityLabel(style.help).tag(style)
-            }
+
+    init(showsLabels: Bool = false, selection: Binding<String>) {
+        self.showsLabels = showsLabels
+        _selection = selection
+    }
+    final class Coordinator: NSObject {
+        var selection: Binding<String>
+        init(_ selection: Binding<String>) { self.selection = selection }
+
+        @MainActor @objc func choose(_ sender: NSSegmentedControl) {
+            let styles = QuotaCardStyle.allCases
+            guard styles.indices.contains(sender.selectedSegment) else { return }
+            withMotion(.standard) { selection.wrappedValue = styles[sender.selectedSegment].rawValue }
         }
-        .pickerStyle(.segmented).labelsHidden().fixedSize().help(L("额度显示样式"))
+    }
+    func makeCoordinator() -> Coordinator { Coordinator($selection) }
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let control = NSSegmentedControl()
+        control.segmentCount = QuotaCardStyle.allCases.count
+        control.trackingMode = .selectOne
+        control.target = context.coordinator
+        control.action = #selector(Coordinator.choose(_:))
+        return control
+    }
+    func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        let _ = interfaceLanguage
+        context.coordinator.selection = $selection
+        control.setAccessibilityLabel(L("额度显示样式"))
+        let styles = QuotaCardStyle.allCases
+        for (index, style) in styles.enumerated() {
+            control.setLabel(showsLabels ? style.title : "", forSegment: index)
+            control.setImage(NSImage(systemSymbolName: style.symbol, accessibilityDescription: style.help), forSegment: index)
+            control.setToolTip(style.help, forSegment: index)
+        }
+        control.selectedSegment = styles.firstIndex(of: QuotaCardStyle(rawValue: selection) ?? .card) ?? 0
+        control.isEnabled = context.environment.isEnabled
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSSegmentedControl, context: Context) -> CGSize? {
+        nsView.intrinsicContentSize
     }
 }
 
