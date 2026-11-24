@@ -2431,7 +2431,7 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
                     }
                     return request_native_panel(app, PanelRequest::Set(false));
                 }
-                return request_native_panel(app, PanelRequest::Dismiss);
+                request_native_panel(app, PanelRequest::Dismiss)
             }
             #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             {
