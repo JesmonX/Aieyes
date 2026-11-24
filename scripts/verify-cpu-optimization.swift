@@ -244,7 +244,8 @@ private struct DescendantLayoutFixture: View {
         try await wait();precondition(!pet.window.isVisible && !model.live.petVisible)
         UserDefaults.standard.set(1.25,forKey: "aieyes.pet.scale");UserDefaults.standard.set(true,forKey: "aieyes.pet.enabled")
         NotificationCenter.default.post(name: UserDefaults.didChangeNotification,object: nil)
-        try await wait();precondition(pet.window.isVisible && pet.window.frame.width == 180)
+        try await wait()
+        precondition(pet.window.isVisible && pet.window.frame.width == 290, "The active session's orbit stays visible at 125% pet scale")
 
         // Synthetic local RPCs: no credentials, histories or external operations.
         let seed = root.appendingPathComponent("fixture.json"), control = root.appendingPathComponent("control.json")
