@@ -7,7 +7,7 @@
 //! the same rules to their tiles. The tray and the menu bar use [`menu_ring`].
 
 use crate::models::{MenuQuotaRing, QuotaSnapshot, QuotaWindow, Settings};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Labels that can be shown beside the menu bar / tray ring, in display order.
 pub const MENU_VALUES: [&str; 4] = ["topRemaining", "topReset", "bottomRemaining", "bottomReset"];
@@ -15,7 +15,7 @@ pub const MENU_VALUES: [&str; 4] = ["topRemaining", "topReset", "bottomRemaining
 pub const FIVE_HOURS: i64 = 300;
 pub const WEEK: i64 = 10_080;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Arc {
     /// Remaining share, 0–100.
@@ -26,7 +26,7 @@ pub struct Arc {
     pub unused: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Ring {
     /// Two windows: the top and bottom halves.

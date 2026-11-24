@@ -172,7 +172,7 @@ function Verify-PetMenu {
     Open-PetMenu
     $popup=[PanelProbe]::FindMenu($app.Id)
     $menu=[PanelProbe]::SendMessage($popup,0x1e1,[IntPtr]::Zero,[IntPtr]::Zero)
-    $expected=@('打开面板','设置…','桌宠设置','','检查更新','隐藏桌宠')
+    $expected=@('打开面板','设置…','桌宠设置','','检查更新','隐藏桌宠','','退出 Aieyes')
     Assert-That ([PanelProbe]::GetMenuItemCount($menu) -eq $expected.Count) 'native menu matches macOS entry count'
     for($index=0;$index -lt $expected.Count;$index++) {
         $label=New-Object Text.StringBuilder 256

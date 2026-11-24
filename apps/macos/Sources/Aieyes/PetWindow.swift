@@ -8,7 +8,14 @@ enum PetAppearance {
         let font = NSFont.systemFont(ofSize:max(11,12 * scale),weight:.medium)
         return ceil((L(label) as NSString).boundingRect(with:NSSize(width:126 * scale,height:1000),options:[.usesLineFragmentOrigin,.usesFontLeading],attributes:[.font:font]).height) + 6 * scale
     }
-    static func height(_ state:PetState, scale:Double) -> CGFloat { 143 * scale + labelHeight(state.label,scale:scale) }
+    static func width(hasOrbit: Bool = false, scale: Double) -> CGFloat {
+        let pad = PetOrbitLayout.padding(hasOrbit: hasOrbit, scale: scale)
+        return (PetOrbitLayout.baseWidth * scale) + pad.x * 2
+    }
+    static func height(_ state:PetState, scale:Double, hasOrbit: Bool = false) -> CGFloat {
+        let pad = PetOrbitLayout.padding(hasOrbit: hasOrbit, scale: scale)
+        return pad.top + 143 * scale + labelHeight(state.label,scale:scale)
+    }
 
 }
 struct PetScaleControl: View {
@@ -202,7 +209,13 @@ private struct PetView: View {
     let model: AppModel
     @ObservedObject var live: LiveSessionState
     @ObservedObject var resets: QuotaNotificationService
-    init(model: AppModel) { self.model = model; live = model.live; resets = model.resetNotifications }
+    @ObservedObject var orbit: PetOrbitStore
+    init(model: AppModel, orbit: PetOrbitStore) {
+        self.model = model
+        live = model.live
+        resets = model.resetNotifications
+        self.orbit = orbit
+    }
     @AppStorage("aieyes.pet.enabled") private var enabled = true
     @AppStorage("aieyes.pet.scale") private var savedScale = 1.0
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
@@ -213,23 +226,52 @@ private struct PetView: View {
         let state = live.pet
         let scale = PetAppearance.scale(savedScale)
         let playing = enabled && live.petVisible && !live.suspended
-        VStack(spacing: 0) {
-            PetSpriteView(state: state, asset: live.asset, scale: scale, enabled: playing)
-                .overlay { PetCelebration(trigger: celebrations, scale: scale) }
-                // A session that just finished, or a quota reset the core confirmed, gets one burst.
-                // The sprite row stays the core's choice; the burst only plays over it.
-                .onChange(of: state) { old, new in if new.behavior == "success", old.behavior != "success" { celebrate(playing) } }
-                .onChange(of: resets.confirmedResets) { _, _ in celebrate(playing) }
-                .onReceive(NotificationCenter.default.publisher(for: Notification.Name("aieyes.eventFeedback"))) { _ in celebrate(playing) }
-            Text(L(state.label)).font(.system(size: max(11,12 * scale), weight: .medium))
-                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                .contentTransition(.opacity).motion(.standard, value: state.label)
-                .padding(.horizontal, 9 * scale).padding(.vertical, 3 * scale)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay * scale))
-                .overlay(RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay * scale).strokeBorder(Palette.cardBorder.opacity(DesignTokens.cardBorderOpacity)))
-        }.frame(width: 144 * scale, height: PetAppearance.height(state,scale:scale))
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Aieyes · " + L(state.label)).accessibilityHint(L("单击打开面板，拖动移动，右键菜单"))
+        let agents = orbit.agents
+        let hasOrbit = !agents.isEmpty
+        let pad = PetOrbitLayout.padding(hasOrbit: hasOrbit, scale: scale)
+        let baseHeight = PetAppearance.height(state, scale: scale, hasOrbit: false)
+        let totalWidth = PetAppearance.width(hasOrbit: hasOrbit, scale: scale)
+        let totalHeight = PetAppearance.height(state, scale: scale, hasOrbit: hasOrbit)
+        let slots = PetOrbitLayout.slots(count: agents.count, scale: scale)
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                PetSpriteView(state: state, asset: live.asset, scale: scale, enabled: playing)
+                    .overlay { PetCelebration(trigger: celebrations, scale: scale) }
+                    // A session that just finished, or a quota reset the core confirmed, gets one burst.
+                    // The sprite row stays the core's choice; the burst only plays over it.
+                    .onChange(of: state) { old, new in if new.behavior == "success", old.behavior != "success" { celebrate(playing) } }
+                    .onChange(of: resets.confirmedResets) { _, _ in celebrate(playing) }
+                    .onReceive(NotificationCenter.default.publisher(for: Notification.Name("aieyes.eventFeedback"))) { _ in celebrate(playing) }
+                Text(L(state.label)).font(.system(size: max(11,12 * scale), weight: .medium))
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    .contentTransition(.opacity).motion(.standard, value: state.label)
+                    .padding(.horizontal, 9 * scale).padding(.vertical, 3 * scale)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay * scale))
+                    .overlay(RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay * scale).strokeBorder(Palette.cardBorder.opacity(DesignTokens.cardBorderOpacity)))
+            }
+            .frame(width: PetOrbitLayout.baseWidth * scale, height: baseHeight)
+            .offset(x: pad.x, y: pad.top)
+
+            if hasOrbit {
+                ForEach(Array(zip(agents.indices, agents)), id: \.1.id) { index, agent in
+                    if index < slots.count {
+                        let slot = slots[index]
+                        PetOrbitNodeView(
+                            agent: agent,
+                            index: index,
+                            scale: scale,
+                            playing: playing,
+                            selected: orbit.selectedProvider == agent.provider,
+                            hovered: orbit.hoveredProvider == agent.provider
+                        )
+                        .position(x: slot.cx, y: slot.cy)
+                    }
+                }
+            }
+        }
+        .frame(width: totalWidth, height: totalHeight)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Aieyes · " + L(state.label)).accessibilityHint(L("单击打开面板，拖动移动，右键菜单"))
     }
     private func celebrate(_ playing: Bool) { if playing && !reduceMotion { celebrations += 1 } }
 }
@@ -271,40 +313,89 @@ private struct PetCelebration: View {
 private final class PetPanel: NSPanel { override var canBecomeKey: Bool { false } }
 private final class PetHost: NSHostingView<PetView> {
     var open: ((NSView, Bool) -> Void)?
+    var openOrbit: ((NSView, PetOrbitAgent, NSRect, NSRectEdge) -> Void)?
+    var onDragStart: (() -> Void)?
     var settings: (() -> Void)?
     var petSettings: (() -> Void)?
+    weak var orbit: PetOrbitStore?
+    private var defaultToolTip: String?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { opaque(at:point) || press != nil ? self : nil }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        return opaque(at: local) || press != nil ? self : nil
+    }
     var dragging:Bool { press != nil }
+
+    private func currentScale() -> Double {
+        PetAppearance.scale(UserDefaults.standard.double(forKey: "aieyes.pet.scale"))
+    }
+
+    func hitOrbitAgent(at point: NSPoint) -> (agent: PetOrbitAgent, rect: NSRect, edge: NSRectEdge)? {
+        guard let orbit, !orbit.agents.isEmpty, bounds.contains(point) else { return nil }
+        let scale = currentScale()
+        let slots = PetOrbitLayout.slots(count: orbit.agents.count, scale: scale)
+        let topY = isFlipped ? point.y : bounds.height - point.y
+        let radius = PetOrbitLayout.hitRadius * scale
+        let nodeSize = PetOrbitLayout.nodeSize * scale
+        for (index, agent) in orbit.agents.enumerated() where index < slots.count {
+            let slot = slots[index]
+            if hypot(point.x - slot.cx, topY - slot.cy) <= radius {
+                let topRect = NSRect(x: slot.cx - nodeSize / 2, y: slot.cy - nodeSize / 2, width: nodeSize, height: nodeSize)
+                let rect = isFlipped ? topRect : NSRect(x: topRect.minX, y: bounds.height - topRect.maxY, width: topRect.width, height: topRect.height)
+                return (agent, rect, PetOrbitLayout.preferredEdge(for: slot, flipped: isFlipped))
+            }
+        }
+        return nil
+    }
+
+    func updateHover(at point: NSPoint?) {
+        guard let orbit else { return }
+        if let point, let hit = hitOrbitAgent(at: point) {
+            if orbit.hoveredProvider != hit.agent.provider { orbit.hoveredProvider = hit.agent.provider }
+            let tip = hit.agent.tooltip
+            if toolTip != tip { toolTip = tip }
+        } else {
+            if orbit.hoveredProvider != nil { orbit.hoveredProvider = nil }
+            if toolTip != defaultToolTip { toolTip = defaultToolTip }
+        }
+    }
+
     func opaque(at point:NSPoint) -> Bool {
         guard bounds.contains(point) else { return false }
+        if hitOrbitAgent(at: point) != nil { return true }
         func image(in view:NSView) -> PetLayerImage? { if let image = view as? PetLayerImage { return image };return view.subviews.compactMap { image(in:$0) }.first }
         if let sprite = image(in:self) {
             let local = sprite.convert(point,from:self)
             if sprite.bounds.contains(local) { return sprite.opaque(at:local) }
-            // The measured status label is independently clickable.
+            // The measured status label is independently clickable, bounded to the base sprite column.
             let rect = sprite.convert(sprite.bounds,to:self)
-            return isFlipped ? point.y >= rect.maxY : point.y <= rect.minY
+            let horizontal = point.x >= rect.minX - 6 * currentScale() && point.x <= rect.maxX + 6 * currentScale()
+            return horizontal && (isFlipped ? point.y >= rect.maxY : point.y <= rect.minY)
         }
         return true
     }
-    private var press: (point: NSPoint, origin: NSPoint)?
+    private var press: (point: NSPoint, origin: NSPoint, orbitHit: (agent: PetOrbitAgent, rect: NSRect, edge: NSRectEdge)?)?
     private var dragged = false
     override func mouseDown(with event: NSEvent) {
         guard let window else { return }
-        press = (NSEvent.mouseLocation, window.frame.origin)
+        let local = convert(event.locationInWindow, from: nil)
+        press = (NSEvent.mouseLocation, window.frame.origin, hitOrbitAgent(at: local))
         dragged = false
     }
     override func mouseDragged(with event: NSEvent) {
         guard let window, let press else { return }
         let point = NSEvent.mouseLocation
-        if hypot(point.x - press.point.x, point.y - press.point.y) > 4 { dragged = true }
+        if !dragged && hypot(point.x - press.point.x, point.y - press.point.y) > 4 {
+            dragged = true
+            onDragStart?()
+        }
         if dragged { window.setFrameOrigin(NSPoint(x: press.origin.x + point.x - press.point.x, y: press.origin.y + point.y - press.point.y)) }
     }
     override func mouseUp(with event: NSEvent) {
-        guard let window, press != nil else { return }
+        guard let window, let activePress = press else { return }
         press = nil
         if dragged { UserDefaults.standard.set(NSStringFromPoint(PetWindowController.settle(window, preferredPoint: NSEvent.mouseLocation)), forKey: "aieyes.pet.position") }
+        else if let hit = activePress.orbitHit { openOrbit?(self, hit.agent, hit.rect, hit.edge) }
         else { open?(self, true) }
     }
     var update: (() -> Void)?
@@ -314,15 +405,19 @@ private final class PetHost: NSHostingView<PetView> {
         menu.autoenablesItems = false
         for (title, action) in NativeContextMenu.entries(pet: true, visible: true) {
             if action == "separator" { menu.addItem(.separator()); continue }
-            let selector: Selector = switch action {
+            let selector: Selector? = switch action {
             case "open-panel": #selector(openPanel)
             case "settings": #selector(openSettings)
             case "pet-settings": #selector(openPetSettings)
             case "check-updates": #selector(checkUpdates)
-            default: #selector(hidePet)
+            case "hide": #selector(hidePet)
+            case "quit": #selector(NSApplication.terminate(_:))
+            default: nil
             }
+            guard let selector else { continue }
             let item = menu.addItem(withTitle: title, action: selector, keyEquivalent: "")
-            item.target = self
+            if action == "quit" { item.target = NSApp }
+            else { item.target = self }
             if action == "open-panel" { item.isEnabled = open != nil }
         }
         return menu
@@ -340,21 +435,35 @@ private final class PetHost: NSHostingView<PetView> {
 @MainActor final class PetWindowController {
     private let panel: NSPanel
     private weak var model: AppModel?
+    let orbit: PetOrbitStore
     var window: NSWindow { panel }
+    var selectedOrbitProvider: String? {
+        get { orbit.selectedProvider }
+        set { orbit.selectedProvider = newValue }
+    }
     private var subscriptions = Set<AnyCancellable>()
     private var petState = PetState.idle
+    private var hasOrbit = false
     private var appliedPreferences: Preferences?
+    private var appliedPadding: (x: CGFloat, top: CGFloat) = (0, 0)
     private struct Preferences: Equatable { var enabled: Bool; var scale: Double; var language:String; var hideInFullscreen:Bool }
     private var mouseLocal:Any?, mouseGlobal:Any?, hitTimer:Timer?
     private var fullscreen = false
 
-    init(model: AppModel, checkUpdates: @escaping () -> Void = {}, open: @escaping (NSView, Bool) -> Void) {
+    init(
+        model: AppModel,
+        checkUpdates: @escaping () -> Void = {},
+        openOrbit: ((NSView, PetOrbitAgent, NSRect, NSRectEdge) -> Void)? = nil,
+        onDragStart: (() -> Void)? = nil,
+        open: @escaping (NSView, Bool) -> Void
+    ) {
         self.model = model
+        self.orbit = PetOrbitStore(model: model)
         UserDefaults.standard.register(defaults: ["aieyes.pet.enabled": true, "aieyes.pet.scale": 1.0,"aieyes.pet.hideInFullscreen":true])
         panel = PetPanel(contentRect: NSRect(x: 0,y: 0,width: 144,height: 168), styleMask: [.borderless,.nonactivatingPanel], backing: .buffered, defer: false)
         panel.title=L("Aieyes 宠物"); panel.isOpaque=false; panel.backgroundColor = .clear; panel.hasShadow=false
         panel.level = .floating; panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]; panel.hidesOnDeactivate=false
-        let host=PetHost(rootView: PetView(model:model)); host.sizingOptions=[]; host.open=open; panel.contentView=host
+        let host=PetHost(rootView: PetView(model:model, orbit: orbit)); host.sizingOptions=[]; host.open=open; host.openOrbit=openOrbit; host.onDragStart=onDragStart; host.orbit=orbit; panel.contentView=host
         host.update = checkUpdates
         host.settings = { [weak model] in model?.openSettings(.init(category: "general")) }
         host.petSettings = { [weak model] in model?.openSettings(.init(category: "general", section: "desktop")) }
@@ -364,6 +473,12 @@ private final class PetHost: NSHostingView<PetView> {
         model.live.$pet.sink { [weak self] state in
             guard let self else { return }
             self.petState = state
+            self.resize()
+        }.store(in: &subscriptions)
+        hasOrbit = !orbit.agents.isEmpty
+        orbit.$agents.sink { [weak self] agents in
+            guard let self else { return }
+            self.hasOrbit = !agents.isEmpty
             self.resize()
         }.store(in: &subscriptions)
         NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification, object: panel).sink { [weak self] _ in
@@ -404,11 +519,20 @@ private final class PetHost: NSHostingView<PetView> {
     }
     private func resize() {
         let scale = PetAppearance.scale(UserDefaults.standard.double(forKey: "aieyes.pet.scale"))
-        let size = NSSize(width: 144 * scale, height: PetAppearance.height(petState,scale:scale))
-        guard panel.frame.size != size else { return }
+        let nextPad = PetOrbitLayout.padding(hasOrbit: hasOrbit, scale: scale)
+        let size = NSSize(
+            width: PetAppearance.width(hasOrbit: hasOrbit, scale: scale),
+            height: PetAppearance.height(petState, scale: scale, hasOrbit: hasOrbit)
+        )
+        guard panel.frame.size != size || appliedPadding.x != nextPad.x || appliedPadding.top != nextPad.top else { return }
         var frame = panel.frame
-        frame.origin.y += frame.height - size.height
+        let deltaPadX = nextPad.x - appliedPadding.x
+        let deltaPadTop = nextPad.top - appliedPadding.top
+        let deltaHeight = size.height - frame.height
+        frame.origin.x -= deltaPadX
+        frame.origin.y -= (deltaHeight - deltaPadTop)
         frame.size = size
+        appliedPadding = nextPad
         panel.setFrame(frame, display: true)
         Self.clamp(panel)
     }
@@ -437,6 +561,7 @@ private final class PetHost: NSHostingView<PetView> {
         let screenPoint = NSEvent.mouseLocation
         let inside = panel.frame.contains(screenPoint)
         let local = host.convert(panel.convertPoint(fromScreen:screenPoint),from:nil)
+        host.updateHover(at: inside ? local : nil)
         panel.ignoresMouseEvents = !host.dragging && (!inside || !host.opaque(at:local))
         if inside && hitTimer == nil { hitTimer = Timer.scheduledTimer(withTimeInterval:0.05,repeats:true) { [weak self] _ in MainActor.assumeIsolated { self?.updateHit() } } }
         else if !inside && !host.dragging { hitTimer?.invalidate();hitTimer = nil }

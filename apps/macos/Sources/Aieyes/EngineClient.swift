@@ -30,7 +30,9 @@ final class EngineClient: @unchecked Sendable {
     private let configuration: EngineClient?
     private let queries: EngineClient?
     private let quotas: EngineClient?
-    init(configurationOnly: Bool = false) {
+    private let syncPricesInBackground: Bool
+    init(configurationOnly: Bool = false, syncPricesInBackground: Bool = false) {
+        self.syncPricesInBackground = syncPricesInBackground
         configuration = configurationOnly ? nil : EngineClient(configurationOnly: true)
         queries = configurationOnly ? nil : EngineClient(configurationOnly: true)
         quotas = configurationOnly ? nil : EngineClient(configurationOnly: true)
@@ -45,6 +47,7 @@ final class EngineClient: @unchecked Sendable {
         guard FileManager.default.isExecutableFile(atPath: executable) else { throw ClientError.message(L("未找到 Aieyes 核心")) }
         let p = Process(), stdin = Pipe(), stdout = Pipe()
         p.executableURL = URL(fileURLWithPath: executable)
+        if syncPricesInBackground { p.arguments = ["--sync-prices"] }
         p.standardInput = stdin; p.standardOutput = stdout; p.standardError = FileHandle.nullDevice
         var environment = ProcessInfo.processInfo.environment
         if environment["AIEYES_DATA_DIR"] == nil, let developmentPath = Bundle.main.object(forInfoDictionaryKey: "AieyesDevelopmentDataDirectory") as? String { environment["AIEYES_DATA_DIR"] = developmentPath }
@@ -317,7 +320,7 @@ struct AccountFlowResult {
             }
         }
     }
-    let engine = EngineClient()
+    let engine = EngineClient(syncPricesInBackground: true)
     let accountEngine = EngineClient()
     let accountStatusStore = AccountStatusStore()
     var accountStatuses: [AccountDeviceStatus] {
@@ -512,6 +515,9 @@ struct AccountFlowResult {
             }
             if changed.contains("accounts") { await self.loadAccountStatuses() }
             if changed.contains("notifications") { await self.resetNotifications.drain() }
+            if changed.contains("prices"), self.priceCatalog.loaded || self.priceCatalog.loading {
+                await self.loadPrices(force: true)
+            }
             // Delivery makes network requests; it never holds up the refreshes below.
             if changed.contains("webhooks") { Task { await self.outbound.dispatchWebhooks() } }
             if (!self.busy || self.collectingHistory && self.historyProgressPending), !self.quotaBusy, self.estimateBusy.isEmpty, self.completedDashboardRevision != self.dashboardRevisions {

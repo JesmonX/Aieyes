@@ -32,6 +32,10 @@ const {fixture} = require('./workspace-ui-fixture.cjs');
           if (command === 'engine_call' && args.method === 'dashboard') result.pricingGaps = structuredClone(gaps); // Deliberately stale backend snapshot.
           return result;
         };
+        f.publishPriceUpdate = async () => {
+          prices.push({id:'qwen/new-flash',name:'Qwen: New Flash',input:3e-6});
+          await f.emit('runtime:changed', {revisions:{prices:1}});
+        };
       });
       await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);
       await page.waitForFunction(() => state.dashboard && !state.busy);
@@ -62,6 +66,10 @@ const {fixture} = require('./workspace-ui-fixture.cjs');
         assert.equal(await page.locator('.pricing-gaps .list-row').count(),1,'New mappings resolve immediately even with stale usage data');
         await page.evaluate(async () => {await loadDashboard();});
         assert.equal(await page.locator('.pricing-gaps .list-row').count(),1,'Background refresh retains the resolved gap state');
+        await page.locator('#field-mappingModel').fill('unsaved-model');
+        await page.evaluate(async () => {state.revisionEvents = true;await navigationFixture.publishPriceUpdate();});
+        await page.locator('[data-price-row="qwen/new-flash"]').waitFor();
+        assert.equal(await page.locator('#field-mappingModel').inputValue(),'unsaved-model','Price sync preserves the mapping draft');
       }
       assert.deepEqual(errors,[]);
       await page.close();

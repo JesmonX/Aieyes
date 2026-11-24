@@ -153,7 +153,7 @@ async function openSettings(target = {}) {
     if (field) {field.closest('details').open = true;field.scrollIntoView({ block: 'center' });field.focus({ preventScroll: true });} else
     notify(AieyesI18n.t("此账户的目标机器已变化，请在账户设备列表重新选择。"), 'error');
   }
-  if (state.settingsTab === 'prices') {try {state.prices = await api('prices.list');if (state.page === 'settings' && state.settingsTab === 'prices') renderSettings();} catch (error) {notify(String(error), 'error');}}
+  if (state.settingsTab === 'prices') {try {await loadPriceList();if (state.page === 'settings' && state.settingsTab === 'prices') renderSettings();} catch (error) {notify(String(error), 'error');}}
 }
 function savePanelView() {
   if (!PANEL) return;
@@ -688,7 +688,19 @@ async function referencePrices(model = null, name = '') {
     notify(AieyesI18n.t("已智能引用 {0} 个模型{1}{2}。按参考价格估值，历史成本可点“保存并重算”更新。", result.matched, result.unmatched.length ? AieyesI18n.t("；{0} 个未匹配", result.unmatched.length) : '', result.skipped ? AieyesI18n.t("；{0} 个已有价格或映射", result.skipped) : ''));
   });
 }
-async function syncPrices() {await job(AieyesI18n.t("同步价格"), async () => {await api('prices.sync');state.prices = await api('prices.list');await loadDashboard();if (state.page === 'settings') renderSettings();notify(AieyesI18n.t("价格已更新"));}, 'prices');}
+let priceListRevision;
+function priceListNeedsRefresh() {
+  return state.page === 'settings' && state.settingsTab === 'prices' && priceListRevision !== runtimeVersions.prices;
+}
+async function loadPriceList() {
+  const revision = runtimeVersions.prices;
+  const prices = await api('prices.list');
+  if ((revision ?? -1) >= (priceListRevision ?? -1)) {
+    state.prices = prices;
+    priceListRevision = revision;
+  }
+}
+async function syncPrices() {await job(AieyesI18n.t("同步价格"), async () => {await api('prices.sync');await loadPriceList();await loadDashboard();if (state.page === 'settings') renderSettings();notify(AieyesI18n.t("价格已更新"));}, 'prices');}
 function applyQuotaSamples(rows) {
   if (!state.dashboard || !Array.isArray(rows)) return;
   const changed = [];let tierChanged = false;
@@ -1723,7 +1735,7 @@ function renderSettings(capture = true) {
   document.querySelectorAll('#content [data-settings-tab]').forEach((button) => {
     button.onclick = async () => {
       state.settingsTab = button.dataset.settingsTab;renderSettings();
-      try {if (state.settingsTab === 'prices') {state.prices = await api('prices.list');if (state.page === 'settings' && state.settingsTab === 'prices') renderSettings();}await loadDashboard();}
+      try {if (state.settingsTab === 'prices') {await loadPriceList();if (state.page === 'settings' && state.settingsTab === 'prices') renderSettings();}await loadDashboard();}
       catch (error) {notify(String(error), 'error');}
     };
     button.onkeydown = (event) => {
@@ -1986,7 +1998,7 @@ function bindHostSelectors(item) {
   };
 }
 function editPrice(existing) {const price = structuredClone(existing ?? { id: '', name: '', input: null, output: null, cacheRead: null, cacheWrite: null, fetchedAt: 0 });
-  showEditor(AieyesI18n.t("模型价格 · USD / 百万 Token"), field('id', AieyesI18n.t("模型 ID"), price.id) + field('name', AieyesI18n.t("显示名称"), price.name) + [['input', AieyesI18n.t("输入")], ['output', AieyesI18n.t("输出")], ['cacheRead', AieyesI18n.t("缓存读取")], ['cacheWrite', AieyesI18n.t("缓存写入")]].map(([k, label]) => field(k, label, price[k] == null ? '' : price[k] * 1e6, AieyesI18n.t("待定价"))).join(''), async (f) => {price.id = f.get('id');price.name = f.get('name');for (const k of ['input', 'output', 'cacheRead', 'cacheWrite']) {const v = f.get(k);price[k] = v === '' ? null : Number(v) / 1e6;if (price[k] != null && (!Number.isFinite(price[k]) || price[k] < 0)) throw new Error(AieyesI18n.t("价格需要为非负数"));}await api('prices.save', { prices: [price] });state.prices = await api('prices.list');await loadDashboard();renderSettings();markSaved();});
+  showEditor(AieyesI18n.t("模型价格 · USD / 百万 Token"), field('id', AieyesI18n.t("模型 ID"), price.id) + field('name', AieyesI18n.t("显示名称"), price.name) + [['input', AieyesI18n.t("输入")], ['output', AieyesI18n.t("输出")], ['cacheRead', AieyesI18n.t("缓存读取")], ['cacheWrite', AieyesI18n.t("缓存写入")]].map(([k, label]) => field(k, label, price[k] == null ? '' : price[k] * 1e6, AieyesI18n.t("待定价"))).join(''), async (f) => {price.id = f.get('id');price.name = f.get('name');for (const k of ['input', 'output', 'cacheRead', 'cacheWrite']) {const v = f.get(k);price[k] = v === '' ? null : Number(v) / 1e6;if (price[k] != null && (!Number.isFinite(price[k]) || price[k] < 0)) throw new Error(AieyesI18n.t("价格需要为非负数"));}await api('prices.save', { prices: [price] });await loadPriceList();await loadDashboard();renderSettings();markSaved();});
   $('#editor').dataset.kind = 'price';
 }
 if (!PANEL) {
@@ -2079,6 +2091,11 @@ function refreshExternalData(settings = false, method = '') {
       externalPending = false;const readSettings = externalSettings,checkQuotas = externalQuotaCheck,checkScan = externalScanCheck;externalSettings = false;externalQuotaCheck = false;externalScanCheck = false;
       if (readSettings || !state.settings) {const saved = await api('settings.get');syncSharedAppearance(saved.appearance);if (window.AieyesAgentSettings) window.AieyesAgentSettings.accept(saved);else acceptSettings(saved);window.AieyesTheme?.apply(saved.appearance);}migrateProviderState();
       await loadDashboard();
+      if (priceListNeedsRefresh()) {
+        await loadPriceList();
+        const list = state.page === 'settings' && state.settingsTab === 'prices' && $('.prices-list');
+        if (list) {list.innerHTML = priceRows(list.scrollTop);bindPrices();refreshPricingGaps();}
+      }
       if (readSettings && !PANEL && state.page === 'settings') renderSettings(false);else
       if (readSettings && PANEL && state.page !== 'agent') render();
       const scannedSources = (state.dashboard?.sources ?? []).filter((source) => state.settings.sources.some((row) => row.id === source.id && row.provider !== 'deepseek' && AieyesUI.sourceEnabled(state.settings, row))).map((source) => ({ id: source.id, error: source.status?.error, partial: source.status?.partial, issues: source.status?.issues }));
@@ -2119,7 +2136,7 @@ async function listenForSharedState() {
     if (!sharedPending || !sharedReady || externalRefresh || state.busy && !committedDuringScan || state.quotaBusy || state.estimateBusy || state.settingsSaving || state.settingsCommitting || state.refreshState.quotas?.busy) return;
     const readSettings = sharedSettings,method = sharedMethod;
     sharedPending = false;sharedReady = false;sharedSettings = false;sharedMethod = '';sharedHistory = false;
-    if (readSettings || lastDashboardVersion !== dashboardVersion()) void refreshExternalData(readSettings, method).finally(resumeSharedRefresh);
+    if (readSettings || lastDashboardVersion !== dashboardVersion() || priceListNeedsRefresh()) void refreshExternalData(readSettings, method).finally(resumeSharedRefresh);
   };
   const queueSharedRefresh = (settings, method = '', history = false) => {
     sharedSettings ||= settings;sharedMethod = method || sharedMethod;sharedHistory ||= history;sharedPending = true;sharedReady = false;

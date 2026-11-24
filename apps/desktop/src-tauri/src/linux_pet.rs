@@ -1,5 +1,9 @@
 //! GTK pet surface. Animation never resizes/repaints a WebKit window.
-use aieyes_core::pets::{PetState, frame, next_frame_delay, normalized_scale};
+use aieyes_core::pets::{
+    ORBIT_NODE_SIZE, ORBIT_OVERFLOW_PROVIDER, PetOrbitAgent, PetState, canvas_size, frame,
+    next_frame_delay, normalized_scale, orbit_padding, orbit_slots,
+};
+use aieyes_core::quota_ring::Ring;
 use gtk::{cairo, gdk, glib, prelude::*};
 use serde_json::Value;
 use std::{
@@ -26,6 +30,10 @@ struct Surface {
     area: gtk::DrawingArea,
     info: Value,
     state: PetState,
+    orbit_agents: Vec<PetOrbitAgent>,
+    orbit_hover: Option<usize>,
+    orbit_start: Instant,
+    applied_pad: (f64, f64),
     frames: Vec<cairo::ImageSurface>,
     asset: String,
     shapes: Vec<cairo::Region>,
@@ -84,7 +92,7 @@ pub fn focus_window(window: &gtk::ApplicationWindow) {
 fn with_surface<T>(f: impl FnOnce(&Rc<RefCell<Surface>>) -> T) -> Option<T> {
     SURFACE.with(|slot| slot.borrow().as_ref().map(f))
 }
-fn dispatch(app: &AppHandle, action: &'static str) {
+fn dispatch(app: &AppHandle, action: &str) {
     if cfg!(debug_assertions) && std::env::var_os("AIEYES_LINUX_TRACE").is_some() {
         eprintln!("Linux pet action: {action}");
     }
@@ -129,7 +137,8 @@ impl NativePet {
         area.add_events(
             gdk::EventMask::BUTTON_PRESS_MASK
                 | gdk::EventMask::BUTTON_RELEASE_MASK
-                | gdk::EventMask::POINTER_MOTION_MASK,
+                | gdk::EventMask::POINTER_MOTION_MASK
+                | gdk::EventMask::LEAVE_NOTIFY_MASK,
         );
         window.add(&area);
         let surface = Rc::new(RefCell::new(Surface {
@@ -137,6 +146,10 @@ impl NativePet {
             area: area.clone(),
             info: Value::Null,
             state: aieyes_core::pets::project(&Default::default()),
+            orbit_agents: Vec::new(),
+            orbit_hover: None,
+            orbit_start: Instant::now(),
+            applied_pad: (0.0, 0.0),
             frames: vec![],
             asset: String::new(),
             shapes: vec![],
@@ -176,6 +189,23 @@ impl NativePet {
         area.connect_motion_notify_event(move |_, event| {
             with_surface(|s| {
                 let mut s = s.borrow_mut();
+                let (lx, ly) = event.position();
+                let scale = normalized_scale(s.info["petScale"].as_f64().unwrap_or(1.0));
+                let hovered = crate::pet_orbit::hit_test(lx, ly, scale, &s.orbit_agents);
+                if s.orbit_hover != hovered {
+                    s.orbit_hover = hovered;
+                    let tip = hovered
+                        .and_then(|idx| s.orbit_agents.get(idx))
+                        .map(crate::pet_orbit::node_tooltip)
+                        .unwrap_or_else(|| {
+                            crate::localization::text(&format!(
+                                "Aieyes · {}\n单击打开面板 · 拖动移动 · 右键菜单",
+                                crate::localization::text(&s.state.label)
+                            ))
+                        });
+                    s.area.set_tooltip_text(Some(&tip));
+                    s.area.queue_draw();
+                }
                 if let Some((x, y)) = s.press {
                     let (next_x, next_y) = event.root();
                     if !s.dragged && (next_x - x).hypot(next_y - y) >= 5.0 {
@@ -219,20 +249,42 @@ impl NativePet {
             });
             glib::Propagation::Stop
         });
+        area.connect_leave_notify_event(move |_, _| {
+            with_surface(|s| {
+                let mut s = s.borrow_mut();
+                if s.orbit_hover.take().is_some() {
+                    s.area
+                        .set_tooltip_text(Some(&crate::localization::text(&format!(
+                            "Aieyes · {}\n单击打开面板 · 拖动移动 · 右键菜单",
+                            crate::localization::text(&s.state.label)
+                        ))));
+                    s.area.queue_draw();
+                }
+            });
+            glib::Propagation::Stop
+        });
         let handle = app.clone();
         area.connect_button_release_event(move |_, event| {
             if cfg!(debug_assertions) && std::env::var_os("AIEYES_LINUX_TRACE").is_some() {
                 eprintln!("Linux pet release: {} {:?}", event.button(), event.root());
             }
             if event.button() == 1 {
-                let dragged = with_surface(|s| {
+                let (lx, ly) = event.position();
+                let outcome = with_surface(|s| {
                     let mut s = s.borrow_mut();
                     let pressed = s.press.take().is_some();
-                    (pressed, s.dragged)
+                    let scale = normalized_scale(s.info["petScale"].as_f64().unwrap_or(1.0));
+                    let hit = crate::pet_orbit::hit_test(lx, ly, scale, &s.orbit_agents)
+                        .and_then(|idx| s.orbit_agents.get(idx).map(|a| a.provider.clone()));
+                    (pressed, s.dragged, hit)
                 });
-                if let Some((true, false)) = dragged {
-                    dispatch(&handle, "toggle-panel");
-                } else if let Some((true, true)) = dragged {
+                if let Some((true, false, hit)) = outcome {
+                    if let Some(provider) = hit {
+                        dispatch(&handle, &format!("orbit-agent:{provider}"));
+                    } else {
+                        dispatch(&handle, "toggle-panel");
+                    }
+                } else if let Some((true, true, _)) = outcome {
                     with_surface(|s| position_surface(&s.borrow(), None, true));
                 }
             }
@@ -290,15 +342,35 @@ impl NativePet {
                         s.shape_key.clear();
                     }
                 }
+                let next_orbit = crate::pet_orbit::parse_agents(&info);
+                if s.orbit_agents.is_empty() && !next_orbit.is_empty() {
+                    s.orbit_start = Instant::now();
+                }
+                if s.orbit_hover.is_some_and(|idx| idx >= next_orbit.len()) {
+                    s.orbit_hover = None;
+                }
+                s.orbit_agents = next_orbit;
                 s.info = info;
                 let scale = normalized_scale(s.info["petScale"].as_f64().unwrap_or(1.0));
+                let has_orbit = !s.orbit_agents.is_empty();
+                let (logical_w, logical_h) = canvas_size(&s.state, has_orbit);
+                let next_pad = orbit_padding(has_orbit);
+                let old_pad = s.applied_pad;
+                s.applied_pad = next_pad;
                 let size = (
-                    (144.0 * scale).round() as i32,
-                    (aieyes_core::pets::height(&s.state) * scale).round() as i32,
+                    (logical_w * scale).round() as i32,
+                    (logical_h * scale).round() as i32,
                 );
                 if s.area.size_request() != size {
                     s.area.set_size_request(size.0, size.1);
                     s.window.resize(size.0, size.1);
+                    if old_pad != next_pad {
+                        let (wx, wy) = s.window.position();
+                        let dx = ((next_pad.0 - old_pad.0) * scale).round() as i32;
+                        let dy = ((next_pad.1 - old_pad.1) * scale).round() as i32;
+                        s.window.move_(wx - dx, wy - dy);
+                        position_surface(&s, None, false);
+                    }
                 }
                 s.window
                     .set_title(crate::localization::label("Aieyes 桌宠"));
@@ -433,7 +505,16 @@ fn schedule(surface: &Rc<RefCell<Surface>>) {
         timer.remove();
     }
     let delay = if s.visible {
-        next_frame_delay(&s.state, s.start.elapsed().as_millis() as u64, reduced())
+        let is_reduced = reduced();
+        let frame_delay =
+            next_frame_delay(&s.state, s.start.elapsed().as_millis() as u64, is_reduced);
+        if !is_reduced && !s.orbit_agents.is_empty() {
+            Some(frame_delay.map_or(crate::pet_orbit::PULSE_FRAME_MS, |d| {
+                d.min(crate::pet_orbit::PULSE_FRAME_MS)
+            }))
+        } else {
+            frame_delay
+        }
     } else {
         None
     };
@@ -470,10 +551,12 @@ fn paint(s: &Surface, cr: &cairo::Context) -> Result<(), cairo::Error> {
     cr.set_operator(cairo::Operator::Over);
     let scale = normalized_scale(s.info["petScale"].as_f64().unwrap_or(1.0));
     cr.scale(scale, scale);
+    let has_orbit = !s.orbit_agents.is_empty();
+    let (pad_x, pad_top) = orbit_padding(has_orbit);
     let index = frame(&s.state, s.start.elapsed().as_millis() as u64, reduced()) as usize;
     if let Some(image) = s.frames.get(index) {
         cr.save()?;
-        cr.translate(6.0, 0.0);
+        cr.translate(pad_x + 6.0, pad_top);
         cr.scale(
             132.0 / f64::from(image.width()),
             143.0 / f64::from(image.height()),
@@ -497,14 +580,20 @@ fn paint(s: &Surface, cr: &cairo::Context) -> Result<(), cairo::Error> {
         )));
         let (width, height) = layout.pixel_size();
         let width = f64::from(width + 10);
-        rounded(cr, 144.0 - width, 18.0, width, 20.0, 10.0);
+        rounded(cr, pad_x + 144.0 - width, pad_top + 18.0, width, 20.0, 10.0);
         cr.set_source_rgb(0.30, 0.35, 0.85);
         cr.fill()?;
         cr.set_source_rgb(1.0, 1.0, 1.0);
-        cr.move_to(149.0 - width, 18.0 + (20.0 - f64::from(height)) / 2.0);
+        cr.move_to(
+            pad_x + 149.0 - width,
+            pad_top + 18.0 + (20.0 - f64::from(height)) / 2.0,
+        );
         pangocairo::functions::show_layout(cr, &layout);
     }
     let dark = gtk::Settings::default().is_some_and(|s| s.is_gtk_application_prefer_dark_theme());
+    if has_orbit {
+        paint_orbit_nodes(s, cr, dark)?;
+    }
     let label = crate::localization::text(&s.state.label);
     let layout = s.area.create_pango_layout(Some(&label));
     layout.set_font_description(Some(&gtk::pango::FontDescription::from_string(
@@ -514,8 +603,8 @@ fn paint(s: &Surface, cr: &cairo::Context) -> Result<(), cairo::Error> {
     let (width, height) = layout.pixel_size();
     let w = f64::from(width + 24).min(140.0);
     let h = f64::from(height + 6);
-    let x = (144.0 - w) / 2.0;
-    let y = aieyes_core::pets::height(&s.state) - h - 4.0;
+    let x = pad_x + (144.0 - w) / 2.0;
+    let y = pad_top + aieyes_core::pets::height(&s.state) - h - 4.0;
     rounded(cr, x, y, w, h, 10.0);
     if dark {
         cr.set_source_rgb(0.125, 0.153, 0.208);
@@ -538,6 +627,275 @@ fn paint(s: &Surface, cr: &cairo::Context) -> Result<(), cairo::Error> {
     }
     cr.move_to(x + 16.0, y + 3.0);
     pangocairo::functions::show_layout(cr, &layout);
+    Ok(())
+}
+
+fn paint_orbit_nodes(s: &Surface, cr: &cairo::Context, dark: bool) -> Result<(), cairo::Error> {
+    let slots = orbit_slots(s.orbit_agents.len());
+    let elapsed_ms = s.orbit_start.elapsed().as_millis() as u64;
+    let is_reduced = reduced();
+    let selected = s.info["orbitAgent"].as_str();
+
+    for (index, (agent, slot)) in s.orbit_agents.iter().zip(slots.iter()).enumerate() {
+        let is_selected = selected == Some(agent.provider.as_str());
+        let is_hovered = s.orbit_hover == Some(index);
+        let boost = if is_hovered || is_selected { 1.08 } else { 1.0 };
+        let radius = (ORBIT_NODE_SIZE / 2.0) * boost;
+        let (cx, cy) = (slot.cx, slot.cy);
+
+        // 1. Breathing halo
+        let (halo_alpha, halo_scale) =
+            crate::pet_orbit::pulse_metrics(elapsed_ms, index, agent.phase, is_reduced);
+        let [pr, pg, pb] = crate::pet_orbit::pulse_rgb(agent, dark);
+        cr.save()?;
+        cr.set_source_rgba(
+            f64::from(pr) / 255.0,
+            f64::from(pg) / 255.0,
+            f64::from(pb) / 255.0,
+            halo_alpha,
+        );
+        cr.set_line_width(2.4);
+        cr.arc(
+            cx,
+            cy,
+            radius * halo_scale + 1.5,
+            0.0,
+            std::f64::consts::TAU,
+        );
+        cr.stroke()?;
+        cr.restore()?;
+
+        // 2. Disc backdrop + border
+        cr.save()?;
+        cr.arc(cx, cy, radius, 0.0, std::f64::consts::TAU);
+        if dark {
+            cr.set_source_rgba(0.137, 0.161, 0.212, 0.92);
+        } else {
+            cr.set_source_rgba(0.973, 0.980, 0.988, 0.94);
+        }
+        cr.fill_preserve()?;
+        if is_selected {
+            if dark {
+                cr.set_source_rgba(0.639, 0.702, 1.0, 1.0);
+            } else {
+                cr.set_source_rgba(0.333, 0.400, 0.851, 1.0);
+            }
+            cr.set_line_width(1.6);
+        } else {
+            if dark {
+                cr.set_source_rgba(0.529, 0.580, 0.678, 0.40);
+            } else {
+                cr.set_source_rgba(0.482, 0.529, 0.616, 0.34);
+            }
+            cr.set_line_width(0.9);
+        }
+        cr.stroke()?;
+        cr.restore()?;
+
+        // 3. Quota ring
+        let is_overflow = agent.provider == ORBIT_OVERFLOW_PROVIDER;
+        let ring_r = radius - 2.2;
+        let ring_width = 2.4;
+        if !is_overflow {
+            let ring = agent
+                .quota
+                .as_ref()
+                .map(|q| &q.ring)
+                .unwrap_or(&Ring::Empty);
+            cr.save()?;
+            cr.set_line_cap(cairo::LineCap::Round);
+            cr.set_line_width(ring_width);
+            let set_track = |cr: &cairo::Context| {
+                if dark {
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.24);
+                } else {
+                    cr.set_source_rgba(0.145, 0.145, 0.157, 0.17);
+                }
+            };
+            match ring {
+                Ring::Duo { top, bottom } => {
+                    let half = (ring_width / 2.0 + 0.8) / ring_r;
+                    let span = std::f64::consts::PI - 2.0 * half;
+                    set_track(cr);
+                    cr.arc(
+                        cx,
+                        cy,
+                        ring_r,
+                        std::f64::consts::PI + half,
+                        std::f64::consts::TAU - half,
+                    );
+                    cr.stroke()?;
+                    cr.arc_negative(cx, cy, ring_r, std::f64::consts::PI - half, half);
+                    cr.stroke()?;
+                    let top_rem = top.remaining.clamp(0.0, 100.0);
+                    if top_rem > 0.0 {
+                        let [r, g, b] = crate::pet_orbit::quota_arc_rgb(
+                            &agent.display_provider,
+                            top.remaining,
+                            dark,
+                        );
+                        cr.set_source_rgb(
+                            f64::from(r) / 255.0,
+                            f64::from(g) / 255.0,
+                            f64::from(b) / 255.0,
+                        );
+                        cr.arc(
+                            cx,
+                            cy,
+                            ring_r,
+                            std::f64::consts::PI + half,
+                            std::f64::consts::PI + half + (span * top_rem / 100.0).max(0.02),
+                        );
+                        cr.stroke()?;
+                    }
+                    let bot_rem = bottom.remaining.clamp(0.0, 100.0);
+                    if bot_rem > 0.0 {
+                        let [r, g, b] = crate::pet_orbit::quota_arc_rgb(
+                            &agent.display_provider,
+                            bottom.remaining,
+                            dark,
+                        );
+                        cr.set_source_rgb(
+                            f64::from(r) / 255.0,
+                            f64::from(g) / 255.0,
+                            f64::from(b) / 255.0,
+                        );
+                        cr.arc_negative(
+                            cx,
+                            cy,
+                            ring_r,
+                            std::f64::consts::PI - half,
+                            std::f64::consts::PI - half - (span * bot_rem / 100.0).max(0.02),
+                        );
+                        cr.stroke()?;
+                    }
+                }
+                Ring::Single { top } => {
+                    set_track(cr);
+                    cr.arc(cx, cy, ring_r, 0.0, std::f64::consts::TAU);
+                    cr.stroke()?;
+                    let rem = top.remaining.clamp(0.0, 100.0);
+                    if rem > 0.0 {
+                        let [r, g, b] = crate::pet_orbit::quota_arc_rgb(
+                            &agent.display_provider,
+                            top.remaining,
+                            dark,
+                        );
+                        cr.set_source_rgb(
+                            f64::from(r) / 255.0,
+                            f64::from(g) / 255.0,
+                            f64::from(b) / 255.0,
+                        );
+                        let start = -std::f64::consts::FRAC_PI_2;
+                        cr.arc(
+                            cx,
+                            cy,
+                            ring_r,
+                            start,
+                            start + (std::f64::consts::TAU * rem / 100.0).max(0.02),
+                        );
+                        cr.stroke()?;
+                    }
+                }
+                Ring::Coin { low, .. } => {
+                    let [r, g, b] = if *low {
+                        if dark {
+                            [0xff, 0x92, 0x9c]
+                        } else {
+                            [0xb8, 0x32, 0x45]
+                        }
+                    } else {
+                        crate::pet_orbit::provider_rgb(&agent.display_provider, dark)
+                    };
+                    cr.set_line_width(1.8);
+                    cr.set_source_rgba(
+                        f64::from(r) / 255.0,
+                        f64::from(g) / 255.0,
+                        f64::from(b) / 255.0,
+                        0.65,
+                    );
+                    cr.arc(cx, cy, ring_r, 0.0, std::f64::consts::TAU);
+                    cr.stroke()?;
+                }
+                Ring::Empty => {
+                    set_track(cr);
+                    cr.set_line_width(1.6);
+                    cr.set_dash(&[1.5, 3.0], 0.0);
+                    cr.arc(cx, cy, ring_r, 0.0, std::f64::consts::TAU);
+                    cr.stroke()?;
+                }
+            }
+            cr.restore()?;
+        }
+
+        // 4. Center provider icon or +N overflow label
+        if is_overflow {
+            let text = format!("+{}", agent.overflow_providers.len());
+            let layout = s.area.create_pango_layout(Some(&text));
+            layout.set_font_description(Some(&gtk::pango::FontDescription::from_string(
+                "HarmonyOS Sans SC Bold 8",
+            )));
+            let (tw, th) = layout.pixel_size();
+            if dark {
+                cr.set_source_rgb(0.93, 0.95, 0.99);
+            } else {
+                cr.set_source_rgb(0.14, 0.19, 0.29);
+            }
+            cr.move_to(cx - f64::from(tw) / 2.0, cy - f64::from(th) / 2.0);
+            pangocairo::functions::show_layout(cr, &layout);
+        } else if let Some(icon) = crate::pet_icons::load(&agent.display_provider, dark)
+            && let Ok(surface) = cairo::ImageSurface::create_for_data(
+                icon.pixels,
+                cairo::Format::ARgb32,
+                icon.width as i32,
+                icon.height as i32,
+                (icon.width * 4) as i32,
+            )
+        {
+            let icon_size = 16.0 * boost;
+            cr.save()?;
+            cr.translate(cx - icon_size / 2.0, cy - icon_size / 2.0);
+            cr.scale(
+                icon_size / f64::from(icon.width),
+                icon_size / f64::from(icon.height),
+            );
+            cr.set_source_surface(&surface, 0.0, 0.0)?;
+            cr.source().set_filter(cairo::Filter::Best);
+            cr.paint()?;
+            cr.restore()?;
+        }
+
+        // 5. Multi-session count badge
+        if !is_overflow && agent.active_count > 1 {
+            let count_text = if agent.active_count > 9 {
+                "9+".to_owned()
+            } else {
+                agent.active_count.to_string()
+            };
+            let layout = s.area.create_pango_layout(Some(&count_text));
+            layout.set_font_description(Some(&gtk::pango::FontDescription::from_string(
+                "HarmonyOS Sans SC Bold 7",
+            )));
+            let (tw, th) = layout.pixel_size();
+            let pw = f64::from(tw + 6).max(13.0);
+            let ph = 13.0;
+            let px = cx + radius - pw + 3.0;
+            let py = cy + radius - ph + 3.0;
+            rounded(cr, px, py, pw, ph, ph / 2.0);
+            if agent.phase == aieyes_core::sessions::Phase::NeedsInput {
+                cr.set_source_rgb(0.54, 0.34, 0.07);
+            } else {
+                cr.set_source_rgb(0.30, 0.35, 0.85);
+            }
+            cr.fill()?;
+            cr.set_source_rgb(1.0, 1.0, 1.0);
+            cr.move_to(
+                px + (pw - f64::from(tw)) / 2.0,
+                py + (ph - f64::from(th)) / 2.0,
+            );
+            pangocairo::functions::show_layout(cr, &layout);
+        }
+    }
     Ok(())
 }
 
@@ -685,9 +1043,14 @@ fn update_shape(s: &mut Surface) {
     let frame = frame(&s.state, s.start.elapsed().as_millis() as u64, reduced()) as usize;
     let composited =
         gtk::prelude::WidgetExt::screen(&s.window).is_some_and(|screen| screen.is_composited());
+    let has_orbit = !s.orbit_agents.is_empty();
+    let (pad_x, pad_top) = orbit_padding(has_orbit);
     let key = format!(
-        "{frame}:{composited}:{}:{}:{}",
-        s.state.label, s.info["showCount"], s.info["activeCount"]
+        "{frame}:{composited}:{}:{}:{}:{}",
+        s.state.label,
+        s.info["showCount"],
+        s.info["activeCount"],
+        s.orbit_agents.len()
     );
     if key == s.shape_key {
         return;
@@ -698,6 +1061,12 @@ fn update_shape(s: &mut Surface) {
         .get(frame)
         .map(cairo::Region::copy)
         .unwrap_or_else(cairo::Region::create);
+    if has_orbit {
+        region.translate(
+            (pad_x * scale).round() as i32,
+            (pad_top * scale).round() as i32,
+        );
+    }
     let label = s
         .area
         .create_pango_layout(Some(&crate::localization::text(&s.state.label)));
@@ -708,17 +1077,26 @@ fn update_shape(s: &mut Surface) {
     let w = f64::from(w + 24).min(140.0);
     let h = f64::from(h + 6);
     let _ = region.union_rectangle(&cairo::RectangleInt::new(
-        ((144.0 - w) / 2.0 * scale) as i32,
-        ((aieyes_core::pets::height(&s.state) - h - 4.0) * scale) as i32,
+        ((pad_x + (144.0 - w) / 2.0) * scale) as i32,
+        ((pad_top + aieyes_core::pets::height(&s.state) - h - 4.0) * scale) as i32,
         (w * scale).ceil() as i32,
         (h * scale).ceil() as i32,
     ));
     if s.info["showCount"] == true && s.info["activeCount"].as_u64().is_some_and(|n| n > 0) {
         let _ = region.union_rectangle(&cairo::RectangleInt::new(
-            (108.0 * scale) as i32,
-            (18.0 * scale) as i32,
+            ((pad_x + 108.0) * scale) as i32,
+            ((pad_top + 18.0) * scale) as i32,
             (36.0 * scale) as i32,
             (20.0 * scale) as i32,
+        ));
+    }
+    for slot in orbit_slots(s.orbit_agents.len()) {
+        let r = crate::pet_orbit::HIT_RADIUS;
+        let _ = region.union_rectangle(&cairo::RectangleInt::new(
+            ((slot.cx - r) * scale).floor() as i32,
+            ((slot.cy - r) * scale).floor() as i32,
+            (r * 2.0 * scale).ceil() as i32,
+            (r * 2.0 * scale).ceil() as i32,
         ));
     }
     window.input_shape_combine_region(&region, 0, 0);

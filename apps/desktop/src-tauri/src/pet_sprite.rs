@@ -82,6 +82,7 @@ struct LabelSpec {
     dot: u32,
     /// Active-session count at the top right, when enabled: (text, fill, ink).
     badge: Option<(String, u32, u32)>,
+    has_orbit: bool,
 }
 #[derive(Default)]
 struct LabelCache {
@@ -96,6 +97,9 @@ pub(super) unsafe fn paint(
     frame: u32,
     font: *mut GpFont,
     info: &Value,
+    orbit_agents: &[aieyes_core::pets::PetOrbitAgent],
+    orbit_hover: Option<usize>,
+    orbit_elapsed_ms: u64,
     renderer: &mut Renderer,
 ) {
     let mut rect = RECT::default();
@@ -123,6 +127,9 @@ pub(super) unsafe fn paint(
         font,
         &state.label,
         info,
+        orbit_agents,
+        orbit_hover,
+        orbit_elapsed_ms,
         &mut renderer.label,
     );
     let blend = BLENDFUNCTION {
@@ -160,9 +167,18 @@ unsafe fn draw_cached(
     font: *mut GpFont,
     label: &str,
     info: &Value,
+    orbit_agents: &[aieyes_core::pets::PetOrbitAgent],
+    orbit_hover: Option<usize>,
+    orbit_elapsed_ms: u64,
     label_cache: &mut LabelCache,
 ) {
-    let scale = width as f32 / 144.0;
+    let has_orbit = !orbit_agents.is_empty();
+    let (pad_x, pad_top) = aieyes_core::pets::orbit_padding(has_orbit);
+    let logical_w = (aieyes_core::pets::BASE_WIDTH + pad_x * 2.0) as f32;
+    let scale = width as f32 / logical_w;
+    let dark = info["dark"] == true;
+    let contrast = high_contrast();
+    let selected_provider = info["orbitAgent"].as_str();
     let mut graphics = null_mut();
     let mut canvas = null_mut();
     if GdipCreateBitmapFromScan0(
@@ -193,8 +209,8 @@ unsafe fn draw_cached(
             GdipDrawImageRectRect(
                 graphics,
                 image.cast(),
-                6.0,
-                0.0,
+                pad_x as f32 + 6.0,
+                pad_top as f32,
                 132.0,
                 143.0,
                 0.0,
@@ -207,6 +223,18 @@ unsafe fn draw_cached(
                 null_mut(),
             );
             GdipDisposeImage(image.cast());
+        }
+        if has_orbit {
+            draw_orbit_nodes(
+                graphics,
+                font,
+                orbit_agents,
+                orbit_hover,
+                selected_provider,
+                orbit_elapsed_ms,
+                dark,
+                contrast,
+            );
         }
         GdipDeleteGraphics(graphics);
     }
@@ -223,7 +251,6 @@ unsafe fn draw_cached(
     } else {
         crate::localization::text(label)
     };
-    let (contrast, dark) = (high_contrast(), info["dark"] == true);
     let (background, foreground) = if contrast {
         (system_argb(COLOR_WINDOW), system_argb(COLOR_WINDOWTEXT))
     } else if dark {
@@ -262,6 +289,7 @@ unsafe fn draw_cached(
         foreground,
         dot,
         badge,
+        has_orbit,
     };
     if label_cache
         .key
@@ -355,11 +383,371 @@ unsafe fn measure_width(
     ) == GDI_OK)
         .then_some(measured.Width)
 }
+unsafe fn argb(alpha: u8, [r, g, b]: [u8; 3]) -> u32 {
+    (u32::from(alpha) << 24) | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
+}
+
+unsafe fn draw_ring_arc(
+    graphics: *mut GpGraphics,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    line_width: f32,
+    start_deg: f32,
+    sweep_deg: f32,
+    color: u32,
+) {
+    let mut pen = null_mut();
+    if GdipCreatePen1(color, line_width, UnitPixel, &mut pen) == GDI_OK {
+        GdipSetPenStartCap(pen, LineCapRound);
+        GdipSetPenEndCap(pen, LineCapRound);
+        GdipDrawArc(
+            graphics,
+            pen,
+            cx - radius,
+            cy - radius,
+            radius * 2.0,
+            radius * 2.0,
+            start_deg,
+            sweep_deg,
+        );
+        GdipDeletePen(pen);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn draw_orbit_nodes(
+    graphics: *mut GpGraphics,
+    font: *mut GpFont,
+    agents: &[aieyes_core::pets::PetOrbitAgent],
+    hover: Option<usize>,
+    selected_provider: Option<&str>,
+    elapsed_ms: u64,
+    dark: bool,
+    contrast: bool,
+) {
+    use aieyes_core::pets::{ORBIT_NODE_SIZE, ORBIT_OVERFLOW_PROVIDER, orbit_slots};
+    use aieyes_core::quota_ring::Ring;
+    let slots = orbit_slots(agents.len());
+    let reduced = reduced_motion();
+    let mut format = null_mut();
+    GdipCreateStringFormat(0, 0, &mut format);
+    GdipSetStringFormatAlign(format, StringAlignmentCenter);
+    GdipSetStringFormatLineAlign(format, StringAlignmentCenter);
+
+    for (index, (agent, slot)) in agents.iter().zip(slots.iter()).enumerate() {
+        let is_selected = selected_provider == Some(agent.provider.as_str());
+        let is_hovered = hover == Some(index);
+        let boost = if is_hovered || is_selected {
+            1.08_f32
+        } else {
+            1.0
+        };
+        let cx = slot.cx as f32;
+        let cy = slot.cy as f32;
+        let radius = (ORBIT_NODE_SIZE as f32 / 2.0) * boost;
+
+        // 1. Gentle breathing halo
+        let (halo_alpha, halo_scale) =
+            crate::pet_orbit::pulse_metrics(elapsed_ms, index, agent.phase, reduced);
+        let pulse_rgb = crate::pet_orbit::pulse_rgb(agent, dark);
+        let halo_r = radius * halo_scale as f32 + 1.5;
+        let mut halo_pen = null_mut();
+        if GdipCreatePen1(
+            argb(
+                (halo_alpha * 255.0).round().clamp(0.0, 255.0) as u8,
+                pulse_rgb,
+            ),
+            2.4,
+            UnitPixel,
+            &mut halo_pen,
+        ) == GDI_OK
+        {
+            GdipDrawEllipse(
+                graphics,
+                halo_pen,
+                cx - halo_r,
+                cy - halo_r,
+                halo_r * 2.0,
+                halo_r * 2.0,
+            );
+            GdipDeletePen(halo_pen);
+        }
+
+        // 2. Disc backdrop + subtle border
+        let fill_color = if contrast {
+            system_argb(COLOR_WINDOW)
+        } else if dark {
+            0xec232936
+        } else {
+            0xf0f8fafc
+        };
+        let mut brush = null_mut();
+        GdipCreateSolidFill(fill_color, &mut brush);
+        GdipFillEllipse(
+            graphics,
+            brush.cast(),
+            cx - radius,
+            cy - radius,
+            radius * 2.0,
+            radius * 2.0,
+        );
+        GdipDeleteBrush(brush.cast());
+
+        let border_color = if is_selected {
+            if dark { 0xffa3b3ff } else { 0xff5566d9 }
+        } else if dark {
+            0x668794ad
+        } else {
+            0x557b879d
+        };
+        let mut border_pen = null_mut();
+        if GdipCreatePen1(
+            border_color,
+            if is_selected { 1.6 } else { 0.9 },
+            UnitPixel,
+            &mut border_pen,
+        ) == GDI_OK
+        {
+            GdipDrawEllipse(
+                graphics,
+                border_pen,
+                cx - radius,
+                cy - radius,
+                radius * 2.0,
+                radius * 2.0,
+            );
+            GdipDeletePen(border_pen);
+        }
+
+        // 3. Quota ring
+        let is_overflow = agent.provider == ORBIT_OVERFLOW_PROVIDER;
+        let ring_width = 2.4_f32;
+        let ring_r = radius - 2.2;
+        let track_color = if dark { 0x40ffffff } else { 0x2b252528 };
+        if !is_overflow {
+            let ring = agent
+                .quota
+                .as_ref()
+                .map(|q| &q.ring)
+                .unwrap_or(&Ring::Empty);
+            match ring {
+                Ring::Duo { top, bottom } => {
+                    let half = ((ring_width / 2.0 + 0.8) / ring_r).to_degrees();
+                    let span = 180.0 - 2.0 * half;
+                    draw_ring_arc(
+                        graphics,
+                        cx,
+                        cy,
+                        ring_r,
+                        ring_width,
+                        180.0 + half,
+                        span,
+                        track_color,
+                    );
+                    draw_ring_arc(
+                        graphics,
+                        cx,
+                        cy,
+                        ring_r,
+                        ring_width,
+                        180.0 - half,
+                        -span,
+                        track_color,
+                    );
+                    let top_rem = top.remaining.clamp(0.0, 100.0) as f32;
+                    let bot_rem = bottom.remaining.clamp(0.0, 100.0) as f32;
+                    if top_rem > 0.0 {
+                        let c = argb(
+                            255,
+                            crate::pet_orbit::quota_arc_rgb(
+                                &agent.display_provider,
+                                top.remaining,
+                                dark,
+                            ),
+                        );
+                        draw_ring_arc(
+                            graphics,
+                            cx,
+                            cy,
+                            ring_r,
+                            ring_width,
+                            180.0 + half,
+                            (span * top_rem / 100.0).max(1.0),
+                            c,
+                        );
+                    }
+                    if bot_rem > 0.0 {
+                        let c = argb(
+                            255,
+                            crate::pet_orbit::quota_arc_rgb(
+                                &agent.display_provider,
+                                bottom.remaining,
+                                dark,
+                            ),
+                        );
+                        draw_ring_arc(
+                            graphics,
+                            cx,
+                            cy,
+                            ring_r,
+                            ring_width,
+                            180.0 - half,
+                            -(span * bot_rem / 100.0).max(1.0),
+                            c,
+                        );
+                    }
+                }
+                Ring::Single { top } => {
+                    draw_ring_arc(
+                        graphics,
+                        cx,
+                        cy,
+                        ring_r,
+                        ring_width,
+                        0.0,
+                        360.0,
+                        track_color,
+                    );
+                    let rem = top.remaining.clamp(0.0, 100.0) as f32;
+                    if rem > 0.0 {
+                        let c = argb(
+                            255,
+                            crate::pet_orbit::quota_arc_rgb(
+                                &agent.display_provider,
+                                top.remaining,
+                                dark,
+                            ),
+                        );
+                        draw_ring_arc(
+                            graphics,
+                            cx,
+                            cy,
+                            ring_r,
+                            ring_width,
+                            270.0,
+                            (360.0 * rem / 100.0).max(1.0),
+                            c,
+                        );
+                    }
+                }
+                Ring::Coin { low, .. } => {
+                    let rgb = if *low {
+                        if dark {
+                            [0xff, 0x92, 0x9c]
+                        } else {
+                            [0xb8, 0x32, 0x45]
+                        }
+                    } else {
+                        crate::pet_orbit::provider_rgb(&agent.display_provider, dark)
+                    };
+                    draw_ring_arc(graphics, cx, cy, ring_r, 1.8, 0.0, 360.0, argb(160, rgb));
+                }
+                Ring::Empty => {
+                    let mut dash_pen = null_mut();
+                    if GdipCreatePen1(track_color, 1.6, UnitPixel, &mut dash_pen) == GDI_OK {
+                        GdipSetPenDashStyle(dash_pen, DashStyleDot);
+                        GdipDrawEllipse(
+                            graphics,
+                            dash_pen,
+                            cx - ring_r,
+                            cy - ring_r,
+                            ring_r * 2.0,
+                            ring_r * 2.0,
+                        );
+                        GdipDeletePen(dash_pen);
+                    }
+                }
+            }
+        }
+
+        // 4. Center icon or +N overflow label
+        if is_overflow {
+            let label = format!("+{}", agent.overflow_providers.len());
+            let utf16: Vec<u16> = label.encode_utf16().collect();
+            let rect = RectF {
+                X: cx - radius,
+                Y: cy - radius,
+                Width: radius * 2.0,
+                Height: radius * 2.0,
+            };
+            let fg = if dark { 0xffedf2fc } else { 0xff243049 };
+            if !font.is_null() {
+                draw_text(graphics, font, format, &utf16, fg, &rect);
+            }
+        } else if let Some(icon) = crate::pet_icons::load(&agent.display_provider, dark) {
+            let mut bitmap = null_mut();
+            if GdipCreateBitmapFromScan0(
+                icon.width as i32,
+                icon.height as i32,
+                (icon.width * 4) as i32,
+                0xe200b,
+                Some(icon.pixels.as_ptr()),
+                &mut bitmap,
+            ) == GDI_OK
+            {
+                let icon_size = 16.0 * boost;
+                GdipDrawImageRectRect(
+                    graphics,
+                    bitmap.cast(),
+                    cx - icon_size / 2.0,
+                    cy - icon_size / 2.0,
+                    icon_size,
+                    icon_size,
+                    0.0,
+                    0.0,
+                    icon.width as f32,
+                    icon.height as f32,
+                    UnitPixel,
+                    std::ptr::null(),
+                    0,
+                    null_mut(),
+                );
+                GdipDisposeImage(bitmap.cast());
+            }
+        }
+
+        // 5. Multi-session count pill
+        if !is_overflow && agent.active_count > 1 {
+            let count_text = if agent.active_count > 9 {
+                "9+".to_owned()
+            } else {
+                agent.active_count.to_string()
+            };
+            let pill_w = if count_text.len() > 1 { 17.0 } else { 13.0 };
+            let pill_h = 13.0;
+            let pill = RectF {
+                X: cx + radius - pill_w + 3.0,
+                Y: cy + radius - pill_h + 3.0,
+                Width: pill_w,
+                Height: pill_h,
+            };
+            let pill_fill = if agent.phase == aieyes_core::sessions::Phase::NeedsInput {
+                if dark { 0xffe0b062 } else { 0xff895712 }
+            } else if dark {
+                0xff5566d9
+            } else {
+                0xff4d59d9
+            };
+            fill_round_rect(graphics, pill_fill, pill, pill_h);
+            if !font.is_null() {
+                let utf16: Vec<u16> = count_text.encode_utf16().collect();
+                draw_text(graphics, font, format, &utf16, 0xffffffff, &pill);
+            }
+        }
+    }
+    if !format.is_null() {
+        GdipDeleteStringFormat(format);
+    }
+}
+
 unsafe fn render_label(width: i32, height: i32, font: *mut GpFont, spec: &LabelSpec) -> Vec<u8> {
     let high = vec![0u8; (width * height * 4 * 9) as usize];
     let mut canvas = null_mut();
     let mut graphics = null_mut();
-    let scale = width as f32 / 144.0;
+    let (pad_x, pad_top) = aieyes_core::pets::orbit_padding(spec.has_orbit);
+    let logical_w = (aieyes_core::pets::BASE_WIDTH + pad_x * 2.0) as f32;
+    let scale = width as f32 / logical_w;
     if GdipCreateBitmapFromScan0(
         width * 3,
         height * 3,
@@ -377,7 +765,7 @@ unsafe fn render_label(width: i32, height: i32, font: *mut GpFont, spec: &LabelS
         GdipCreateStringFormat(0, 0, &mut format);
         GdipSetStringFormatAlign(format, StringAlignmentCenter);
         GdipSetStringFormatLineAlign(format, StringAlignmentCenter);
-        let area = height as f32 / scale - 143.0;
+        let area = height as f32 / scale - pad_top as f32 - 143.0;
         let layout = RectF {
             X: 0.0,
             Y: 0.0,
@@ -388,7 +776,11 @@ unsafe fn render_label(width: i32, height: i32, font: *mut GpFont, spec: &LabelS
         let w = measure_width(graphics, font, format, &text, &layout).map_or(138.0, |measured| {
             (measured.ceil() + 28.0).clamp(30.0, 138.0)
         });
-        let (x, y, h) = ((144.0 - w) / 2.0, 145.0, area - 4.0);
+        let (x, y, h) = (
+            pad_x as f32 + (144.0 - w) / 2.0,
+            pad_top as f32 + 145.0,
+            area - 4.0,
+        );
         let pill = RectF {
             X: x,
             Y: y,
@@ -403,7 +795,7 @@ unsafe fn render_label(width: i32, height: i32, font: *mut GpFont, spec: &LabelS
         GdipSetTextRenderingHint(graphics, TextRenderingHintAntiAliasGridFit);
         let rect = RectF {
             X: x + 19.0,
-            Y: 143.0,
+            Y: pad_top as f32 + 143.0,
             Width: w - 28.0,
             Height: area,
         };
@@ -413,8 +805,8 @@ unsafe fn render_label(width: i32, height: i32, font: *mut GpFont, spec: &LabelS
             let bw = measure_width(graphics, font, format, &count, &layout)
                 .map_or(20.0, |measured| (measured.ceil() + 10.0).max(20.0));
             let badge = RectF {
-                X: 144.0 - bw,
-                Y: 18.0,
+                X: pad_x as f32 + 144.0 - bw,
+                Y: pad_top as f32 + 18.0,
                 Width: bw,
                 Height: 20.0,
             };
@@ -468,6 +860,9 @@ unsafe fn draw(
         font,
         label,
         info,
+        &[],
+        None,
+        0,
         &mut LabelCache::default(),
     );
 }
@@ -552,6 +947,7 @@ mod tests {
                         foreground: 0xff243049,
                         dot: 0xff7a879d,
                         badge,
+                        has_orbit: false,
                     };
                     let pixels = render_label(
                         width,
@@ -633,6 +1029,9 @@ mod tests {
                     font.font,
                     "空闲",
                     &serde_json::json!({}),
+                    &[],
+                    None,
+                    0,
                     &mut cache,
                 );
                 let first = cache.pixels.clone();
@@ -646,6 +1045,9 @@ mod tests {
                     font.font,
                     "空闲",
                     &serde_json::json!({}),
+                    &[],
+                    None,
+                    0,
                     &mut cache,
                 );
                 assert_eq!(
@@ -663,6 +1065,9 @@ mod tests {
                     font.font,
                     "等待输入",
                     &serde_json::json!({}),
+                    &[],
+                    None,
+                    0,
                     &mut cache,
                 );
                 assert_ne!(cache.pixels, first);
@@ -676,6 +1081,9 @@ mod tests {
                     font.font,
                     "等待输入",
                     &serde_json::json!({}),
+                    &[],
+                    None,
+                    0,
                     &mut cache,
                 );
                 assert_eq!(cache.pixels.len(), larger.len());

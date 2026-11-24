@@ -40,6 +40,8 @@ struct AieyesCommands: Commands {
     private var statusItem: NSStatusItem!
     private var statusLabel: NSHostingView<MenuActivityLabel>?
     private let popover = PanelPopover()
+    private let orbitPopover = PanelPopover()
+    private var activeOrbitProvider: String?
     private var petWindow: PetWindowController?
     private let dockPresence = DockPresence()
     private var appearanceController: AppAppearanceController?
@@ -110,14 +112,28 @@ struct AieyesCommands: Commands {
         popover.contentViewController = PanelContainer(model: model)
         appearanceController?.updatePanel()
         popover.contentSize = NSSize(width: PanelWidth.current.points, height: 720)
-        petWindow = PetWindowController(model: model, checkUpdates: { AppUpdater.shared.check() }, open: { [weak self] anchor, toggle in
-            guard let self else { return }
-            if self.popover.isShown { if toggle { self.popover.performClose(nil) }; return }
-            NSApp.activate(ignoringOtherApps: true)
-            self.preparePopover(screen: anchor.window?.screen)
-            self.popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
-            self.model.setWindowVisible(true, window: "panel")
-        })
+        orbitPopover.behavior = .applicationDefined
+        orbitPopover.animates = true
+        orbitPopover.delegate = self
+        petWindow = PetWindowController(
+            model: model,
+            checkUpdates: { AppUpdater.shared.check() },
+            openOrbit: { [weak self] anchor, agent, rect, edge in
+                self?.toggleOrbitPopover(agent: agent, anchorView: anchor, anchorRect: rect, preferredEdge: edge)
+            },
+            onDragStart: { [weak self] in
+                self?.closeOrbitPopover()
+            },
+            open: { [weak self] anchor, toggle in
+                guard let self else { return }
+                self.closeOrbitPopover()
+                if self.popover.isShown { if toggle { self.popover.performClose(nil) }; return }
+                NSApp.activate(ignoringOtherApps: true)
+                self.preparePopover(screen: anchor.window?.screen)
+                self.popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+                self.model.setWindowVisible(true, window: "panel")
+            }
+        )
         model.live.objectWillChange.sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         model.objectWillChange.sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         model.menuStatus.$snapshot.dropFirst().sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
@@ -132,13 +148,26 @@ struct AieyesCommands: Commands {
         }.store(in: &cancellables)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
-            Task { @MainActor in self?.dismissOutsidePanel() }
+            Task { @MainActor in
+                self?.dismissOutsidePanel()
+                self?.closeOrbitPopover()
+            }
         }
         localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
             guard let self else { return event }
             // The popover-only (accessory) state has no visible main menu; keep ⌘, there too.
             if event.type == .keyDown, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, event.charactersIgnoringModifiers == "," {
                 self.menuOpenSettings(); return nil
+            }
+            if self.orbitPopover.isShown {
+                if event.type == .keyDown {
+                    if event.keyCode == 53 { self.closeOrbitPopover(); return nil }
+                } else if let window = event.window,
+                          window !== self.orbitPopover.contentViewController?.view.window,
+                          window !== self.petWindow?.window,
+                          window.level.rawValue < NSWindow.Level.popUpMenu.rawValue {
+                    self.closeOrbitPopover()
+                }
             }
             guard self.popover.isShown else { return event }
             if event.type == .keyDown {
@@ -206,6 +235,7 @@ struct AieyesCommands: Commands {
         popover.contentSize = size
     }
     private func showPopover() {
+        closeOrbitPopover()
         guard let button = statusItem.button else { return }
         preparePopover(screen: button.window?.screen)
         appearanceController?.updatePanel()
@@ -215,15 +245,60 @@ struct AieyesCommands: Commands {
         // Stays highlighted while its panel is open, like system menu bar extras; set after the click's own tracking.
         DispatchQueue.main.async { [weak self] in if self?.popover.isShown == true { button.highlight(true) } }
     }
+    private func toggleOrbitPopover(agent: PetOrbitAgent, anchorView: NSView, anchorRect: NSRect, preferredEdge: NSRectEdge) {
+        if orbitPopover.isShown && activeOrbitProvider == agent.provider {
+            closeOrbitPopover()
+            return
+        }
+        popover.performClose(nil)
+        if orbitPopover.isShown { orbitPopover.performClose(nil) }
+        guard let orbit = petWindow?.orbit else { return }
+        let view = PetAgentSessionPopoverView(
+            model: model,
+            agent: agent,
+            orbit: orbit,
+            onOpenSessions: { [weak self] in
+                self?.closeOrbitPopover()
+                self?.openDetail(page: "sessions")
+            },
+            onClose: { [weak self] in
+                self?.closeOrbitPopover()
+            }
+        )
+        let hosting = NSHostingController(rootView: view)
+        hosting.sizingOptions = [.preferredContentSize]
+        orbitPopover.contentViewController = hosting
+        orbitPopover.appearance = NSApp.appearance
+        activeOrbitProvider = agent.provider
+        petWindow?.selectedOrbitProvider = agent.provider
+        NSApp.activate(ignoringOtherApps: true)
+        orbitPopover.show(relativeTo: anchorRect, of: anchorView, preferredEdge: preferredEdge)
+    }
+    private func closeOrbitPopover() {
+        if orbitPopover.isShown { orbitPopover.performClose(nil) }
+        activeOrbitProvider = nil
+        petWindow?.selectedOrbitProvider = nil
+    }
     private func dismissOutsidePanel() { if popover.isShown && !model.isPinned { popover.performClose(nil) } }
-    @objc private func applicationDeactivated() { dismissOutsidePanel() }
+    @objc private func applicationDeactivated() {
+        dismissOutsidePanel()
+        closeOrbitPopover()
+    }
     func popoverDidShow(_ notification: Notification) {
-        if let window = popover.contentViewController?.view.window {
+        let target = (notification.object as? NSPopover) ?? popover
+        if let window = target.contentViewController?.view.window {
             PanelContainer.keepAboveApplications(window)
             window.orderFrontRegardless()
         }
     }
-    func popoverDidClose(_ notification: Notification) { statusItem.button?.highlight(false); model.setWindowVisible(false, window: "panel") }
+    func popoverDidClose(_ notification: Notification) {
+        if (notification.object as? NSPopover) === orbitPopover {
+            activeOrbitProvider = nil
+            petWindow?.selectedOrbitProvider = nil
+            return
+        }
+        statusItem.button?.highlight(false); model.setWindowVisible(false, window: "panel")
+    }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         let windows = [detailWindow, accountSwitchWindow].compactMap { $0 } + Array(estimateWindows.values)
         if let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first(where: { $0.isVisible || $0.isMiniaturized }) {

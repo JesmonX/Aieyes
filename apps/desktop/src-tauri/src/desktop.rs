@@ -47,6 +47,13 @@ const PANEL_WIDTH: f64 = 450.0;
 /// The compact panel width chosen in Settings › Panel.
 const PANEL_COMPACT_WIDTH: f64 = 360.0;
 const PANEL_HEIGHT: f64 = 720.0;
+/// Lightweight orbit session popover width & height bounds in logical pixels.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+const ORBIT_POPOVER_WIDTH: f64 = 320.0;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+const ORBIT_POPOVER_MIN_HEIGHT: f64 = 188.0;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+const ORBIT_POPOVER_MAX_HEIGHT: f64 = 360.0;
 /// Mirrors `Preferences::panel_compact` so geometry code needs no state lock.
 static PANEL_COMPACT: AtomicBool = AtomicBool::new(false);
 fn panel_width() -> f64 {
@@ -121,6 +128,8 @@ struct ShellState {
     quota_label: String,
     preferences: Preferences,
     snapshot: Snapshot,
+    orbit_agents: Vec<aieyes_core::pets::PetOrbitAgent>,
+    orbit_agent: Option<String>,
     pet_asset: Value,
     floating: bool,
     visible: bool,
@@ -357,13 +366,48 @@ fn panel_size(scale: f64, work_height: Option<u32>) -> (u32, u32) {
     panel_size_for(panel_width(), scale, work_height)
 }
 fn panel_size_for(logical_width: f64, scale: f64, work_height: Option<u32>) -> (u32, u32) {
+    panel_dimensions(logical_width, PANEL_HEIGHT, scale, work_height)
+}
+fn panel_dimensions(
+    logical_width: f64,
+    logical_height: f64,
+    scale: f64,
+    work_height: Option<u32>,
+) -> (u32, u32) {
     let width = (logical_width * scale).round() as u32;
-    let height = (PANEL_HEIGHT * scale).round() as u32;
+    let height = (logical_height * scale).round() as u32;
     let margin = (24.0 * scale).round() as u32;
     let height = work_height.map_or(height, |work| {
         height.min(work.saturating_sub(margin).max(1))
     });
     (width, height)
+}
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn orbit_popover_logical_height(state: &ShellState, provider: &str) -> f64 {
+    let count = state
+        .orbit_agents
+        .iter()
+        .find(|item| item.provider == provider)
+        .map(|item| item.active_count)
+        .unwrap_or(0);
+    if count == 0 {
+        return ORBIT_POPOVER_MIN_HEIGHT;
+    }
+    (124.0 + (count.min(3) as f64) * 76.0).clamp(ORBIT_POPOVER_MIN_HEIGHT, ORBIT_POPOVER_MAX_HEIGHT)
+}
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn active_panel_size(app: &AppHandle, scale: f64, work_height: Option<u32>) -> (u32, u32) {
+    if let Ok(state) = app.state::<Desktop>().state.lock()
+        && let Some(provider) = state.orbit_agent.as_deref()
+    {
+        return panel_dimensions(
+            ORBIT_POPOVER_WIDTH,
+            orbit_popover_logical_height(&state, provider),
+            scale,
+            work_height,
+        );
+    }
+    panel_size(scale, work_height)
 }
 
 /// Work areas and positions use physical desktop coordinates; the user's size
@@ -644,6 +688,8 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             hidden: preferences.hidden,
             preferences,
             snapshot: Snapshot::default(),
+            orbit_agents: Vec::new(),
+            orbit_agent: None,
             pet_asset: Value::Null,
             floating: false,
             visible: false,
@@ -783,6 +829,10 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         let mut pet_asset = Value::Null;
         let mut ring_revision = None;
         let mut quota_ring = None;
+        let mut orbit_context: Option<(
+            aieyes_core::models::Settings,
+            Vec<aieyes_core::models::QuotaSnapshot>,
+        )> = None;
         loop {
             let preferences = store
                 .settings()
@@ -837,12 +887,25 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                     |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
                 )
                 .ok();
-            if (revision != ring_revision || tick.is_multiple_of(30))
-                && let Ok(ring) = store.menu_quota_ring()
-            {
-                quota_ring = ring;
+            if revision != ring_revision || tick.is_multiple_of(30) || orbit_context.is_none() {
+                if let Ok(ring) = store.menu_quota_ring() {
+                    quota_ring = ring;
+                }
+                if let Ok(context) = store.pet_orbit_context() {
+                    orbit_context = Some(context);
+                }
                 ring_revision = revision;
             }
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let orbit_agents = orbit_context
+                .as_ref()
+                .map(|(settings, quotas)| {
+                    aieyes_core::pets::project_orbit(&snapshot, settings, quotas, now_secs)
+                })
+                .unwrap_or_default();
             let quota_ring = quota_ring.clone();
             let supported = if tick.is_multiple_of(15) {
                 Some(tray_supported())
@@ -864,7 +927,14 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                         .sampling
                         .store(sampling, Ordering::Relaxed);
                     crate::session_sounds::update(&app, &snapshot, &preferences);
-                    update(&app, snapshot, pet_asset, supported, quota_ring);
+                    update(
+                        &app,
+                        snapshot,
+                        pet_asset,
+                        supported,
+                        quota_ring,
+                        orbit_agents,
+                    );
                     refresh_menu(&app);
                 })
                 .is_err()
@@ -1156,7 +1226,17 @@ fn request_native_panel(app: &AppHandle, request: PanelRequest) -> Result<(), St
 fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if crate::linux_bridge::active(app) {
-        if !crate::linux_bridge::send(app, "panel", json!(open)) {
+        let orbit_agent = app
+            .state::<Desktop>()
+            .state
+            .lock()
+            .ok()
+            .and_then(|s| s.orbit_agent.clone());
+        if !crate::linux_bridge::send(
+            app,
+            "panel",
+            json!({"open": open, "orbitAgent": orbit_agent}),
+        ) {
             if open {
                 let _ = activate_main(app);
             }
@@ -1164,6 +1244,9 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
         }
         if let Ok(mut state) = app.state::<Desktop>().state.lock() {
             state.panel = open;
+            if !open {
+                state.orbit_agent = None;
+            }
             state.panel_epoch = state.panel_epoch.wrapping_add(1);
         }
         emit_shell(app);
@@ -1259,7 +1342,7 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
             .ok_or("屏幕不可用")?;
         let area = monitor.work_area();
         let scale = monitor.scale_factor();
-        let (width, height) = panel_size(scale, Some(area.size.height));
+        let (width, height) = active_panel_size(app, scale, Some(area.size.height));
         let width = width.min(area.size.width.saturating_sub((24.0 * scale) as u32).max(1));
         let pos = panel_rect(
             Position { x, y },
@@ -1311,6 +1394,9 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
             state.panel_epoch = state.panel_epoch.wrapping_add(1);
         }
         state.panel = open;
+        if !open {
+            state.orbit_agent = None;
+        }
     }
     #[cfg(target_os = "linux")]
     {
@@ -1464,7 +1550,7 @@ fn repair_panel_geometry(app: &AppHandle) -> Result<(), String> {
     if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
         let area = monitor.work_area();
         let scale = monitor.scale_factor();
-        let (width, height) = panel_size(scale, Some(area.size.height));
+        let (width, height) = active_panel_size(app, scale, Some(area.size.height));
         let width = width.min(
             area.size
                 .width
@@ -1764,6 +1850,7 @@ fn update(
     pet_asset: Value,
     supported: Option<bool>,
     quota_ring: Option<MenuRing>,
+    orbit_agents: Vec<aieyes_core::pets::PetOrbitAgent>,
 ) {
     let desktop = app.state::<Desktop>();
     let mut new_tray = false;
@@ -1787,7 +1874,9 @@ fn update(
     }
     set_quota_ring(app, quota_ring.as_ref());
     let unchanged = desktop.state.lock().is_ok_and(|state| {
-        state.pet_asset == pet_asset && semantic(&state.snapshot) == semantic(&snapshot)
+        state.pet_asset == pet_asset
+            && state.orbit_agents == orbit_agents
+            && semantic(&state.snapshot) == semantic(&snapshot)
     });
     if unchanged && !new_tray && previous_tray == desktop.tray_available.load(Ordering::Relaxed) {
         return;
@@ -1813,6 +1902,7 @@ fn update(
     let previous_size = entry_size(app);
     if let Ok(mut state) = desktop.state.lock() {
         state.snapshot = snapshot;
+        state.orbit_agents = orbit_agents;
         state.pet_asset = pet_asset;
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
@@ -2027,6 +2117,8 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "petAsset": state.pet_asset["pet"], "petError": state.pet_asset["error"],
         "petUniformTiming": state.preferences.pet_uniform_timing,
         "pet": pet,
+        "petOrbit": state.orbit_agents,
+        "orbitAgent": state.orbit_agent,
         "summary": crate::localization::text(&state.snapshot.summary()), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
         "sources": state.snapshot.sources, "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
         "hidden": state.hidden, "panelOpen": state.panel, "panelPinned": state.pin,
@@ -2258,6 +2350,32 @@ fn detail_view(view: &Value) -> Result<Value, String> {
     Ok(Value::Object(filter))
 }
 
+fn open_orbit_agent(app: &AppHandle, provider: &str) -> Result<(), String> {
+    let provider = provider.trim();
+    if provider.is_empty() {
+        return Ok(());
+    }
+    let closing = {
+        let desktop = app.state::<Desktop>();
+        let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+        if state.panel && state.orbit_agent.as_deref() == Some(provider) {
+            state.orbit_agent = None;
+            true
+        } else {
+            state.orbit_agent = Some(provider.to_owned());
+            false
+        }
+    };
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    {
+        request_native_panel(app, PanelRequest::Set(!closing))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        set_panel(app, !closing)
+    }
+}
+
 pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if crate::linux_bridge::action(app, action) {
@@ -2273,22 +2391,61 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
             }
             show_main(app, value)
         }
-        "focus-panel" => set_panel(app, true),
-        "close-panel" => set_panel(app, false),
+        value if value.starts_with("orbit-agent:") => {
+            open_orbit_agent(app, &value["orbit-agent:".len()..])
+        }
+        "open-sessions" => {
+            let _ = set_panel(app, false);
+            show_main(app, "sessions")
+        }
+        "focus-panel" => {
+            if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+                state.orbit_agent = None;
+            }
+            set_panel(app, true)
+        }
+        "close-panel" => {
+            if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+                state.orbit_agent = None;
+            }
+            set_panel(app, false)
+        }
         #[cfg(target_os = "windows")]
-        "tray-panel" => open_tray_panel(app),
+        "tray-panel" => {
+            if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+                state.orbit_agent = None;
+            }
+            open_tray_panel(app)
+        }
         "dismiss-panel" => {
+            let was_orbit = app
+                .state::<Desktop>()
+                .state
+                .lock()
+                .is_ok_and(|s| s.orbit_agent.is_some());
             #[cfg(any(target_os = "windows", target_os = "linux"))]
-            return request_native_panel(app, PanelRequest::Dismiss);
+            {
+                if was_orbit {
+                    if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+                        state.orbit_agent = None;
+                    }
+                    return request_native_panel(app, PanelRequest::Set(false));
+                }
+                return request_native_panel(app, PanelRequest::Dismiss);
+            }
             #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             {
-                let close = app
-                    .state::<Desktop>()
-                    .state
-                    .lock()
-                    .map_err(|_| "显示状态不可用")?
-                    .can_dismiss_panel();
+                let close = was_orbit
+                    || app
+                        .state::<Desktop>()
+                        .state
+                        .lock()
+                        .map_err(|_| "显示状态不可用")?
+                        .can_dismiss_panel();
                 if close {
+                    if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+                        state.orbit_agent = None;
+                    }
                     set_panel(app, false)?;
                 }
                 Ok(())
@@ -2296,10 +2453,27 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
         }
         "refresh-floating" => refresh_floating(app),
         "toggle-panel" => {
+            let switched_from_orbit = {
+                let desktop = app.state::<Desktop>();
+                let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+                let was_orbit = state.panel && state.orbit_agent.is_some();
+                state.orbit_agent = None;
+                was_orbit
+            };
             #[cfg(any(target_os = "windows", target_os = "linux"))]
-            return request_native_panel(app, PanelRequest::Toggle);
+            return request_native_panel(
+                app,
+                if switched_from_orbit {
+                    PanelRequest::Set(true)
+                } else {
+                    PanelRequest::Toggle
+                },
+            );
             #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             {
+                if switched_from_orbit {
+                    return set_panel(app, true);
+                }
                 let open = app
                     .state::<Desktop>()
                     .state
@@ -3449,6 +3623,8 @@ pub(crate) fn helper_status(app: &AppHandle, info: Value) {
         state.preferences.pet_uniform_timing = info["petUniformTiming"] == true;
         state.preferences.show_count = info["showCount"] == true;
         state.pet_asset = json!({"pet":info["petAsset"]});
+        state.orbit_agents = crate::pet_orbit::parse_agents(&info);
+        state.orbit_agent = info["orbitAgent"].as_str().map(str::to_owned);
         if let Some(page) = info["panelPage"].as_str() {
             state.panel_page = page.into();
         }
@@ -3471,7 +3647,18 @@ pub(crate) fn helper_control(app: &AppHandle, name: &str, payload: Value) {
     match name {
         "status" => helper_status(app, payload),
         "panel" => {
-            let _ = set_native_panel_on_ui(app, payload == true);
+            let (open, orbit_agent) = if let Some(value) = payload.as_bool() {
+                (value, None)
+            } else {
+                (
+                    payload["open"] == true,
+                    payload["orbitAgent"].as_str().map(str::to_owned),
+                )
+            };
+            if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+                state.orbit_agent = if open { orbit_agent } else { None };
+            }
+            let _ = set_native_panel_on_ui(app, open);
         }
         "refresh" => {
             let _ = refresh_floating(app);

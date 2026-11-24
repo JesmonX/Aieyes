@@ -93,6 +93,9 @@ fn run() -> anyhow::Result<()> {
     }
     Engine::spawn_auto_scan(&root);
     Engine::spawn_store_maintenance(&root);
+    if args.iter().any(|arg| arg == "--sync-prices") {
+        aieyes_core::pricing::spawn_openrouter_sync(&root);
+    }
     engine.set_host_event_sink(|state| {
         let mut out = io::stdout().lock();
         let _ = serde_json::to_writer(

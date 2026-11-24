@@ -1,5 +1,99 @@
 use crate::models::*;
+use crate::store::Store;
+use anyhow::{Result, ensure};
 use serde_json::Value;
+use std::{fs::File, path::Path, time::Duration};
+
+const OPENROUTER_SYNC_INTERVAL: i64 = 12 * 60 * 60;
+const OPENROUTER_RETRY_INTERVAL: i64 = 15 * 60;
+
+impl Store {
+    fn openrouter_sync_due(&self, at: i64) -> Result<bool> {
+        let (synced, attempted): (Option<i64>, Option<i64>) = self.db.query_row(
+            "SELECT
+                (SELECT json_extract(value, '$[0].fetchedAt') FROM kv WHERE key='openrouter-models'),
+                (SELECT CAST(value AS INTEGER) FROM kv WHERE key='openrouter-sync-attempt')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let elapsed = |stamp: Option<i64>, interval| {
+            stamp.is_none_or(|stamp| at < stamp || at - stamp >= interval)
+        };
+        Ok(elapsed(synced, OPENROUTER_SYNC_INTERVAL)
+            && elapsed(attempted, OPENROUTER_RETRY_INTERVAL))
+    }
+
+    pub(crate) fn sync_openrouter_prices(&self, automatic: bool) -> Result<Option<Value>> {
+        if automatic && !self.openrouter_sync_due(now())? {
+            return Ok(None);
+        }
+        let file = File::options()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.root.join("openrouter-prices.lock"))?;
+        let _lock = match crate::file_lock::FileLock::try_exclusive(file) {
+            Ok(lock) => lock,
+            Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        // Another process may have completed the sync while we checked its timestamp.
+        if automatic {
+            let at = now();
+            if !self.openrouter_sync_due(at)? {
+                return Ok(None);
+            }
+            let tx = self.write_transaction()?;
+            tx.execute(
+                "INSERT OR REPLACE INTO kv(key,value) VALUES('openrouter-sync-attempt',?1)",
+                [at.to_string()],
+            )?;
+            tx.commit()?;
+        }
+        let response = crate::network::client(&self.settings()?.proxy)?
+            .get("https://openrouter.ai/api/v1/models")
+            .send()
+            .map_err(|_| anyhow::anyhow!("价格连接失败"))?;
+        ensure!(
+            response.status().is_success(),
+            "价格同步失败（HTTP {}）",
+            response.status().as_u16()
+        );
+        let prices = parse_openrouter(&response.json::<Value>()?);
+        ensure!(!prices.is_empty(), "价格列表为空");
+        let repriced = self.save_openrouter_prices(&prices)?;
+        Ok(Some(serde_json::json!({
+            "models": prices.len(),
+            "repriced": repriced,
+            "updatedAt": now()
+        })))
+    }
+}
+
+/// Run on the desktop's background core connection, independently of view visibility.
+pub fn spawn_openrouter_sync(root: &Path) {
+    if std::env::var("AIEYES_AUTO_SCAN").is_ok_and(|v| v == "off") {
+        return;
+    }
+    let root = root.to_owned();
+    let _ = std::thread::Builder::new()
+        .name("aieyes-openrouter-prices".into())
+        .spawn(move || {
+            let mut store = None;
+            loop {
+                if store.is_none() {
+                    store = Store::open(&root).ok();
+                }
+                if let Some(store) = &store
+                    && let Ok(_scope) = crate::operations::enter("prices.sync")
+                    && let Err(error) = store.sync_openrouter_prices(true)
+                {
+                    eprintln!("Aieyes: OpenRouter 价格自动同步失败：{error:#}");
+                }
+                std::thread::sleep(Duration::from_secs(60));
+            }
+        });
+}
 
 pub fn parse_openrouter(v: &Value) -> Vec<ModelPrice> {
     v["data"]
@@ -77,6 +171,26 @@ pub fn find_price<'a>(
     if crate::antigravity::unknown_model(model) {
         return None;
     }
+    exact_price(model, prices, mappings).or_else(|| {
+        if mappings.contains_key(model) {
+            return None;
+        }
+        let name = model.rsplit('/').next()?;
+        let (base, effort) = name.rsplit_once('-')?;
+        if !base.starts_with("gemini-") || !matches!(effort, "minimal" | "low" | "medium" | "high")
+        {
+            return None;
+        }
+        let base_model = &model[..model.len() - effort.len() - 1];
+        exact_price(base_model, prices, mappings)
+    })
+}
+
+fn exact_price<'a>(
+    model: &str,
+    prices: &'a [ModelPrice],
+    mappings: &std::collections::BTreeMap<String, String>,
+) -> Option<&'a ModelPrice> {
     if let Some(id) = mappings.get(model) {
         return prices.iter().find(|p| &p.id == id);
     }
@@ -429,6 +543,131 @@ impl crate::Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gemini_effort_uses_the_base_tariff_after_exact_resolution() {
+        let prices = [
+            "google/gemini-4-hydrogen",
+            "google/gemini-4-neon",
+            "google/gemini-4-neon-high",
+            "provider/other-model",
+        ]
+        .map(|id| ModelPrice {
+            id: id.into(),
+            ..Default::default()
+        });
+        let mut mappings = std::collections::BTreeMap::new();
+        for (model, expected) in [
+            ("gemini-4-hydrogen-medium", Some(&prices[0])),
+            ("gemini-4-neon-low", Some(&prices[1])),
+            ("google/gemini-4-neon-minimal", Some(&prices[1])),
+            ("gemini-4-neon-high", Some(&prices[2])),
+            ("gemini-4-neon-preview", None),
+            ("gemini-4-unknown-high", None),
+            ("other-model-high", None),
+        ] {
+            assert_eq!(
+                find_price(model, &prices, &mappings).map(|p| &p.id),
+                expected.map(|p| &p.id),
+                "{model}"
+            );
+        }
+        mappings.insert("gemini-4-neon".into(), prices[3].id.clone());
+        assert_eq!(
+            find_price("gemini-4-neon-medium", &prices, &mappings)
+                .unwrap()
+                .id,
+            prices[3].id
+        );
+        mappings.insert("gemini-4-neon-medium".into(), prices[0].id.clone());
+        assert_eq!(
+            find_price("gemini-4-neon-medium", &prices, &mappings)
+                .unwrap()
+                .id,
+            prices[0].id
+        );
+    }
+
+    #[test]
+    fn openrouter_sync_uses_the_last_catalog_and_retries_failed_attempts() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).unwrap();
+        let synced = 1_800_000_000;
+        assert!(store.openrouter_sync_due(synced).unwrap());
+        let manual = ModelPrice {
+            id: "manual/model".into(),
+            fetched_at: synced,
+            ..Default::default()
+        };
+        store.save_prices(&[manual]).unwrap();
+        assert!(store.openrouter_sync_due(synced).unwrap());
+
+        let catalog = ModelPrice {
+            id: "provider/model".into(),
+            fetched_at: synced,
+            ..Default::default()
+        };
+        store.save_openrouter_prices(&[catalog]).unwrap();
+        let due = synced + OPENROUTER_SYNC_INTERVAL;
+        assert!(!store.openrouter_sync_due(due - 1).unwrap());
+        assert!(store.openrouter_sync_due(due).unwrap());
+        store
+            .db
+            .execute(
+                "INSERT INTO kv(key,value) VALUES('openrouter-sync-attempt',?1)",
+                [due.to_string()],
+            )
+            .unwrap();
+        drop(store);
+        let store = Store::open(root.path()).unwrap();
+        assert!(
+            !store
+                .openrouter_sync_due(due + OPENROUTER_RETRY_INTERVAL - 1)
+                .unwrap()
+        );
+        assert!(
+            store
+                .openrouter_sync_due(due + OPENROUTER_RETRY_INTERVAL)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn openrouter_catalog_write_failure_preserves_the_previous_prices() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).unwrap();
+        let original = ModelPrice {
+            id: "provider/model".into(),
+            input: Some(1e-6),
+            fetched_at: 100,
+            ..Default::default()
+        };
+        store
+            .save_openrouter_prices(std::slice::from_ref(&original))
+            .unwrap();
+        store
+            .db
+            .execute_batch(
+                "CREATE TRIGGER reject_openrouter BEFORE INSERT ON kv
+                WHEN NEW.key='openrouter-models'
+                BEGIN SELECT RAISE(ABORT,'fixture failure'); END;",
+            )
+            .unwrap();
+        let updated = ModelPrice {
+            input: Some(2e-6),
+            fetched_at: 200,
+            ..original
+        };
+        assert!(store.save_openrouter_prices(&[updated]).is_err());
+        let prices = store.prices().unwrap();
+        assert_eq!(prices[0].input, Some(1e-6));
+        assert!(
+            store
+                .openrouter_sync_due(100 + OPENROUTER_SYNC_INTERVAL)
+                .unwrap()
+        );
+    }
+
     #[test]
     fn missing_cache_price_does_not_count_as_free() {
         let p = ModelPrice {

@@ -3,9 +3,30 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aieyes 会话状态</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="floating.css"><link rel="stylesheet" href="panel.css"><link rel="stylesheet" href="controls.css"><link rel="stylesheet" href="windows.css"><script src="contracts.js"></script><script src="chart-palettes.js"></script><script src="i18n-catalog.js"></script><script src="i18n.js"></script><script src="theme.js"></script><link rel="stylesheet" href="workspace.css"><link rel="stylesheet" href="quota-rings.css"></head>
 <body data-view="ball">
   <button id="ball" type="button" aria-label="打开 Aieyes 面板；拖动可移动，右键打开菜单" title="单击打开面板 · 拖动移动 · 右键菜单">
+    <div id="pet-orbit-layer" aria-hidden="true"></div>
     <canvas id="pet-sprite" width="132" height="143" aria-hidden="true"></canvas>
     <span id="phase" aria-live="polite">连接中</span><span id="count" hidden></span>
   </button>
+  <div id="orbit-popover" hidden>
+    <header class="orbit-head">
+      <div class="orbit-ring-wrap" id="orbit-head-icon" aria-hidden="true"></div>
+      <div class="orbit-title-wrap">
+        <strong id="orbit-title"></strong>
+        <small id="orbit-subtitle"></small>
+      </div>
+      <div class="orbit-quota" id="orbit-quota"></div>
+    </header>
+    <div class="orbit-body">
+      <div id="orbit-session-list"></div>
+    </div>
+    <footer class="orbit-foot">
+      <span id="orbit-count" class="orbit-count"></span>
+      <div class="orbit-actions">
+        <button type="button" id="orbit-open-sessions">全部会话</button>
+        <button type="button" id="orbit-close">关闭</button>
+      </div>
+    </footer>
+  </div>
   <div id="panel">
     <header class="panel-head">
       <span class="panel-mark" aria-hidden="true"><img class="brand-art" src="brand.png" alt="Aieyes"></span>

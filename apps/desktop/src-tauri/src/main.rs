@@ -24,6 +24,8 @@ mod outbound;
 mod passive_window;
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod pet_frames;
+mod pet_icons;
+mod pet_orbit;
 mod phase_colors;
 mod session_focus;
 mod session_sounds;
@@ -499,6 +501,7 @@ fn main() {
             // Only after the engines above have created the schema: on a fresh data directory a
             // concurrent first open fails with "database is locked" and aborts startup.
             Engine::spawn_store_maintenance(&root);
+            aieyes_core::pricing::spawn_openrouter_sync(&root);
             updates::setup(app.handle(), &root);
             app.manage(session_sounds::Sounds::default());
             notifications::start(app.handle(), &root);

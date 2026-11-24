@@ -808,27 +808,10 @@ impl Engine {
             "quotas.refresh" => self.refresh_scheduled_quotas(params),
             "prices.list" => Ok(serde_json::to_value(self.store.prices()?)?),
             "prices.reference" => self.reference_prices(params),
-            "prices.sync" => {
-                let settings = self.store.settings()?;
-                let response = network::client(&settings.proxy)?
-                    .get("https://openrouter.ai/api/v1/models")
-                    .send()
-                    .map_err(|_| anyhow::anyhow!("价格连接失败"))?;
-                anyhow::ensure!(
-                    response.status().is_success(),
-                    "价格同步失败（HTTP {}）",
-                    response.status().as_u16()
-                );
-                let prices = pricing::parse_openrouter(&response.json::<Value>()?);
-                anyhow::ensure!(!prices.is_empty(), "价格列表为空");
-                self.store.save_prices(&prices)?;
-                self.store.db.execute(
-                    "INSERT OR REPLACE INTO kv(key,value) VALUES('openrouter-models',?1)",
-                    [serde_json::to_string(&prices)?],
-                )?;
-                let repriced = self.store.reprice(&settings, true)?;
-                Ok(json!({"models":prices.len(),"repriced":repriced,"updatedAt":now()}))
-            }
+            "prices.sync" => self
+                .store
+                .sync_openrouter_prices(false)?
+                .context("此任务正在操作，请稍候重试"),
             "prices.save" => {
                 let mut prices: Vec<ModelPrice> = serde_json::from_value(params["prices"].clone())?;
                 for p in &mut prices {

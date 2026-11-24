@@ -128,6 +128,10 @@ struct Surface {
     pet_sprite: RefCell<pet::Sprite>,
     pet_start: Cell<std::time::Instant>,
     pet_state: RefCell<aieyes_core::pets::PetState>,
+    orbit_agents: RefCell<Vec<aieyes_core::pets::PetOrbitAgent>>,
+    orbit_hover: Cell<Option<usize>>,
+    orbit_start: Cell<std::time::Instant>,
+    applied_pad: Cell<(f64, f64)>,
     timer_deadline: Cell<Option<std::time::Instant>>,
     painted_frame: Cell<Option<u32>>,
     renderer: RefCell<pet::Renderer>,
@@ -192,6 +196,10 @@ impl NativePet {
                     pet_sprite: RefCell::new(pet::Sprite::empty()),
                     pet_start: Cell::new(std::time::Instant::now()),
                     pet_state: RefCell::new(aieyes_core::pets::project(&Default::default())),
+                    orbit_agents: RefCell::new(Vec::new()),
+                    orbit_hover: Cell::new(None),
+                    orbit_start: Cell::new(std::time::Instant::now()),
+                    applied_pad: Cell::new((0.0, 0.0)),
                     timer_deadline: Cell::new(None),
                     painted_frame: Cell::new(None),
                     renderer: RefCell::new(pet::Renderer::default()),
@@ -457,11 +465,21 @@ unsafe fn animate(hwnd: HWND) {
     }
     let surface = &*pointer;
     let now = std::time::Instant::now();
-    let delay = aieyes_core::pets::next_frame_delay(
+    let visible = IsWindowVisible(hwnd).as_bool();
+    let reduced = pet::reduced_motion();
+    let frame_delay = aieyes_core::pets::next_frame_delay(
         &surface.pet_state.borrow(),
         surface.pet_start.get().elapsed().as_millis() as u64,
-        !IsWindowVisible(hwnd).as_bool() || pet::reduced_motion(),
+        !visible || reduced,
     );
+    let has_orbit = !surface.orbit_agents.borrow().is_empty();
+    let delay = if visible && !reduced && has_orbit {
+        Some(frame_delay.map_or(crate::pet_orbit::PULSE_FRAME_MS, |d| {
+            d.min(crate::pet_orbit::PULSE_FRAME_MS)
+        }))
+    } else {
+        frame_delay
+    };
     if let Some(delay) = delay {
         let delay = delay.clamp(1, u32::MAX as u64) as u32;
         let due = now + std::time::Duration::from_millis(u64::from(delay));
@@ -479,12 +497,18 @@ unsafe fn animate(hwnd: HWND) {
         let _ = KillTimer(Some(hwnd), PET_TIMER);
     }
 }
-unsafe fn pet_height(hwnd: HWND) -> f64 {
+unsafe fn pet_canvas_size(hwnd: HWND) -> (f64, f64, (f64, f64)) {
     let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Surface;
     if pointer.is_null() {
-        return HEIGHT;
+        return (WIDTH, HEIGHT, (0.0, 0.0));
     }
-    aieyes_core::pets::height(&(&*pointer).pet_state.borrow())
+    let surface = &*pointer;
+    let has_orbit = !surface.orbit_agents.borrow().is_empty();
+    let (w, h) = aieyes_core::pets::canvas_size(&surface.pet_state.borrow(), has_orbit);
+    (w, h, aieyes_core::pets::orbit_padding(has_orbit))
+}
+unsafe fn pet_height(hwnd: HWND) -> f64 {
+    pet_canvas_size(hwnd).1
 }
 unsafe fn pet_scale(hwnd: HWND) -> f64 {
     let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Surface;
@@ -576,14 +600,34 @@ unsafe fn reshape(hwnd: HWND) {
     let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (style | WS_EX_LAYERED.0) as isize);
     let scale = GetDpiForWindow(hwnd).max(96) as f64 / 96.0 * pet_scale(hwnd);
+    let (logical_w, logical_h, next_pad) = pet_canvas_size(hwnd);
+    let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Surface;
+    let mut move_origin = None;
+    if !pointer.is_null() {
+        let surface = &*pointer;
+        let old_pad = surface.applied_pad.replace(next_pad);
+        if old_pad != next_pad {
+            let mut rect = RECT::default();
+            if GetWindowRect(hwnd, &mut rect).is_ok() {
+                let dx = ((next_pad.0 - old_pad.0) * scale).round() as i32;
+                let dy = ((next_pad.1 - old_pad.1) * scale).round() as i32;
+                move_origin = Some((rect.left - dx, rect.top - dy));
+            }
+        }
+    }
+    let (x, y, flags) = if let Some((nx, ny)) = move_origin {
+        (nx, ny, SWP_NOACTIVATE | SWP_NOZORDER)
+    } else {
+        (0, 0, SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER)
+    };
     let _ = SetWindowPos(
         hwnd,
         None,
-        0,
-        0,
-        (WIDTH * scale).round() as i32,
-        (pet_height(hwnd) * scale).round() as i32,
-        SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+        x,
+        y,
+        (logical_w * scale).round() as i32,
+        (logical_h * scale).round() as i32,
+        flags,
     );
     SetWindowRgn(hwnd, None, true);
     animate(hwnd);
@@ -715,10 +759,23 @@ unsafe extern "system" fn window_proc(
                                     .unwrap_or_else(pet::Sprite::empty),
                             );
                         }
-                        let previous_height = pet_height(hwnd);
+                        let (previous_width, previous_height, _) = pet_canvas_size(hwnd);
                         let previous_scale = pet_scale(hwnd);
                         let state = serde_json::from_value(info["pet"].clone())
                             .unwrap_or_else(|_| aieyes_core::pets::project(&Default::default()));
+                        let next_orbit = crate::pet_orbit::parse_agents(&info);
+                        let had_orbit = !surface.orbit_agents.borrow().is_empty();
+                        if !had_orbit && !next_orbit.is_empty() {
+                            surface.orbit_start.set(std::time::Instant::now());
+                        }
+                        if surface
+                            .orbit_hover
+                            .get()
+                            .is_some_and(|i| i >= next_orbit.len())
+                        {
+                            surface.orbit_hover.set(None);
+                        }
+                        surface.orbit_agents.replace(next_orbit);
                         let changed = asset_changed
                             || !aieyes_core::pets::same_animation(
                                 &surface.pet_state.borrow(),
@@ -726,7 +783,10 @@ unsafe extern "system" fn window_proc(
                             );
                         surface.pet_state.replace(state);
                         surface.info.replace(info);
-                        if pet_height(hwnd) != previous_height || pet_scale(hwnd) != previous_scale
+                        let (next_width, next_height, _) = pet_canvas_size(hwnd);
+                        if next_width != previous_width
+                            || next_height != previous_height
+                            || pet_scale(hwnd) != previous_scale
                         {
                             reshape(hwnd);
                             let mut rect = RECT::default();
@@ -811,12 +871,14 @@ unsafe extern "system" fn window_proc(
             let _ = KillTimer(Some(hwnd), PET_TIMER);
             surface.timer_deadline.set(None);
             if IsWindowVisible(hwnd).as_bool() {
+                let reduced = pet::reduced_motion();
                 let frame = aieyes_core::pets::frame(
                     &surface.pet_state.borrow(),
                     surface.pet_start.get().elapsed().as_millis() as u64,
-                    pet::reduced_motion(),
+                    reduced,
                 );
-                if surface.painted_frame.get() != Some(frame) {
+                let has_orbit = !surface.orbit_agents.borrow().is_empty();
+                if surface.painted_frame.get() != Some(frame) || (has_orbit && !reduced) {
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
             }
@@ -849,6 +911,16 @@ unsafe extern "system" fn window_proc(
         }
         WM_MOUSELEAVE => {
             surface.hover.set(false);
+            if surface.orbit_hover.replace(None).is_some() {
+                let title = format!(
+                    "Aieyes · {} · 单击打开面板，右键菜单",
+                    crate::localization::text(
+                        surface.info.borrow()["summary"].as_str().unwrap_or("")
+                    )
+                );
+                let title = crate::localization::text(&title);
+                tooltip(hwnd, surface, &title, false);
+            }
             let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(0)
         }
@@ -861,6 +933,33 @@ unsafe extern "system" fn window_proc(
                     dwHoverTime: 0,
                 };
                 let _ = TrackMouseEvent(&mut tracking);
+                let _ = InvalidateRect(Some(hwnd), None, false);
+            }
+            let local_x = (lparam.0 & 0xffff) as i16 as f64;
+            let local_y = ((lparam.0 >> 16) & 0xffff) as i16 as f64;
+            let scale = GetDpiForWindow(hwnd).max(96) as f64 / 96.0 * pet_scale(hwnd);
+            let hovered = {
+                let agents = surface.orbit_agents.borrow();
+                crate::pet_orbit::hit_test(local_x, local_y, scale, &agents)
+            };
+            if surface.orbit_hover.replace(hovered) != hovered {
+                let tip = if let Some(index) = hovered {
+                    surface
+                        .orbit_agents
+                        .borrow()
+                        .get(index)
+                        .map(crate::pet_orbit::node_tooltip)
+                        .unwrap_or_default()
+                } else {
+                    let title = format!(
+                        "Aieyes · {} · 单击打开面板，右键菜单",
+                        crate::localization::text(
+                            surface.info.borrow()["summary"].as_str().unwrap_or("")
+                        )
+                    );
+                    crate::localization::text(&title)
+                };
+                tooltip(hwnd, surface, &tip, false);
                 let _ = InvalidateRect(Some(hwnd), None, false);
             }
             if let Some((start, rect)) = surface.press.get() {
@@ -897,7 +996,19 @@ unsafe extern "system" fn window_proc(
                     place(hwnd, Some((rect.left, rect.top)), true);
                     save_position(hwnd, surface);
                 } else {
-                    dispatch(surface, "toggle-panel");
+                    let local_x = (lparam.0 & 0xffff) as i16 as f64;
+                    let local_y = ((lparam.0 >> 16) & 0xffff) as i16 as f64;
+                    let scale = GetDpiForWindow(hwnd).max(96) as f64 / 96.0 * pet_scale(hwnd);
+                    let hit_provider = {
+                        let agents = surface.orbit_agents.borrow();
+                        crate::pet_orbit::hit_test(local_x, local_y, scale, &agents)
+                            .and_then(|idx| agents.get(idx).map(|a| a.provider.clone()))
+                    };
+                    if let Some(provider) = hit_provider {
+                        dispatch(surface, &format!("orbit-agent:{provider}"));
+                    } else {
+                        dispatch(surface, "toggle-panel");
+                    }
                 }
             }
             LRESULT(0)
@@ -997,6 +1108,9 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
         frame,
         surface.font.font,
         &info,
+        &surface.orbit_agents.borrow(),
+        surface.orbit_hover.get(),
+        surface.orbit_start.get().elapsed().as_millis() as u64,
         &mut surface.renderer.borrow_mut(),
     );
     surface.painted_frame.set(Some(frame));

@@ -845,14 +845,29 @@ impl Store {
     }
     pub fn save_prices(&self, prices: &[ModelPrice]) -> Result<()> {
         let tx = self.write_transaction()?;
-        for p in prices {
-            tx.execute(
-                "INSERT INTO price_history(model_id,fetched_at,payload) VALUES(?1,?2,?3)",
-                params![p.id, p.fetched_at, serde_json::to_string(p)?],
-            )?;
-        }
+        self.insert_prices(prices)?;
         tx.commit()?;
         Ok(())
+    }
+    fn insert_prices(&self, prices: &[ModelPrice]) -> Result<()> {
+        let mut insert = self.db.prepare_cached(
+            "INSERT INTO price_history(model_id,fetched_at,payload) VALUES(?1,?2,?3)",
+        )?;
+        for p in prices {
+            insert.execute(params![p.id, p.fetched_at, serde_json::to_string(p)?])?;
+        }
+        Ok(())
+    }
+    pub(crate) fn save_openrouter_prices(&self, prices: &[ModelPrice]) -> Result<u64> {
+        let tx = self.write_transaction()?;
+        self.insert_prices(prices)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO kv(key,value) VALUES('openrouter-models',?1)",
+            [serde_json::to_string(prices)?],
+        )?;
+        let repriced = self.reprice_in_transaction(&self.settings()?, true, None)?;
+        tx.commit()?;
+        Ok(repriced)
     }
     pub fn put_event(
         &self,
@@ -1630,6 +1645,17 @@ impl Store {
             &dashboard.quotas,
             now(),
         ))
+    }
+    /// Settings and ordered quota snapshots for pet orbit rings (independent of menu ring setting).
+    pub fn pet_orbit_context(&self) -> Result<(Settings, Vec<QuotaSnapshot>)> {
+        let settings = self.settings()?;
+        let mut dashboard = Dashboard::default();
+        let filter = Filter {
+            estimate_history: Some("display".into()),
+            ..Default::default()
+        };
+        self.fill_dashboard_status(&mut dashboard, &filter, &settings, false)?;
+        Ok((settings, dashboard.quotas))
     }
     fn fill_dashboard_status(
         &self,

@@ -6,7 +6,122 @@
   let labels = { idle: AieyesI18n.t("空闲"), working: AieyesI18n.t("进行中"), thinking: AieyesI18n.t("思考中"), tool: AieyesI18n.t("执行工具"), complete: AieyesI18n.t("已完成"), interrupted: AieyesI18n.t("已中断"), unknown: AieyesI18n.t("待确认"), needsInput: AieyesI18n.t("等待输入"), failed: AieyesI18n.t("执行失败") };window.addEventListener("aieyes:language", () => {labels = { idle: AieyesI18n.t("空闲"), working: AieyesI18n.t("进行中"), thinking: AieyesI18n.t("思考中"), tool: AieyesI18n.t("执行工具"), complete: AieyesI18n.t("已完成"), interrupted: AieyesI18n.t("已中断"), unknown: AieyesI18n.t("待确认"), needsInput: AieyesI18n.t("等待输入"), failed: AieyesI18n.t("执行失败") };});
   const SUPPRESS = 250;
   let start = null,dragged = false,info = null;
-  let panelOpen = false,pinned = false,suppress = 0;
+  let panelOpen = false,pinned = false,suppress = 0,orbitAgent = null,lastOrbitEntry = null,orbitTimer = 0;
+
+  function isDarkTheme() {
+    const t = document.documentElement.dataset.theme;
+    if (t === 'dark') return true;
+    if (t === 'light') return false;
+    return !!window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+  }
+  function orbitProviderIcon(provider) {
+    const dark = isDarkTheme();
+    const icons = window.AieyesContract?.providerIcons || {};
+    const darkIcons = window.AieyesContract?.providerDarkIcons || {};
+    const mono = window.AieyesContract?.monochromeIcons || [];
+    const key = (dark && darkIcons[provider]) || icons[provider];
+    return key ? { src: `provider-${key}.png`, mono: mono.includes(provider) } : null;
+  }
+  function orbitProviderName(provider) {
+    if (provider === '__overflow__') return AieyesI18n.t("其他运行中 Agent");
+    return window.AieyesContract?.providers?.[provider] || provider;
+  }
+  function orbitRingSVG(ring, provider) {
+    const r = 13.5, cx = 16, cy = 16, sw = 2.4;
+    const polar = (deg) => { const rad = deg * Math.PI / 180; return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)]; };
+    const arcPath = (startDeg, sweepDeg) => {
+      if (Math.abs(sweepDeg) >= 359.5) return `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx - 0.01} ${cy - r}`;
+      const [sx, sy] = polar(startDeg), [ex, ey] = polar(startDeg + sweepDeg);
+      const large = Math.abs(sweepDeg) > 180 ? 1 : 0, sweepFlag = sweepDeg >= 0 ? 1 : 0;
+      return `M ${sx.toFixed(2)} ${sy.toFixed(2)} A ${r} ${r} 0 ${large} ${sweepFlag} ${ex.toFixed(2)} ${ey.toFixed(2)}`;
+    };
+    const tone = (rem) => rem < 10 ? 'var(--danger)' : rem <= 30 ? 'var(--warn)' : `var(--category-${provider}, var(--accent))`;
+    const track = 'color-mix(in srgb, var(--ink) 18%, transparent)';
+    if (!ring || ring.kind === 'empty') {
+      return `<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="${r}" fill="none" stroke="${track}" stroke-width="1.6" stroke-dasharray="1.5 3"/></svg>`;
+    }
+    if (ring.kind === 'coin') {
+      const c = ring.low ? 'var(--danger)' : `var(--category-${provider}, var(--accent))`;
+      return `<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="${r}" fill="none" stroke="${c}" stroke-opacity="0.65" stroke-width="1.8"/></svg>`;
+    }
+    if (ring.kind === 'single') {
+      const rem = Math.max(0, Math.min(100, Number(ring.top?.remaining ?? 0)));
+      const fg = rem > 0 ? `<path d="${arcPath(270, Math.max(1, 360 * rem / 100))}" fill="none" stroke="${tone(rem)}" stroke-width="${sw}" stroke-linecap="round"/>` : '';
+      return `<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="${r}" fill="none" stroke="${track}" stroke-width="${sw}"/>${fg}</svg>`;
+    }
+    const half = ((sw / 2 + 0.8) / r) * 180 / Math.PI, span = 180 - 2 * half;
+    const topRem = Math.max(0, Math.min(100, Number(ring.top?.remaining ?? 0)));
+    const botRem = Math.max(0, Math.min(100, Number(ring.bottom?.remaining ?? 0)));
+    const topFg = topRem > 0 ? `<path d="${arcPath(180 + half, Math.max(1, span * topRem / 100))}" fill="none" stroke="${tone(topRem)}" stroke-width="${sw}" stroke-linecap="round"/>` : '';
+    const botFg = botRem > 0 ? `<path d="${arcPath(180 - half, -Math.max(1, span * botRem / 100))}" fill="none" stroke="${tone(botRem)}" stroke-width="${sw}" stroke-linecap="round"/>` : '';
+    return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="${arcPath(180 + half, span)}" fill="none" stroke="${track}" stroke-width="${sw}" stroke-linecap="round"/><path d="${arcPath(180 - half, -span)}" fill="none" stroke="${track}" stroke-width="${sw}" stroke-linecap="round"/>${topFg}${botFg}</svg>`;
+  }
+  function stopOrbitTick() { if (orbitTimer) { clearInterval(orbitTimer); orbitTimer = 0; } }
+  function renderOrbitPopover(next) {
+    const pop = document.querySelector('#orbit-popover');
+    if (!pop) return;
+    if (!panelOpen || !orbitAgent) { pop.hidden = true; stopOrbitTick(); return; }
+    pop.hidden = false;
+    const esc = (v) => window.AieyesUI ? window.AieyesUI.escapeHTML(v) : String(v ?? '');
+    const entries = Array.isArray(next?.petOrbit) ? next.petOrbit : [];
+    let entry = entries.find((item) => item.provider === orbitAgent);
+    if (entry) lastOrbitEntry = entry;
+    else if (lastOrbitEntry?.provider === orbitAgent) entry = lastOrbitEntry;
+    else entry = { provider: orbitAgent, displayProvider: orbitAgent, activeCount: 0, overflowProviders: [], quota: null };
+
+    const isOverflow = entry.provider === '__overflow__';
+    const headIcon = document.querySelector('#orbit-head-icon');
+    const iconInfo = !isOverflow ? orbitProviderIcon(entry.displayProvider) : null;
+    headIcon.innerHTML = isOverflow
+      ? `<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13.5" fill="none" stroke="var(--accent)" stroke-opacity="0.55" stroke-width="2"/></svg><span style="font-size:11px;font-weight:600;position:relative;z-index:1">+${(entry.overflowProviders || []).length}</span>`
+      : orbitRingSVG(entry.quota?.ring, entry.displayProvider) + (iconInfo ? `<img src="${esc(iconInfo.src)}" alt="" class="${iconInfo.mono ? 'mono' : ''}">` : '');
+
+    document.querySelector('#orbit-title').textContent = orbitProviderName(entry.displayProvider);
+    document.querySelector('#orbit-subtitle').textContent = entry.quota?.accountName || (isOverflow ? AieyesI18n.t("还有 {0} 个运行中 Agent", (entry.overflowProviders || []).length) : AieyesI18n.t("进行中会话"));
+    document.querySelector('#orbit-quota').textContent = entry.quota?.summary || (isOverflow ? '' : AieyesI18n.t("暂无额度"));
+
+    const sessionsApi = window.AieyesSessions;
+    const rawSessions = Array.isArray(next?.sessions) ? next.sessions : [];
+    const active = rawSessions.filter((s) => {
+      if (!sessionsApi?.active?.(s.phase)) return false;
+      if (isOverflow) {
+        const alias = window.AieyesContract?.agentAliases?.[s.provider] || s.provider;
+        return (entry.overflowProviders || []).includes(alias);
+      }
+      return window.AieyesUI ? window.AieyesUI.sameAgent(s.provider, entry.provider) : s.provider === entry.provider;
+    }).sort((a, b) => {
+      const ra = a.phase === 'needsInput' ? 0 : 1, rb = b.phase === 'needsInput' ? 0 : 1;
+      if (ra !== rb) return ra - rb;
+      const sa = Number(a.turnStartedAt || 0), sb = Number(b.turnStartedAt || 0);
+      return sa !== sb ? sb - sa : String(a.id).localeCompare(String(b.id));
+    });
+
+    const list = document.querySelector('#orbit-session-list');
+    if (!active.length) {
+      list.innerHTML = `<div class="orbit-empty"><span>${esc(AieyesI18n.t("当前会话已结束"))}</span><small>${esc(AieyesI18n.t("可打开会话页查看最近结束记录"))}</small></div>`;
+    } else {
+      list.innerHTML = active.map((s) => {
+        const key = sessionsApi.phaseKey(s.phase), label = sessionsApi.phaseLabel(s.phase);
+        const symbol = typeof uiIcon === 'function' ? uiIcon(key) : '';
+        const focus = sessionsApi.canFocus(s) ? ` role="button" tabindex="0" data-focus-session="${esc(s.id)}" title="${esc(sessionsApi.focusHelp(s))}"` : '';
+        const title = (isOverflow ? `${orbitProviderName(s.provider)} · ` : '') + (s.machine || AieyesI18n.t("本机"));
+        return `<div class="live-row" data-phase="${esc(s.phase)}"${focus}><span class="phase-mark" data-phase="${esc(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${esc(title)}</strong><small class="session-detail" data-orbit-tick="${esc(s.id)}">${esc(sessionsApi.detailText(s))}</small>${sessionsApi.usageHTML(s)}</div><span>${esc(label)}</span>${sessionsApi.canFocus(s) ? `<span class="session-jump-mark" aria-hidden="true">${typeof uiIcon === 'function' ? uiIcon('expand') : ''}</span>` : ''}</div>`;
+      }).join('');
+    }
+    document.querySelector('#orbit-count').textContent = active.length ? AieyesI18n.t("{0} 个进行中", active.length) : AieyesI18n.t("空闲");
+    document.querySelector('#orbit-open-sessions').textContent = AieyesI18n.t("全部会话");
+    document.querySelector('#orbit-close').textContent = AieyesI18n.t("关闭");
+    stopOrbitTick();
+    if (active.length && !document.hidden) {
+      orbitTimer = setInterval(() => {
+        if (!panelOpen || !orbitAgent || document.hidden) { stopOrbitTick(); return; }
+        for (const el of document.querySelectorAll('#orbit-session-list [data-orbit-tick]')) {
+          const s = info?.sessions?.find((row) => row.id === el.dataset.orbitTick);
+          if (s && window.AieyesSessions) el.textContent = window.AieyesSessions.detailText(s);
+        }
+      }, 1000);
+    }
+  }
 
   function failure(error) {
     document.querySelector('#phase').textContent = AieyesI18n.t("连接异常");
@@ -26,11 +141,15 @@
   }
   function applyPanel(next) {
     const was = panelOpen;
+    const wasOrbit = orbitAgent;
     const focused = document.activeElement;
     panelOpen = !!next.panelOpen;
     pinned = !!next.panelPinned;
-    document.body.dataset.view = panelOpen ? 'panel' : 'ball';
-    if (info) window.AieyesPet?.update({ ...info, panelOpen });
+    if (next.orbitAgent !== undefined) orbitAgent = next.orbitAgent || null;
+    if (!panelOpen) orbitAgent = null;
+    document.body.dataset.view = panelOpen ? (orbitAgent ? 'orbit' : 'panel') : 'ball';
+    if (info) window.AieyesPet?.update({ ...info, panelOpen, orbitAgent });
+    renderOrbitPopover(info || next);
     const pin = document.querySelector('#panel-pin');
     if (pin) {
       pin.dataset.pinned = String(pinned);
@@ -40,6 +159,7 @@
       pin.setAttribute('aria-label', pin.title);
     }
     if (was && !panelOpen) {
+      stopOrbitTick();
       window.AieyesSingleSelect?.closeActive(false);
       window.AieyesMotion?.panel(false);
       closeMenu();
@@ -48,16 +168,18 @@
       if (typeof closeTokenSummary === 'function') closeTokenSummary();
       if (!info?.nativePet && panel.contains(focused)) ball.focus({ preventScroll: true });
     }
-    if (!was && panelOpen) {
-      window.AieyesNetwork?.refresh();
-      if (typeof render === 'function') render();
+    if ((!was && panelOpen) || (panelOpen && wasOrbit && !orbitAgent)) {
+      if (!orbitAgent) {
+        window.AieyesNetwork?.refresh();
+        if (typeof render === 'function') render();
+      }
       window.AieyesMotion?.panel(true);
-      requestAnimationFrame(() => {if (typeof drawTrend === 'function') drawTrend();invoke('desktop_panel_ready', { generation: window.AIEYES_SHELL_GENERATION ?? 0 }).catch(failure);});
+      requestAnimationFrame(() => {if (!orbitAgent && typeof drawTrend === 'function') drawTrend();invoke('desktop_panel_ready', { generation: window.AIEYES_SHELL_GENERATION ?? 0 }).catch(failure);});
       // The Linux panel window takes keyboard focus; park it on the panel itself so opening shows no
       // focus ring or tooltip, and Tab starts at the first control.
-      if (info?.platform === 'linux') requestAnimationFrame(() => {panel.tabIndex = -1;panel.focus({ preventScroll: true });});
+      if (info?.platform === 'linux') requestAnimationFrame(() => {const target = orbitAgent ? document.querySelector('#orbit-popover') : panel;if (target) {target.tabIndex = -1;target.focus({ preventScroll: true });}});
       // Mouse-opened floating surfaces preserve the other application's keyboard focus.
-      const refresh = window.AieyesApp?.refreshPanel;
+      const refresh = !orbitAgent && window.AieyesApp?.refreshPanel;
       if (refresh) refresh().catch((error) => failure(error));
     }
   }
@@ -131,6 +253,8 @@
   document.querySelector('#panel-accounts')?.addEventListener('click', () => {const more = document.querySelector('#panel-more');if (more) more.open = false;window.AieyesApp?.openPanelAccounts();});
   document.querySelector('#panel-quit').addEventListener('click', () => action('quit'));
   document.querySelector('#panel-close')?.addEventListener('click', () => setPanel(false));
+  document.querySelector('#orbit-open-sessions')?.addEventListener('click', () => action('open-sessions'));
+  document.querySelector('#orbit-close')?.addEventListener('click', () => action('close-panel'));
   document.querySelector('#panel-more')?.addEventListener('toggle', (event) => {
     if (event.target.open) closeMenu();
   });
@@ -156,7 +280,8 @@
     ball.setAttribute('aria-label', ball.title);
     window.AieyesPet?.update(next);
     if (typeof renderLiveSessions === 'function') renderLiveSessions(next);
-    if (applyOpen && (next.panelOpen !== undefined || next.panelPinned !== undefined)) applyPanel(next);
+    if (applyOpen && (next.panelOpen !== undefined || next.panelPinned !== undefined || next.orbitAgent !== undefined)) applyPanel(next);
+    else if (panelOpen && orbitAgent) renderOrbitPopover(next);
   }
   async function boot() {
     try {

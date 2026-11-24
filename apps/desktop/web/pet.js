@@ -78,7 +78,32 @@
       const label = info.petError ? AieyesI18n.t("请导入桌宠") : info.recovery === 'failed' ? AieyesI18n.t("恢复失败") : info.recovery === 'refreshing' ? AieyesI18n.t("恢复中") : AieyesI18n.message(state.label);
       document.body.style.setProperty('--phase-color', `var(--phase-${info.recovery === 'failed' ? 'failed' : phase})`);
       document.querySelector('#phase').textContent = label;
-      ball.style.height = (168 + 18 * (label.split('\n').length - 1)) * scale + 'px';
+      const orbitAgents = Array.isArray(info.petOrbit) ? info.petOrbit : [];
+      const padX = orbitAgents.length ? 44 : 0, padTop = orbitAgents.length ? 44 : 0;
+      ball.style.width = (144 + padX * 2) * scale + 'px';
+      ball.style.height = (padTop + 168 + 18 * (label.split('\n').length - 1)) * scale + 'px';
+      if (sprite) sprite.style.marginTop = padTop * scale + 'px';
+      const orbitLayer = document.querySelector('#pet-orbit-layer');
+      if (orbitLayer) {
+        const anglesMap = { 1: [-90], 2: [-132, -48], 3: [-155, -90, -25], 4: [-168, -116, -64, -12], 5: [-176, -133, -90, -47, -4], 6: [-180, -144, -108, -72, -36, 0], 7: [-184, -153, -121, -90, -59, -27, 4] };
+        const angles = anglesMap[Math.min(7, orbitAgents.length)] || [];
+        const icons = window.AieyesContract?.providerIcons || {};
+        orbitLayer.innerHTML = orbitAgents.slice(0, 7).map((agent, i) => {
+          const rad = angles[i] * Math.PI / 180;
+          const cx = (116 + 84 * Math.cos(rad)) * scale, cy = (122 + 76 * Math.sin(rad)) * scale;
+          const key = icons[agent.displayProvider];
+          const inner = agent.provider === '__overflow__' ? `<span>+${(agent.overflowProviders || []).length}</span>` : (key ? `<img src="provider-${key}.png" alt="">` : '');
+          const badge = agent.provider !== '__overflow__' && agent.activeCount > 1 ? `<span class="pet-orbit-badge">${agent.activeCount > 9 ? '9+' : agent.activeCount}</span>` : '';
+          return `<span class="pet-orbit-node" data-orbit-provider="${agent.provider}" data-phase="${agent.phase}" style="left:${cx.toFixed(1)}px;top:${cy.toFixed(1)}px;--orbit-delay:${(i * -0.35).toFixed(2)}s">${inner}${badge}</span>`;
+        }).join('');
+        for (const node of orbitLayer.querySelectorAll('.pet-orbit-node')) {
+          node.addEventListener('click', (event) => {
+            event.stopPropagation();
+            event.preventDefault();
+            window.__TAURI__?.core?.invoke('desktop_action', { action: 'orbit-agent:' + node.dataset.orbitProvider }).catch(() => {});
+          });
+        }
+      }
       ball.title = AieyesI18n.t("Aieyes · {0}\n单击打开面板 · 拖动移动 · 右键菜单", label);
       ball.setAttribute('aria-label', ball.title);
     }

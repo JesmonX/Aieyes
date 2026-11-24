@@ -184,6 +184,10 @@ globalThis.AieyesMessages = {
   "读取额度": "Read quotas",
   "智能引用价格": "Match reference prices",
   "价格已更新": "Prices updated",
+  "价格连接失败": "Could not connect to the pricing service",
+  "价格同步失败（HTTP {0}）": "Price sync failed (HTTP {0})",
+  "价格列表为空": "The price list is empty",
+  "Aieyes: OpenRouter 价格自动同步失败：{0}": "Aieyes: Automatic OpenRouter price sync failed: {0}",
   "当前表单有未保存输入": "This form has unsaved input",
   "服务器前台": "Foreground",
   "服务器后台": "Background",
@@ -4396,5 +4400,14 @@ globalThis.AieyesMessages = {
   "未选择模型": "No models selected",
   "可见模型": "Visible models",
   "可以同步最新日志。": "Sync the latest logs.",
-  "尝试清除筛选。": "Try clearing the filters."
+  "尝试清除筛选。": "Try clearing the filters.",
+  "其他运行中 Agent": "Other running agents",
+  "还有 {0} 个运行中 Agent": "{0} more running agents",
+  "{0} 个进行中": "{0} active",
+  "单击查看会话": "Click to view sessions",
+  "进行中会话": "Active sessions",
+  "当前会话已结束": "Current sessions have ended",
+  "可打开会话页查看最近结束记录": "Open Sessions to view recently ended runs",
+  "全部会话": "All sessions",
+  "暂无额度": "No quota data"
 };

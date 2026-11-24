@@ -35,7 +35,7 @@ import Darwin
         })
     }
     @MainActor static func main() throws {
-        precondition(NativeContextMenu.entries(pet: true, visible: true).map { $0.1 } == ["open-panel", "settings", "pet-settings", "separator", "check-updates", "hide"])
+        precondition(NativeContextMenu.entries(pet: true, visible: true).map { $0.1 } == ["open-panel", "settings", "pet-settings", "separator", "check-updates", "hide", "separator", "quit"])
         precondition(NativeContextMenu.entries(pet: false, visible: false, sampling: true).map { $0.0 } == ["打开详情", "设置…", "管理采样…", "", "检查更新", "显示桌宠", "", "退出 Aieyes"])
 
         if CommandLine.arguments.contains("--window-tests") {
@@ -151,6 +151,59 @@ import Darwin
         waitUntil("Hidden windows stop animation", condition: { sprite.layer?.animation(forKey: "pet.frames") == nil })
         animationWindow.close()
         checkpoint("Pet keyframe reuse, reduced motion and hidden-window pause passed")
+        // Verify orbit layout geometry, grouping, quota matching, and breathing pulse lifecycle.
+        for count in 1...PetOrbitLayout.maxSlots {
+            let slots = PetOrbitLayout.slots(count: count, scale: 1)
+            precondition(slots.count == count)
+            let width = PetAppearance.width(hasOrbit: true, scale: 1)
+            let half = PetOrbitLayout.nodeSize / 2
+            for slot in slots {
+                precondition(slot.cx - half >= 6 && slot.cx + half <= width - 6, "Orbit slot \(slot) exceeded horizontal bounds")
+                precondition(slot.cy - half >= 6, "Orbit slot \(slot) exceeded top bounds")
+            }
+        }
+        precondition(PetOrbitLayout.preferredEdge(for: PetOrbitLayout.slots(count: 3)[0]) == .minX)
+        precondition(PetOrbitLayout.preferredEdge(for: PetOrbitLayout.slots(count: 3)[1]) == .minY)
+        precondition(PetOrbitLayout.preferredEdge(for: PetOrbitLayout.slots(count: 3)[2]) == .maxX)
+        var orbitSettings = Settings()
+        orbitSettings.sources = [AgentSource(id: "src-codex-b", name: "Codex B", provider: "codex", accountId: "acct-b")]
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let quotaA = Quota(sourceId: "src-a", accountId: "acct-a", provider: "codex", name: "Codex A", updatedAt: 1_000_000, origin: "local",
+                           windows: [QuotaWindow(name: "5h", usedPercent: 10, windowMinutes: CoreContract.fiveHourMinutes, resetsAt: 1_003_600)],
+                           bankReset: nil, bankUpdatedAt: nil, plan: "plus", error: nil)
+        let quotaB = Quota(sourceId: "src-codex-b", accountId: "acct-b", provider: "codex", name: "Codex B", updatedAt: 1_000_000, origin: "local",
+                           windows: [QuotaWindow(name: "5h", usedPercent: 35, windowMinutes: CoreContract.fiveHourMinutes, resetsAt: 1_007_200),
+                                     QuotaWindow(name: "7d", usedPercent: 42, windowMinutes: CoreContract.weekMinutes, resetsAt: nil)],
+                           bankReset: nil, bankUpdatedAt: nil, plan: "pro", error: nil)
+        var s1 = LiveSession(id: "s1", source: "claude", phase: .working, updatedAt: now); s1.provider = "claude"
+        var s2 = LiveSession(id: "s2", source: "codex", phase: .thinking, updatedAt: now); s2.provider = "codex"; s2.sourceId = "src-codex-b"
+        var s3 = LiveSession(id: "s3", source: "work", phase: .needsInput, updatedAt: now); s3.provider = "chatgpt-work"
+        var s4 = LiveSession(id: "s4", source: "cursor", phase: .complete, updatedAt: now); s4.provider = "cursor"
+        let projectedOrbit = PetOrbitStore.project(sessions: [s1, s2, s3, s4], settings: orbitSettings, quotas: [quotaA, quotaB], now: now)
+        precondition(projectedOrbit.count == 2 && projectedOrbit[0].provider == "codex" && projectedOrbit[0].activeCount == 2 && projectedOrbit[0].phase == SessionPhase.needsInput)
+        precondition(projectedOrbit[0].quota?.accountName == "Codex B" && projectedOrbit[0].quota?.summary == "5h 65% (2h) · 7d 58%")
+        precondition(projectedOrbit[1].provider == "claude" && projectedOrbit[1].quota == nil)
+        let manyProviders = ["codex", "claude", "antigravity", "cursor", "opencode", "kimi", "qoder", "grok", "pi"]
+        let manySessions: [LiveSession] = manyProviders.enumerated().map { idx, prov in
+            var s = LiveSession(id: "m-\(idx)", source: prov, phase: prov == "pi" ? .needsInput : .working, updatedAt: now)
+            s.provider = prov
+            return s
+        }
+        let foldedOrbit = PetOrbitStore.project(sessions: manySessions, settings: Settings(), quotas: [], now: now)
+        precondition(foldedOrbit.count == PetOrbitLayout.maxSlots && foldedOrbit.last?.isOverflow == true && foldedOrbit.last?.overflowProviders.count == 3 && foldedOrbit.last?.phase == SessionPhase.needsInput)
+        let pulseWindow = NSWindow(contentRect: NSRect(x: 220, y: 220, width: 44, height: 44), styleMask: [.titled], backing: .buffered, defer: false)
+        pulseWindow.isReleasedWhenClosed = false; pulseWindow.level = .statusBar
+        let pulseView = PetOrbitPulseLayerView(frame: NSRect(x: 0, y: 0, width: 44, height: 44))
+        pulseWindow.contentView = pulseView
+        show(pulseWindow)
+        pulseView.configure(color: Palette.accent, needsInput: false, index: 0, playing: true, reduced: false)
+        let pulseStarts = pulseView.animationStarts
+        precondition(pulseStarts > 0, "Visible orbit pulse must start GPU animation")
+        pulseView.configure(color: Palette.accent, needsInput: false, index: 0, playing: true, reduced: true)
+        pulseView.configure(color: Palette.accent, needsInput: false, index: 0, playing: true, reduced: false)
+        pulseWindow.orderOut(nil)
+        pulseWindow.close()
+        checkpoint("Pet orbit geometry, grouping, quota matching and pulse lifecycle passed")
         if CommandLine.arguments.contains("--without-metal-device") {
             checkpoint("SKIP Metal/SwiftUI graphics integration: forced no-GPU fixture; timing, geometry and layer lifecycle checks passed")
             return
@@ -254,7 +307,8 @@ import Darwin
             let event = NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: 30, y: 30), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!
             let menu = panel.contentView!.menu(for: event)!
             menu.update()
-            precondition(!menu.autoenablesItems && menu.items.map(\.title) == ["打开面板", "设置…", "桌宠设置", "", "检查更新", "隐藏桌宠"] && menu.items.filter { !$0.isSeparatorItem }.allSatisfy(\.isEnabled))
+            precondition(!menu.autoenablesItems && menu.items.map(\.title) == ["打开面板", "设置…", "桌宠设置", "", "检查更新", "隐藏桌宠", "", "退出 Aieyes"] && menu.items.filter { !$0.isSeparatorItem }.allSatisfy(\.isEnabled))
+            precondition(menu.items.last?.target === NSApp && menu.items.last?.action == #selector(NSApplication.terminate(_:)))
             menu.performActionForItem(at: 0); menu.performActionForItem(at: 0)
             precondition(opens == 3, "The context menu always requests opening, never toggling")
             menu.performActionForItem(at: 1)
@@ -277,6 +331,28 @@ import Darwin
             model.live.pet = pet
             precondition(panel.frame.height > 143 * 2 + 40, "Two status lines must expand the window")
             precondition(PetAppearance.scale(.nan) == 1 && PetAppearance.scale(0) == 0.5 && PetAppearance.scale(5) == 2)
+            defaults.set(1.0, forKey: "aieyes.pet.scale")
+            NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
+            model.live.pet = .idle
+            pump(0.05)
+            let idleFrame = panel.frame
+            precondition(idleFrame.width == 144, "Idle pet keeps compact 144pt width")
+            var activeSession = LiveSession(id: "orbit-live-1", source: "codex", phase: .working, updatedAt: Date())
+            activeSession.provider = "codex"
+            model.live.sessions = [activeSession]
+            waitUntil("Running session expands pet window for orbit badges", condition: { panel.frame.width == 232 })
+            precondition(abs(panel.frame.height - (idleFrame.height + PetOrbitLayout.padTop)) < 1, "Orbit expansion adds only top padding")
+            let contentView = panel.contentView!
+            contentView.layoutSubtreeIfNeeded()
+            let topSlot = PetOrbitLayout.slots(count: 1, scale: 1)[0]
+            // hitTest receives points in superview (unflipped NSThemeFrame) coordinates.
+            let slotInSuperview = NSPoint(x: topSlot.cx, y: contentView.bounds.height - topSlot.cy)
+            let justOutsideInSuperview = NSPoint(x: topSlot.cx + PetOrbitLayout.hitRadius + 4, y: contentView.bounds.height - topSlot.cy)
+            precondition(contentView.hitTest(slotInSuperview) === contentView, "Clicking the top orbit circle center must hit PetHost in superview coordinates")
+            precondition(contentView.hitTest(justOutsideInSuperview) == nil, "Transparent pixels right outside the orbit circle must pass through")
+            model.live.sessions = []
+            waitUntil("Ending sessions shrinks pet window back to compact width", condition: { panel.frame.width == 144 })
+            checkpoint("Pet orbit dynamic canvas expansion, exact hitTest alignment, and shrink passed")
             defaults.set(true, forKey: "aieyes.pet.enabled")
             NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
             RunLoop.main.run(until: Date().addingTimeInterval(0.15))

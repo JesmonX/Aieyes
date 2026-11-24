@@ -36,10 +36,8 @@ pub(crate) fn entries(pet: bool, visible: bool, can_hide: bool, sampling: bool) 
         "hide",
         !visible || can_hide,
     );
-    if !pet {
-        add("", "separator", true);
-        add("退出 Aieyes", "quit", true);
-    }
+    add("", "separator", true);
+    add("退出 Aieyes", "quit", true);
     rows
 }
 
@@ -57,10 +55,20 @@ mod tests {
                 "pet-settings",
                 "separator",
                 "check-updates",
-                "hide"
+                "hide",
+                "separator",
+                "quit"
             ]
         );
-        assert!(!entries(true, true, false, false).last().unwrap().enabled);
+        let pet_without_tray = entries(true, true, false, false);
+        assert!(
+            !pet_without_tray
+                .iter()
+                .find(|e| e.action == "hide")
+                .unwrap()
+                .enabled
+        );
+        assert!(pet_without_tray.last().unwrap().enabled);
         let tray = entries(false, false, false, true);
         assert_eq!(tray[2].action, "sampling");
         assert_eq!(
