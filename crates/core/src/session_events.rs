@@ -408,10 +408,14 @@ pub fn hook(provider: &str, kind: &str, input: &Value, at: u64) -> Event {
         session: field(input, &["session_id", "conversationId", "sessionId"]),
         parent_session: field(input, &["parent_session_id", "parentSessionId"]),
         turn: field(input, &["turn_id", "turnId", "prompt_id"]),
-        call: field(
-            input,
-            &["tool_use_id", "toolUseId", "agent_id", "elicitation_id"],
-        ),
+        call: if provider == "claude" && !matches!(kind, "SubagentStart" | "SubagentStop") {
+            field(input, &["tool_use_id", "toolUseId", "elicitation_id"])
+        } else {
+            field(
+                input,
+                &["tool_use_id", "toolUseId", "agent_id", "elicitation_id"],
+            )
+        },
         tool: if provider == "antigravity" {
             field(&input["toolCall"], &["name"])
         } else {
@@ -1051,8 +1055,10 @@ pub struct Activity {
     pub pid: u32,
     pub process_start: u64,
     waiting: HashSet<String>,
+    claude_approvals: HashMap<String, u64>,
+    unbound_claude_approvals: HashMap<String, u64>,
     async_questions: HashSet<String>,
-    tools: HashSet<String>,
+    tools: HashMap<String, String>,
     anonymous_tools: u16,
     background: HashSet<String>,
     generation: u64,
@@ -1069,9 +1075,49 @@ impl Activity {
             .iter()
             .filter(|id| !id.is_empty())
             .cloned()
+            .chain(self.claude_approvals.keys().cloned())
+            .chain(
+                self.unbound_claude_approvals
+                    .keys()
+                    .map(|tool| format!("approval:{tool}")),
+            )
             .collect::<Vec<_>>();
         ids.sort();
+        ids.dedup();
         ids.join(":")
+    }
+    pub fn has_claude_approvals(&self) -> bool {
+        self.claude_approvals
+            .values()
+            .chain(self.unbound_claude_approvals.values())
+            .any(|at| *at > 0)
+    }
+    pub fn settle_claude_approvals(&mut self, status_at: u64) {
+        self.claude_approvals
+            .retain(|_, at| *at == 0 || *at >= status_at);
+        self.unbound_claude_approvals
+            .retain(|_, at| *at == 0 || *at >= status_at);
+        if self.phase == Some(Phase::NeedsInput) && !self.has_waiting() {
+            self.phase = Some(self.tool_phase());
+        }
+    }
+    fn has_waiting(&self) -> bool {
+        !self.waiting.is_empty()
+            || !self.claude_approvals.is_empty()
+            || !self.unbound_claude_approvals.is_empty()
+    }
+    fn clear_waiting(&mut self) {
+        self.waiting.clear();
+        self.claude_approvals.clear();
+        self.unbound_claude_approvals.clear();
+        self.async_questions.clear();
+    }
+    fn tool_phase(&self) -> Phase {
+        if self.tools.is_empty() && self.anonymous_tools == 0 {
+            Phase::Working
+        } else {
+            Phase::Tool
+        }
     }
     pub fn turn_started_at(&self) -> u64 {
         self.turn_started
@@ -1079,7 +1125,32 @@ impl Activity {
     pub fn background_active(&self) -> bool {
         self.external_background || !self.background.is_empty()
     }
-    pub fn apply(&mut self, mut e: Event) {
+    pub fn apply(&mut self, e: Event) {
+        self.apply_event(e, false);
+    }
+    pub fn apply_hook(&mut self, provider: &str, mut event: Event) {
+        let claude = provider == "claude";
+        if claude {
+            // Claude can send this notification on the parent for a child
+            // approval. PermissionRequest carries the scope and owns the wait.
+            if event.kind == "Notification" && event.notification == "permission_prompt" {
+                return;
+            }
+            // Installed older helpers used the child ID as a fallback call ID.
+            if event.kind == "PermissionRequest"
+                && !event.parent_session.is_empty()
+                && event
+                    .session
+                    .strip_prefix(&event.parent_session)
+                    .and_then(|child| child.strip_prefix(':'))
+                    == Some(event.call.as_str())
+            {
+                event.call.clear();
+            }
+        }
+        self.apply_event(event, claude);
+    }
+    fn apply_event(&mut self, mut e: Event, claude_hook: bool) {
         // Older CodeBuddy prompts have no conversationRequestId. Model steps
         // acquire one later; the native parent chain ties them to the prompt,
         // including late events from an earlier turn.
@@ -1146,8 +1217,7 @@ impl Activity {
                 e.turn.clone()
             };
             self.turn_started = e.at;
-            self.waiting.clear();
-            self.async_questions.clear();
+            self.clear_waiting();
             self.tools.clear();
             self.anonymous_tools = 0;
             self.background.clear();
@@ -1164,8 +1234,7 @@ impl Activity {
             }
             if e.kind == "SessionStart" {
                 self.phase = None;
-                self.waiting.clear();
-                self.async_questions.clear();
+                self.clear_waiting();
                 self.tools.clear();
                 self.anonymous_tools = 0;
                 self.background.clear();
@@ -1189,19 +1258,14 @@ impl Activity {
                                 self.waiting.remove(call);
                             }
                         }
-                        self.phase = Some(if self.tools.is_empty() && self.anonymous_tools == 0 {
-                            Phase::Working
-                        } else {
-                            Phase::Tool
-                        });
+                        self.phase = Some(self.tool_phase());
                     }
                     "unknown" => self.phase = Some(Phase::Unknown),
                     // A local slash command (`/model`, `/clear`) ran without a
                     // model request: the turn its command line opened is idle.
                     "local_command" => {
                         self.phase = None;
-                        self.waiting.clear();
-                        self.async_questions.clear();
+                        self.clear_waiting();
                         self.tools.clear();
                         self.anonymous_tools = 0;
                     }
@@ -1209,7 +1273,7 @@ impl Activity {
                     "tool_phase" => self.phase = Some(Phase::Tool),
                     "tool" | "anonymous_tool" | "PreToolUse" => {
                         if !e.call.is_empty() {
-                            self.tools.insert(e.call.clone());
+                            self.tools.insert(e.call.clone(), e.tool.clone());
                         } else if e.kind == "anonymous_tool" {
                             self.anonymous_tools = self.anonymous_tools.saturating_add(1).min(256);
                         }
@@ -1229,6 +1293,25 @@ impl Activity {
                             }
                         }
                         self.phase = Some(Phase::Tool);
+                    }
+                    "PermissionRequest" if claude_hook => {
+                        if e.call.is_empty() {
+                            let mut candidates =
+                                self.tools.iter().filter(|(_, tool)| **tool == e.tool);
+                            if let (Some((call, _)), None) = (candidates.next(), candidates.next())
+                            {
+                                e.call.clone_from(call);
+                            }
+                        }
+                        let question = e.tool == "AskUserQuestion";
+                        if e.call.is_empty() {
+                            self.unbound_claude_approvals
+                                .insert(e.tool, if question { 0 } else { e.at });
+                        } else if question {
+                            self.waiting.insert(e.call);
+                        } else {
+                            self.claude_approvals.insert(e.call, e.at);
+                        }
                     }
                     "PermissionRequest" | "Elicitation" => {
                         self.waiting.insert(e.call.clone());
@@ -1254,16 +1337,23 @@ impl Activity {
                             self.waiting.remove("");
                         }
                         self.waiting.remove("notification");
-                        if e.kind != "ElicitationResult" && !self.tools.remove(&e.call) {
+                        if e.kind != "ElicitationResult" && self.tools.remove(&e.call).is_none() {
                             // Grok only assigns a call ID at completion.
                             self.anonymous_tools = self.anonymous_tools.saturating_sub(1);
                         }
+                        if claude_hook
+                            && matches!(
+                                e.kind.as_str(),
+                                "PostToolUse" | "PostToolUseFailure" | "PermissionDenied"
+                            )
+                        {
+                            self.claude_approvals.remove(&e.call);
+                            if !self.tools.values().any(|tool| *tool == e.tool) {
+                                self.unbound_claude_approvals.remove(&e.tool);
+                            }
+                        }
                         // An individual tool failure is recoverable. Only a terminal event can fail a turn.
-                        self.phase = Some(if self.tools.is_empty() && self.anonymous_tools == 0 {
-                            Phase::Working
-                        } else {
-                            Phase::Tool
-                        });
+                        self.phase = Some(self.tool_phase());
                     }
                     "SubagentStart" => {
                         self.background.insert(e.call.clone());
@@ -1295,23 +1385,20 @@ impl Activity {
                             } else {
                                 Phase::Complete
                             });
-                            self.waiting.clear();
-                            self.async_questions.clear();
+                            self.clear_waiting();
                             self.tools.clear();
                             self.anonymous_tools = 0;
                         }
                     }
                     "failed" | "StopFailure" => {
                         self.phase = Some(Phase::Failed);
-                        self.waiting.clear();
-                        self.async_questions.clear();
+                        self.clear_waiting();
                         self.tools.clear();
                         self.anonymous_tools = 0;
                     }
                     "interrupted" | "SessionEnd" => {
                         self.phase = Some(Phase::Interrupted);
-                        self.waiting.clear();
-                        self.async_questions.clear();
+                        self.clear_waiting();
                         self.tools.clear();
                         self.anonymous_tools = 0;
                     }
@@ -1319,7 +1406,7 @@ impl Activity {
                 }
             }
         }
-        if !self.waiting.is_empty() {
+        if self.has_waiting() {
             self.phase = Some(Phase::NeedsInput);
         }
         self.at = self.at.max(e.at);
@@ -1489,6 +1576,48 @@ mod tests {
         assert_eq!(a.phase, Some(Phase::Working));
         a.apply(event("PostToolUseFailure", "tool", 201));
         assert_ne!(a.phase, Some(Phase::Failed));
+    }
+    #[test]
+    fn claude_unbound_approval_waits_until_matching_parallel_tools_settle() {
+        let mut activity = Activity::default();
+        let mut at = 100;
+        let mut apply = |kind: &str, call: &str, tool: &str| {
+            at += 1;
+            activity.apply_hook(
+                "claude",
+                Event {
+                    tool: tool.into(),
+                    ..event(kind, call, at)
+                },
+            );
+            activity.phase
+        };
+        apply("PreToolUse", "a", "Bash");
+        apply("PreToolUse", "b", "Bash");
+        assert_eq!(
+            apply("PermissionRequest", "", "Bash"),
+            Some(Phase::NeedsInput)
+        );
+        assert_eq!(apply("PostToolUse", "a", "Bash"), Some(Phase::NeedsInput));
+        assert_eq!(apply("PostToolUse", "c", "Read"), Some(Phase::NeedsInput));
+        assert_eq!(
+            apply("PostToolUseFailure", "b", "Bash"),
+            Some(Phase::Working)
+        );
+        assert_eq!(
+            apply("PermissionRequest", "", "Read"),
+            Some(Phase::NeedsInput)
+        );
+        assert_eq!(apply("PostToolUse", "read", "Read"), Some(Phase::Working));
+        assert_eq!(
+            apply("PermissionRequest", "ask", "Bash"),
+            Some(Phase::NeedsInput)
+        );
+        assert_eq!(
+            apply("PostToolUse", "other", "Bash"),
+            Some(Phase::NeedsInput)
+        );
+        assert_eq!(apply("PostToolUse", "ask", "Bash"), Some(Phase::Working));
     }
     #[test]
     fn harness_questions_and_approvals_wait_until_their_own_result() {

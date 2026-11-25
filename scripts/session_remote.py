@@ -318,7 +318,10 @@ def observe(provider, kind, home):
         v = json.loads(data)
         session = text((v.get('conversation_id') or v.get('session_id')) if provider=='cursor' else v.get('session_id') or v.get('conversationId') or v.get('sessionId'))
         if not session: return
-        row = dict(kind=kind, at=at, session=session, turn=text(v.get('turn_id') or v.get('turnId') or v.get('prompt_id')), call=text(v.get('tool_use_id') or v.get('agent_id') or v.get('elicitation_id')), tool=text((v.get('toolCall') or {}).get('name') if provider == 'antigravity' else v.get('tool_name')), notification=text(v.get('notification_type')))
+        call = v.get('tool_use_id') or v.get('agent_id') or v.get('elicitation_id')
+        if provider == 'claude' and kind not in ('SubagentStart', 'SubagentStop'):
+            call = v.get('tool_use_id') or v.get('toolUseId') or v.get('elicitation_id')
+        row = dict(kind=kind, at=at, session=session, turn=text(v.get('turn_id') or v.get('turnId') or v.get('prompt_id')), call=text(call), tool=text((v.get('toolCall') or {}).get('name') if provider == 'antigravity' else v.get('tool_name')), notification=text(v.get('notification_type')))
         if provider=='claude':row['sessionSource']=text(os.environ.get('CLAUDE_CODE_ENTRYPOINT') or v.get('entrypoint'))
         row['parentSession']=text(v.get('parent_session_id') or v.get('parentSessionId'))
         # The absolute working directory is the only payload path kept; it names the session's project.
@@ -1172,6 +1175,40 @@ def apply_process_evidence(source, result, cursors, processes):
     return result
 
 
+def claude_terminal_status(home, files, cursors, processes):
+    pending = set()
+    for row in files:
+        if not row.get('hook'):
+            continue
+        cached = cursors.get(row['key'], {})
+        if not row.get('reset') and cached.get('phase') == 'needsInput':
+            pending.add((cached.get('pid'), cached.get('processStart')))
+        for event in row.get('events', []):
+            if event.get('kind') == 'PermissionRequest':
+                pending.add((event.get('pid'), event.get('processStart')))
+    reports = {}
+    for process in processes:
+        pid, start = process['pid'], process['start']
+        if process['provider'] != 'claude' or not process.get('alive', True) or (pid, start) not in pending:
+            continue
+        path = home / 'sessions' / ('%d.json' % pid)
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 8192:
+                continue
+            with path.open('rb') as f:
+                value = json.loads(f.read(8192))
+            if (not isinstance(value, dict) or value.get('status') not in ('busy', 'idle')
+                    or value.get('waitingFor') is not None or value.get('pid') != pid
+                    or value.get('kind') != 'interactive' or not isinstance(value.get('sessionId'), str)
+                    or any(type(value.get(key)) is not int or value[key] <= 0 for key in ('startedAt', 'statusUpdatedAt'))):
+                continue
+            reports[pid] = {key: value[key] for key in ('pid', 'sessionId', 'kind', 'status', 'startedAt', 'statusUpdatedAt')}
+            reports[pid]['processStart'] = start
+        except (OSError, ValueError):
+            continue
+    return reports
+
+
 def collect(source,cursors,database_cache=False,harness_deadline=None,processes=None):
     result=collect_native(source,cursors,database_cache,harness_deadline)
     if source['provider']=='zcode':
@@ -1183,7 +1220,11 @@ def collect(source,cursors,database_cache=False,harness_deadline=None,processes=
                 try:result['files'].append(read_file(path,'zcode',True,cursors.get(str(path),{})))
                 except Exception as error:result['error']=str(error)
     if source['provider'] == 'codex': inherit_codex_originators(source,result)
-    return apply_process_evidence(source,result,cursors,native_processes([source["provider"]]) if processes is None else processes)
+    if processes is None:
+        processes = native_processes([source['provider']])
+    if source['provider'] == 'claude':
+        result['claudeStatus'] = claude_terminal_status(target(source)[0], result['files'], cursors, processes)
+    return apply_process_evidence(source,result,cursors,processes)
 
 def main(request):
     action=request.get('action','collect'); sources=request.get('sources',[])

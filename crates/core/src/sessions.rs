@@ -628,6 +628,50 @@ struct SourceBatch {
     ignored: Vec<String>,
     // Candidates left unread by the limit.
     overflow: usize,
+    claude_status: HashMap<u32, ClaudeStatus>,
+}
+/// Claude's live terminal state. Only a newer sample from the same process
+/// and root session can settle a hook request before the tool returns.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeStatus {
+    pid: u32,
+    session_id: String,
+    kind: String,
+    status: String,
+    waiting_for: Option<String>,
+    started_at: u64,
+    status_updated_at: u64,
+    #[serde(default)]
+    process_start: u64,
+}
+impl ClaudeStatus {
+    fn read(home: &Path, pid: u32) -> Option<Self> {
+        let path = home.join("sessions").join(format!("{pid}.json"));
+        let meta = fs::symlink_metadata(&path).ok()?;
+        if !meta.is_file() || meta.len() > 8192 {
+            return None;
+        }
+        serde_json::from_reader(File::open(path).ok()?.take(8192)).ok()
+    }
+
+    fn settled_at(&self, activity: &Activity, now: u64) -> Option<u64> {
+        let root = if activity.parent_session.is_empty() {
+            &activity.session
+        } else {
+            &activity.parent_session
+        };
+        (self.pid == activity.pid
+            && self.session_id == *root
+            && self.kind == "interactive"
+            && matches!(self.status.as_str(), "busy" | "idle")
+            && self.waiting_for.is_none()
+            && activity.process_start > 0
+            && self.started_at >= activity.process_start.saturating_mul(1000)
+            && self.status_updated_at >= self.started_at
+            && self.status_updated_at < now.saturating_add(1).saturating_mul(1000))
+        .then_some(self.status_updated_at)
+    }
 }
 #[derive(Default)]
 struct Cursor {
@@ -861,6 +905,7 @@ impl Reader {
         }
         // Read slots spent on newly classified transcripts are free on the next poll.
         let mut classified = 0;
+        let mut local_claude_status = HashMap::new();
         for f in batch.files {
             if f.hook && hook_state.as_deref() == Some("disabled") {
                 continue;
@@ -900,7 +945,11 @@ impl Reader {
                     if source.provider == "zcode" && f.hook && event.kind == "Stop" {
                         event.kind = "PostInvocation".into();
                     }
-                    cursor.activity.apply(event);
+                    if f.hook {
+                        cursor.activity.apply_hook(&source.provider, event);
+                    } else {
+                        cursor.activity.apply(event);
+                    }
                 }
             }
             // Hook files have no process candidate above; their header also records the workspace.
@@ -1002,7 +1051,7 @@ impl Reader {
                 f.modified
             };
             let elapsed = remote_now.saturating_sub(activity_at);
-            let alive = if source.host_id.is_none() && cursor.activity.pid > 0 {
+            let mut alive = if source.host_id.is_none() && cursor.activity.pid > 0 {
                 Some(
                     *self
                         .processes
@@ -1014,6 +1063,27 @@ impl Reader {
             } else {
                 f.alive
             };
+            if f.hook && source.provider == "claude" && cursor.activity.has_claude_approvals() {
+                let pid = cursor.activity.pid;
+                let status = if source.host_id.is_none() && alive == Some(true) {
+                    local_claude_status
+                        .entry(pid)
+                        .or_insert_with(|| {
+                            ClaudeStatus::read(&session_hooks::target(source).home, pid)
+                        })
+                        .as_ref()
+                } else {
+                    batch
+                        .claude_status
+                        .get(&pid)
+                        .filter(|status| status.process_start == cursor.activity.process_start)
+                };
+                if let Some(at) = status.and_then(|s| s.settled_at(&cursor.activity, remote_now)) {
+                    alive = Some(true);
+                    cursor.activity.settle_claude_approvals(at);
+                    phase = cursor.activity.phase.unwrap_or(phase);
+                }
+            }
             if phase.active() && alive == Some(false) {
                 phase = Phase::Interrupted;
             } else if phase.active()
@@ -5176,6 +5246,206 @@ mod settled_session_tests {
     }
     // An exited process cannot be found; a pid and start that never match.
     const EXITED: (u32, u64) = (1, 12345);
+
+    #[test]
+    fn claude_terminal_status_ends_approval_before_the_tool_returns() {
+        let source = Source {
+            host_id: Some("ssh".into()),
+            ..claude_source()
+        };
+        let mut reader = Reader::default();
+        let mut poll = |events, report: Value| {
+            let mut batch: SourceBatch = serde_json::from_value(json!({
+                "claudeStatus": {"42": report},
+            }))
+            .unwrap();
+            batch.files.push(FileBatch {
+                key: "child".into(),
+                hook: true,
+                modified: 107,
+                events,
+                ..Default::default()
+            });
+            let mut snapshot = reader.consume(&source, batch, 110, 110, "Fixture", None);
+            snapshot.finish();
+            snapshot.phase()
+        };
+        let event = |kind, tool, call, at| Event {
+            kind,
+            tool,
+            call,
+            at,
+            session: "parent:child".into(),
+            parent_session: "parent".into(),
+            pid: 42,
+            process_start: 90,
+            ..Default::default()
+        };
+        let mut report = json!({
+            "pid":42,"processStart":90,"sessionId":"parent","kind":"interactive",
+            "startedAt":91_000,"status":"busy","statusUpdatedAt":102_000,
+        });
+        assert_eq!(
+            poll(
+                vec![
+                    event("PreToolUse".into(), "Bash".into(), "bash".into(), 102_000),
+                    event(
+                        "PermissionRequest".into(),
+                        "Bash".into(),
+                        "".into(),
+                        103_000
+                    ),
+                ],
+                report.clone()
+            ),
+            Some(Phase::NeedsInput)
+        );
+        report["statusUpdatedAt"] = json!(104_000);
+        report["status"] = json!("waiting");
+        assert_eq!(poll(vec![], report.clone()), Some(Phase::NeedsInput));
+        report["status"] = json!("busy");
+        report["sessionId"] = json!("different");
+        assert_eq!(poll(vec![], report.clone()), Some(Phase::NeedsInput));
+        report["sessionId"] = json!("parent");
+        report["processStart"] = json!(89);
+        assert_eq!(poll(vec![], report.clone()), Some(Phase::NeedsInput));
+        report["processStart"] = json!(90);
+        assert_eq!(poll(vec![], report.clone()), Some(Phase::Tool));
+
+        // A second approval opened after the native state sample still waits.
+        assert_eq!(
+            poll(
+                vec![event(
+                    "PermissionRequest".into(),
+                    "Read".into(),
+                    "new".into(),
+                    105_000
+                )],
+                report.clone()
+            ),
+            Some(Phase::NeedsInput)
+        );
+        report["statusUpdatedAt"] = json!(107_000);
+        // A question is cleared only by its own result.
+        assert_eq!(
+            poll(
+                vec![event(
+                    "PreToolUse".into(),
+                    "AskUserQuestion".into(),
+                    "question".into(),
+                    106_000
+                )],
+                report.clone()
+            ),
+            Some(Phase::NeedsInput)
+        );
+        assert_eq!(
+            poll(
+                vec![event(
+                    "PostToolUse".into(),
+                    "AskUserQuestion".into(),
+                    "question".into(),
+                    108_000
+                )],
+                report
+            ),
+            Some(Phase::Tool)
+        );
+    }
+
+    #[test]
+    fn claude_child_approval_settles_parent_after_tool_result_on_incremental_polls() {
+        for (host, legacy) in [(None, false), (Some("ssh".into()), true)] {
+            let source = Source {
+                host_id: host,
+                ..claude_source()
+            };
+            let mut reader = Reader::default();
+            let hook = |kind, at, input: Value| session_events::hook("claude", kind, &input, at);
+            let file = |key: &str, events, reset| FileBatch {
+                key: key.into(),
+                events,
+                hook: true,
+                reset,
+                ..Default::default()
+            };
+            let snapshot = |reader: &mut Reader, parent, child, reset| {
+                let mut snapshot = reader.consume(
+                    &source,
+                    SourceBatch {
+                        files: vec![file("parent", parent, reset), file("child", child, reset)],
+                        ..Default::default()
+                    },
+                    110,
+                    110,
+                    "Fixture",
+                    Some("installed".into()),
+                );
+                snapshot.finish();
+                assert_eq!(snapshot.sessions.len(), 1);
+                snapshot.phase()
+            };
+            let parent = vec![
+                hook(
+                    "UserPromptSubmit",
+                    100_000,
+                    json!({"session_id":"s","prompt_id":"turn"}),
+                ),
+                hook(
+                    "SubagentStart",
+                    101_000,
+                    json!({"session_id":"s","prompt_id":"turn","agent_id":"child"}),
+                ),
+                hook(
+                    "Notification",
+                    104_000,
+                    json!({"session_id":"s","prompt_id":"turn","notification_type":"permission_prompt"}),
+                ),
+            ];
+            let child = |kind, at, tool: &str, call: &str| {
+                let mut input = json!({"session_id":"s","prompt_id":"turn","agent_id":"child","tool_name":tool});
+                if !call.is_empty() {
+                    input["tool_use_id"] = json!(call);
+                }
+                hook(kind, at, input)
+            };
+            let mut permission = child("PermissionRequest", 103_000, "Bash", "");
+            assert!(permission.call.is_empty());
+            if legacy {
+                permission.call = "child".into();
+            }
+            assert_eq!(
+                snapshot(
+                    &mut reader,
+                    parent,
+                    vec![child("PreToolUse", 102_000, "Bash", "original"), permission],
+                    true
+                ),
+                Some(Phase::NeedsInput)
+            );
+            assert_eq!(
+                snapshot(
+                    &mut reader,
+                    vec![],
+                    vec![
+                        child("PreToolUse", 105_000, "Bash", "parallel"),
+                        child("PostToolUse", 106_000, "Bash", "parallel"),
+                    ],
+                    false
+                ),
+                Some(Phase::NeedsInput)
+            );
+            assert_eq!(
+                snapshot(
+                    &mut reader,
+                    vec![],
+                    vec![child("PostToolUse", 107_000, "Bash", "original")],
+                    false
+                ),
+                Some(Phase::Working)
+            );
+        }
+    }
 
     #[test]
     fn claude_session_end_settles_a_transcript_left_open_by_an_interrupt_or_command() {

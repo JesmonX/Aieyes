@@ -153,6 +153,47 @@ class ObserverTests(unittest.TestCase):
                 self.assertEqual(event['sessionSource'],entrypoint)
                 self.assertNotIn('PRIVATE',json.dumps(event))
 
+    def test_claude_terminal_status_only_exports_metadata_for_live_pending_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = pathlib.Path(directory)
+            path = home / 'sessions/42.json'
+            path.parent.mkdir()
+            record = dict(pid=42, sessionId='parent', kind='interactive', status='busy',
+                          startedAt=91_000, statusUpdatedAt=104_000, name='PRIVATE')
+            path.write_text(json.dumps(record))
+            files = [dict(key='child', hook=True, events=[])]
+            cursors = {'child': dict(pid=42, processStart=90, phase='needsInput')}
+            processes = [dict(pid=42, start=90, provider='claude')]
+            status = m.claude_terminal_status(home, files, cursors, processes)
+            self.assertEqual(status[42]['statusUpdatedAt'], 104_000)
+            self.assertNotIn('PRIVATE', json.dumps(status))
+            self.assertEqual(m.claude_terminal_status(home, files, cursors, [dict(processes[0], start=89)]), {})
+            path.write_text(json.dumps(dict(record, status='waiting', waitingFor='permission prompt')))
+            self.assertEqual(m.claude_terminal_status(home, files, cursors, processes), {})
+
+    @unittest.skipIf(os.name == 'nt', 'SSH hook helper uses POSIX file locks')
+    def test_claude_ssh_hook_separates_child_identity_from_tool_call(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            events = root / '.aieyes/session-events'
+            events.mkdir(parents=True)
+            helper = root / 'observe.py'
+            helper.write_text(m.SCRIPT)
+            request = dict(session_id='parent', agent_id='child', tool_name='Bash')
+            for kind, payload in [
+                ('SubagentStart', request),
+                ('PermissionRequest', request),
+                ('PostToolUse', dict(request, tool_use_id='toolu_bash')),
+            ]:
+                subprocess.run([sys.executable, str(helper), m.MARKER, 'claude', kind, directory],
+                               input=json.dumps(payload), capture_output=True, text=True, check=True, timeout=3)
+            observed = [json.loads(line) for path in events.glob('*.jsonl') for line in path.read_text().splitlines()]
+            self.assertEqual({e['kind']: (e['session'], e['call']) for e in observed}, {
+                'SubagentStart': ('parent', 'child'),
+                'PermissionRequest': ('parent:child', ''),
+                'PostToolUse': ('parent:child', 'toolu_bash'),
+            })
+
     def test_codebuddy_nested_child_identity_and_intermediate_commentary(self):
         with tempfile.TemporaryDirectory() as directory:
             root=pathlib.Path(directory);path=root/'parent/subagents/agent-worker.jsonl';path.parent.mkdir(parents=True)
