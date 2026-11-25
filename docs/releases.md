@@ -22,6 +22,8 @@ node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-r
 
 普通 Core/macOS 和 Desktop 工作流只接受分支推送；`v*` 标签仅启动 Release。Release 的 `validate` 任务通过 `scripts/release-ci-baseline.cjs` 判断是否复用分支 CI：标签提交本身，或其父提交（且标签提交只改版本号和 `docs/release-notes/`）在 Core/macOS 与 Desktop 两个工作流都有成功运行时，跳过共享检查、完整 Rust 测试、浏览器与原生检查；否则全部执行。四平台构建、包体与架构校验、签名篡改测试、签名和附件核验始终执行。手动运行可勾选 `full_tests` 强制全量测试。
 
+全量测试与分支 CI 一样，在 Apple Silicon 上运行 macOS 原生测试套件，以使用 SwiftUI 图形测试所需的 Metal 支持。Intel 任务负责 x64 DMG 构建、签名、架构与磁盘映像校验。
+
 想走快速路径，先把代码改动推到 main，等两个工作流通过后，再提交只含版本号和发布说明的准备提交并打标签；Desktop 有路径过滤，未触发时可手动运行一次。
 
 发布准备提交完成后，先单独推送标签，再用空的同步提交把版本改动快进到 `main`。同步提交的 `[skip ci]` 跳过普通分支 CI；发布标签指向不含跳过标记的准备提交，所以 Release 正常启动。以后发布沿用此顺序，不将分支与标签一起推送，也不把跳过标记写进标签指向的提交。

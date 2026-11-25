@@ -29,27 +29,46 @@ new file mode 100644
 +- Fixed things
 `;
 
-function fixture(passed, diff = bump) {
-  const github = {rest: {actions: {async listWorkflowRuns({workflow_id, head_sha}) {
-    return {data: {total_count: passed[head_sha]?.includes(workflow_id) ? 1 : 0}};
-  }}}};
+function fixture(runs, diff = bump) {
+  const github = {
+    rest: {actions: {async listWorkflowRuns({workflow_id, head_sha, status}) {
+      assert.equal(status, undefined, 'GitHub can omit successful runs with a server-side status filter');
+      return runs[head_sha]?.[workflow_id] ?? [];
+    }}},
+    async paginate(method, options) {
+      return method(options);
+    },
+  };
   const git = args => args[0] === 'rev-list' ? 'tag parent\n' : diff;
   return baseline.releaseBaseline({github, context: {repo: {owner: 'test', repo: 'aieyes'}}, sha: 'tag', git});
 }
-const both = ['core-native.yml', 'desktop.yml'];
+const success = sha => ({head_sha: sha, status: 'completed', conclusion: 'success'});
+const both = sha => ({'core-native.yml': [success(sha)], 'desktop.yml': [success(sha)]});
 
 test('version bumps and release notes reuse green parent CI', async () => {
-  assert.equal((await fixture({parent: both})).fullTests, false);
+  assert.equal((await fixture({parent: both('parent')})).fullTests, false);
 });
 test('green CI on the tagged commit itself is reused', async () => {
-  assert.equal((await fixture({tag: both}, 'diff --git a/crates/core/src/lib.rs b/crates/core/src/lib.rs\n+fix\n')).fullTests, false);
+  assert.equal((await fixture({tag: both('tag')}, 'diff --git a/crates/core/src/lib.rs b/crates/core/src/lib.rs\n+fix\n')).fullTests, false);
 });
 test('missing or partial parent CI runs full release tests', async () => {
   assert.equal((await fixture({})).fullTests, true);
-  assert.equal((await fixture({parent: ['core-native.yml']})).fullTests, true);
+  assert.equal((await fixture({parent: {'core-native.yml': [success('parent')]}})).fullTests, true);
+});
+test('only completed successful runs on the requested commit count', async () => {
+  const parent = both('parent');
+  const core = [
+    {...success('parent'), conclusion: 'failure'},
+    {...success('parent'), status: 'in_progress', conclusion: null},
+    success('other'),
+  ];
+  parent['core-native.yml'] = core;
+  assert.equal((await fixture({parent})).fullTests, true);
+  core.push(success('parent'));
+  assert.equal((await fixture({parent})).fullTests, false);
 });
 test('code or dependency changes in the release commit run full release tests', async () => {
-  assert.equal((await fixture({parent: both}, bump + 'diff --git a/crates/core/src/lib.rs b/crates/core/src/lib.rs\n+fix\n')).fullTests, true);
-  assert.equal((await fixture({parent: both}, bump.replace('+version = "0.1.64"', '+version = "0.1.64"\n+checksum = "abc"'))).fullTests, true);
+  assert.equal((await fixture({parent: both('parent')}, bump + 'diff --git a/crates/core/src/lib.rs b/crates/core/src/lib.rs\n+fix\n')).fullTests, true);
+  assert.equal((await fixture({parent: both('parent')}, bump.replace('+version = "0.1.64"', '+version = "0.1.64"\n+checksum = "abc"'))).fullTests, true);
   assert.equal(baseline.releaseOnlyChange('diff --git a/apps/macos/Info.plist b/apps/macos/Info.plist\n+<key>LSUIElement</key><true/>\n'), false);
 });

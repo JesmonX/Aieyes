@@ -23,8 +23,11 @@ function releaseOnlyChange(diff) {
 
 async function verified({github, repo, sha}) {
   for (const workflow_id of REQUIRED_WORKFLOWS) {
-    const runs = (await github.rest.actions.listWorkflowRuns({...repo, workflow_id, head_sha: sha, status: 'success', per_page: 1})).data;
-    if (!runs.total_count) return false;
+    // GitHub's status filter can omit successful runs when combined with head_sha.
+    const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+      ...repo, workflow_id, head_sha: sha, per_page: 100,
+    });
+    if (!runs.some(run => run.head_sha === sha && run.status === 'completed' && run.conclusion === 'success')) return false;
   }
   return true;
 }

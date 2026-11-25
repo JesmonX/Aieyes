@@ -13,7 +13,7 @@ on:
         type: boolean
         default: false
       full_tests:
-        description: 'Run every test even when branch CI already verified this source'
+        description: 'Run the full test suite even when branch CI already verified this source'
         type: boolean
         default: false
 permissions:
@@ -190,8 +190,9 @@ jobs:
       - name: macOS DMG
         if: runner.os == 'macOS'
         run: sh scripts/build-macos.sh release --dmg
+      # Match branch CI: SwiftUI tests require Metal support unavailable on the Intel runner.
       - name: macOS native checks
-        if: needs.validate.outputs.full_tests == 'true' && runner.os == 'macOS'
+        if: needs.validate.outputs.full_tests == 'true' && matrix.os == 'macos-15'
         run: sh scripts/test-native.sh
       - name: macOS package checks
         if: runner.os == 'macOS'
