@@ -42,6 +42,7 @@ struct AieyesCommands: Commands {
     private let popover = PanelPopover()
     private let orbitPopover = PanelPopover()
     private var activeOrbitProvider: String?
+    private var orbitAutoOpened = false
     private var petWindow: PetWindowController?
     private let dockPresence = DockPresence()
     private var appearanceController: AppAppearanceController?
@@ -119,7 +120,7 @@ struct AieyesCommands: Commands {
             model: model,
             checkUpdates: { AppUpdater.shared.check() },
             openOrbit: { [weak self] anchor, agent, rect, edge in
-                self?.toggleOrbitPopover(agent: agent, anchorView: anchor, anchorRect: rect, preferredEdge: edge)
+                self?.toggleOrbitPopover(agent: agent, anchorView: anchor, anchorRect: rect, preferredEdge: edge, autoTriggered: false, preferredSessionID: nil)
             },
             onDragStart: { [weak self] in
                 self?.closeOrbitPopover()
@@ -134,6 +135,25 @@ struct AieyesCommands: Commands {
                 self.model.setWindowVisible(true, window: "panel")
             }
         )
+        model.interaction.onAutoPopupRequested = { [weak self] session in
+            guard let self else { return }
+            guard !self.popover.isShown,
+                  !self.orbitPopover.isShown,
+                  let pet = self.petWindow,
+                  pet.isVisibleOnDesktop,
+                  !pet.isDraggingPet else { return }
+            // A just-activated session can need a new badge before it has an anchor.
+            pet.orbit.refresh()
+            guard let anchor = pet.orbitAnchor(for: session.provider) else { return }
+            self.toggleOrbitPopover(
+                agent: anchor.agent,
+                anchorView: anchor.view,
+                anchorRect: anchor.rect,
+                preferredEdge: anchor.edge,
+                autoTriggered: true,
+                preferredSessionID: session.id
+            )
+        }
         model.live.objectWillChange.sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         model.objectWillChange.sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         model.menuStatus.$snapshot.dropFirst().sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
@@ -245,8 +265,15 @@ struct AieyesCommands: Commands {
         // Stays highlighted while its panel is open, like system menu bar extras; set after the click's own tracking.
         DispatchQueue.main.async { [weak self] in if self?.popover.isShown == true { button.highlight(true) } }
     }
-    private func toggleOrbitPopover(agent: PetOrbitAgent, anchorView: NSView, anchorRect: NSRect, preferredEdge: NSRectEdge) {
-        if orbitPopover.isShown && activeOrbitProvider == agent.provider {
+    private func toggleOrbitPopover(
+        agent: PetOrbitAgent,
+        anchorView: NSView,
+        anchorRect: NSRect,
+        preferredEdge: NSRectEdge,
+        autoTriggered: Bool = false,
+        preferredSessionID: String? = nil
+    ) {
+        if !autoTriggered && orbitPopover.isShown && activeOrbitProvider == agent.provider {
             closeOrbitPopover()
             return
         }
@@ -257,6 +284,8 @@ struct AieyesCommands: Commands {
             model: model,
             agent: agent,
             orbit: orbit,
+            autoOpened: autoTriggered,
+            preferredSessionID: preferredSessionID,
             onOpenSessions: { [weak self] in
                 self?.closeOrbitPopover()
                 self?.openDetail(page: "sessions")
@@ -270,19 +299,31 @@ struct AieyesCommands: Commands {
         orbitPopover.contentViewController = hosting
         orbitPopover.appearance = NSApp.appearance
         activeOrbitProvider = agent.provider
+        orbitAutoOpened = autoTriggered
         petWindow?.selectedOrbitProvider = agent.provider
-        NSApp.activate(ignoringOtherApps: true)
+        if !autoTriggered {
+            NSApp.activate(ignoringOtherApps: true)
+        }
         orbitPopover.show(relativeTo: anchorRect, of: anchorView, preferredEdge: preferredEdge)
     }
     private func closeOrbitPopover() {
+        if let provider = activeOrbitProvider, let orbit = petWindow?.orbit,
+           let agent = orbit.agents.first(where: { $0.provider == provider }) {
+            let waiting = PetOrbitStore.activeSessions(for: agent, in: model.live.sessions)
+                .filter { $0.phase == .needsInput }
+            model.interaction.markDismissed(sessions: waiting)
+        }
         if orbitPopover.isShown { orbitPopover.performClose(nil) }
         activeOrbitProvider = nil
+        orbitAutoOpened = false
         petWindow?.selectedOrbitProvider = nil
     }
     private func dismissOutsidePanel() { if popover.isShown && !model.isPinned { popover.performClose(nil) } }
     @objc private func applicationDeactivated() {
         dismissOutsidePanel()
-        closeOrbitPopover()
+        if !orbitAutoOpened {
+            closeOrbitPopover()
+        }
     }
     func popoverDidShow(_ notification: Notification) {
         let target = (notification.object as? NSPopover) ?? popover
@@ -294,6 +335,7 @@ struct AieyesCommands: Commands {
     func popoverDidClose(_ notification: Notification) {
         if (notification.object as? NSPopover) === orbitPopover {
             activeOrbitProvider = nil
+            orbitAutoOpened = false
             petWindow?.selectedOrbitProvider = nil
             return
         }

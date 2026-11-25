@@ -348,6 +348,22 @@ private final class PetHost: NSHostingView<PetView> {
         return nil
     }
 
+    func orbitAnchor(for provider: String) -> (agent: PetOrbitAgent, rect: NSRect, edge: NSRectEdge)? {
+        guard let orbit, !orbit.agents.isEmpty else { return nil }
+        let scale = currentScale()
+        let slots = PetOrbitLayout.slots(count: orbit.agents.count, scale: scale)
+        let nodeSize = PetOrbitLayout.nodeSize * scale
+        let agentId = CoreContract.agentProvider(provider)
+        let matchIndex = orbit.agents.firstIndex(where: { $0.provider == agentId })
+            ?? orbit.agents.firstIndex(where: { $0.isOverflow && $0.overflowProviders.contains(agentId) })
+        guard let index = matchIndex, index < slots.count else { return nil }
+        let agent = orbit.agents[index]
+        let slot = slots[index]
+        let topRect = NSRect(x: slot.cx - nodeSize / 2, y: slot.cy - nodeSize / 2, width: nodeSize, height: nodeSize)
+        let rect = isFlipped ? topRect : NSRect(x: topRect.minX, y: bounds.height - topRect.maxY, width: topRect.width, height: topRect.height)
+        return (agent, rect, PetOrbitLayout.preferredEdge(for: slot, flipped: isFlipped))
+    }
+
     func updateHover(at point: NSPoint?) {
         guard let orbit else { return }
         if let point, let hit = hitOrbitAgent(at: point) {
@@ -440,6 +456,17 @@ private final class PetHost: NSHostingView<PetView> {
     var selectedOrbitProvider: String? {
         get { orbit.selectedProvider }
         set { orbit.selectedProvider = newValue }
+    }
+    var isVisibleOnDesktop: Bool {
+        appliedPreferences?.enabled == true && !fullscreen && panel.isVisible
+    }
+    var isDraggingPet: Bool {
+        (panel.contentView as? PetHost)?.dragging == true
+    }
+    func orbitAnchor(for provider: String) -> (view: NSView, agent: PetOrbitAgent, rect: NSRect, edge: NSRectEdge)? {
+        guard isVisibleOnDesktop, let host = panel.contentView as? PetHost,
+              let hit = host.orbitAnchor(for: provider) else { return nil }
+        return (host, hit.agent, hit.rect, hit.edge)
     }
     private var subscriptions = Set<AnyCancellable>()
     private var petState = PetState.idle

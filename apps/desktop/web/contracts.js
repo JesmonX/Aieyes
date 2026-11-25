@@ -1300,6 +1300,41 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null
+    },
+    "sessions.interaction.status": {
+      "lane": "configuration",
+      "updateBehavior": "observe",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "sessions.interaction.configure": {
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "sessions.interaction.inspect": {
+      "lane": "network",
+      "updateBehavior": "cancel",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "sessions.interaction.respond": {
+      "lane": "network",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "sessions.interaction.handoff": {
+      "lane": "network",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
     }
   },
   "subscriptions": {
@@ -1736,7 +1771,7 @@
       "monochrome": false
     }
   },
-  "contractHash": "c12a715ae4710fb5b07f17ea416eb9948dcc6fc869944d2bcd43972693c09193",
+  "contractHash": "e32ef382b1fa345d2adb562f8f3bb15855002347b46622c8531767d653ecc187",
   "petFrameDurations": [
     [
       280,

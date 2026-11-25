@@ -14,7 +14,7 @@ use std::time::Duration;
 const REMOTE: &str = include_str!("../../../../scripts/session_channel.py");
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(super) struct Outcome {
+pub(crate) struct Outcome {
     pub status: String,
     pub reason: String,
     pub receipt: Value,
@@ -72,7 +72,7 @@ pub(super) fn capability(target: &Session, config: &Config) -> &'static str {
     }
 }
 
-pub(super) fn source(settings: &Settings, target: &Session) -> Result<Source> {
+pub(crate) fn source(settings: &Settings, target: &Session) -> Result<Source> {
     let mut source = settings
         .sources
         .iter()
@@ -93,7 +93,7 @@ pub(super) fn source(settings: &Settings, target: &Session) -> Result<Source> {
     Ok(source)
 }
 
-fn remote(
+pub(crate) fn remote(
     settings: &Settings,
     source: &Source,
     target: &Session,
@@ -142,7 +142,7 @@ pub(super) fn saved_prompt(store: &Store, target: &Session) -> Result<Option<Str
 }
 
 /// Agents without a Claude or Codex transcript have their own bounded readers.
-fn local_excerpt(source: &Source, target: &Session) -> content::Excerpt {
+pub(crate) fn local_excerpt(source: &Source, target: &Session) -> content::Excerpt {
     super::opencode::excerpt(source, target)
         .or_else(|| super::readers::excerpt(source, target))
         .unwrap_or_else(|| content::local(source, target))
@@ -226,7 +226,7 @@ fn local_codex(store: &Store, source: &Source, target: &Session, text: &str) -> 
     }
 }
 
-fn tmux(target: &Session, text: &str) -> Option<Outcome> {
+pub(crate) fn tmux(target: &Session, text: &str) -> Option<Outcome> {
     let pid = target.session.pid?;
     let start = target.session.process_start.filter(|n| *n > 0)?;
     let identity = sessions::focus_target(pid, start);
@@ -306,7 +306,7 @@ fn tmux(target: &Session, text: &str) -> Option<Outcome> {
     Some(outcome)
 }
 
-pub(super) fn agent_foreground(provider: &str, name: &str) -> bool {
+pub(crate) fn agent_foreground(provider: &str, name: &str) -> bool {
     let name = name
         .rsplit(['/', '\\'])
         .next()

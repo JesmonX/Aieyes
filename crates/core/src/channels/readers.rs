@@ -13,7 +13,7 @@ use std::{io::Read, path::Path};
 const MAX_TAIL: usize = 2 * 1024 * 1024;
 
 /// `None` when this source has no dedicated reader or its record is unavailable.
-pub(super) fn excerpt(source: &Source, target: &Session) -> Option<Excerpt> {
+pub(crate) fn excerpt(source: &Source, target: &Session) -> Option<Excerpt> {
     let waiting = target.session.phase == Phase::NeedsInput;
     let native = &target.session.native_session;
     // The native identifier becomes a path component or a query parameter.
@@ -67,10 +67,68 @@ fn text(value: &Value) -> String {
     value.as_str().unwrap_or("").to_owned()
 }
 
+/// Parse a `questions` field that may be either a JSON array or a JSON-encoded string array.
+fn parse_questions_array(value: &Value) -> Option<Vec<Value>> {
+    if let Some(arr) = value.as_array() {
+        return (!arr.is_empty()).then(|| arr.clone());
+    }
+    value
+        .as_str()
+        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+        .and_then(|v| v.as_array().cloned())
+        .filter(|arr| !arr.is_empty())
+}
+
+fn normalize_questions_value(items: &[Value]) -> Value {
+    let rows = items
+        .iter()
+        .enumerate()
+        .map(|(i, q)| {
+            let id = q["id"]
+                .as_str()
+                .or_else(|| q["header"].as_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| (i + 1).to_string());
+            let title = q["question"]
+                .as_str()
+                .or_else(|| q["title"].as_str())
+                .unwrap_or("");
+            let multi = q["multiSelect"] == true || q["is_multi_select"] == true;
+            let options = q["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|o| {
+                    let label = o["label"]
+                        .as_str()
+                        .or_else(|| o["name"].as_str())
+                        .or_else(|| o.as_str())
+                        .unwrap_or("");
+                    let mut item = json!({"label": label});
+                    if let Some(desc) = o["description"].as_str().filter(|s| !s.is_empty()) {
+                        item["description"] = json!(desc);
+                    }
+                    if let Some(prev) = o["preview"].as_str().filter(|s| !s.trim().is_empty()) {
+                        item["preview"] = json!(prev);
+                    }
+                    item
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "id": id,
+                "question": title,
+                "multiSelect": multi,
+                "options": options,
+            })
+        })
+        .collect::<Vec<_>>();
+    Value::Array(rows)
+}
+
 /// Kiro appends `{id,timestamp,payload}`. An approval stays pending until it is resolved.
 fn kiro(rows: Vec<Value>, waiting: bool) -> Excerpt {
     let mut out = Excerpt::default();
-    let mut pending: Option<(String, String)> = None;
+    let mut pending: Option<(String, String, Value)> = None;
     for v in rows {
         let p = &v["payload"];
         match p["type"].as_str().unwrap_or("") {
@@ -94,17 +152,17 @@ fn kiro(rows: Vec<Value>, waiting: bool) -> Excerpt {
                     .as_str()
                     .or_else(|| p["interactionType"].as_str())
                     .unwrap_or("1");
+                let raw = json!([{"id":id,"question":p["question"],"options":options}]);
                 pending = Some((
                     text(&p["toolCallId"]),
-                    content::questions(
-                        &json!([{"id":id,"question":p["question"],"options":options}]),
-                    ),
+                    content::questions(&raw),
+                    normalize_questions_value(raw.as_array().unwrap()),
                 ));
             }
             "interaction_resolved" => {
                 if pending
                     .as_ref()
-                    .is_some_and(|(call, _)| p["toolCallId"].as_str() == Some(call))
+                    .is_some_and(|(call, _, _)| p["toolCallId"].as_str() == Some(call))
                 {
                     pending = None;
                 }
@@ -115,7 +173,12 @@ fn kiro(rows: Vec<Value>, waiting: bool) -> Excerpt {
     }
     if waiting {
         // Without a pending interaction the model asked in its last message.
-        out.question = pending.map_or_else(|| out.text.clone(), |(_, question)| question);
+        if let Some((_, question, structured)) = pending {
+            out.question = question;
+            out.structured_questions = Some(structured);
+        } else {
+            out.question = out.text.clone();
+        }
     }
     out
 }
@@ -150,19 +213,37 @@ fn antigravity(rows: Vec<Value>, waiting: bool) -> Excerpt {
     }
     if waiting && let Some(call) = calls.get(finished) {
         let args = &call["args"];
-        out.question = if args["questions"].is_array() {
-            content::questions(&args["questions"])
+        if let Some(items) = parse_questions_array(&args["questions"]) {
+            let normalized = normalize_questions_value(&items);
+            out.question = content::questions(&normalized);
+            out.structured_questions = Some(normalized);
         } else {
-            let detail = ["CommandLine", "toolSummary", "Description"]
+            let tool_name = call["name"].as_str().unwrap_or("");
+            let command = args["CommandLine"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("");
+            let summary = ["toolSummary", "Description"]
                 .iter()
                 .find_map(|k| args[*k].as_str().filter(|s| !s.is_empty()))
-                .map_or_else(|| args.to_string(), str::to_owned);
-            format!(
-                "{}\n{}",
-                call["name"].as_str().unwrap_or(""),
-                clip(&detail, 4000)
-            )
-        };
+                .unwrap_or("");
+            let detail = if !command.is_empty() {
+                command.to_owned()
+            } else if !summary.is_empty() {
+                summary.to_owned()
+            } else {
+                args.to_string()
+            };
+            out.question = format!("{tool_name}\n{}", clip(&detail, 4000));
+            if !tool_name.is_empty() {
+                out.structured_approval = Some(json!({
+                    "toolName": tool_name,
+                    "reason": if !summary.is_empty() { summary.to_owned() } else { tool_name.to_owned() },
+                    "command": clip(if !command.is_empty() { command } else { &detail }, 4000),
+                    "details": "",
+                }));
+            }
+        }
     }
     out
 }
@@ -215,8 +296,8 @@ fn harness_rows(path: &Path, root: &Path, target: &Session) -> Option<Vec<Value>
 
 fn harness(rows: Vec<Value>) -> Excerpt {
     let mut out = Excerpt::default();
-    let mut question: Option<(String, String)> = None;
-    let mut approval: Option<(String, String)> = None;
+    let mut question: Option<(String, String, Option<Value>)> = None;
+    let mut approval: Option<(String, String, Value)> = None;
     let mut call = (String::new(), String::new());
     for v in rows {
         let d = &v["data"];
@@ -243,31 +324,49 @@ fn harness(rows: Vec<Value>) -> Excerpt {
                 if d["name"] == "ask_user_question"
                     && let Ok(args) = serde_json::from_str::<Value>(&call.1)
                 {
-                    question = Some((call.0.clone(), content::questions(&args["questions"])));
+                    let parsed = parse_questions_array(&args["questions"])
+                        .map(|items| normalize_questions_value(&items));
+                    let formatted = parsed
+                        .as_ref()
+                        .map(content::questions)
+                        .unwrap_or_else(|| content::questions(&args["questions"]));
+                    question = Some((call.0.clone(), formatted, parsed));
                 }
             }
             "tool/result" => {
                 if question
                     .as_ref()
-                    .is_some_and(|(id, _)| d["message"]["toolCallId"].as_str() == Some(id))
+                    .is_some_and(|(id, _, _)| d["message"]["toolCallId"].as_str() == Some(id))
                 {
                     question = None;
                 }
             }
             "approval/asked" => {
-                let mut lines = vec![text(&d["toolName"])];
-                if let Some(reason) = d["reason"].as_str().filter(|s| !s.is_empty()) {
-                    lines.push(reason.to_owned());
+                let tool_name = text(&d["toolName"]);
+                let reason = d["reason"].as_str().unwrap_or("").to_owned();
+                let mut lines = vec![tool_name.clone()];
+                if !reason.is_empty() {
+                    lines.push(reason.clone());
                 }
-                if !call.0.is_empty() && d["callId"].as_str() == Some(&call.0) {
-                    lines.push(clip(&call.1, 4000));
-                }
-                approval = Some((text(&d["id"]), lines.join("\n")));
+                let cmd = if !call.0.is_empty() && d["callId"].as_str() == Some(&call.0) {
+                    let clipped = clip(&call.1, 4000);
+                    lines.push(clipped.clone());
+                    clipped
+                } else {
+                    String::new()
+                };
+                let structured = json!({
+                    "toolName": tool_name,
+                    "reason": reason,
+                    "command": cmd,
+                    "details": "",
+                });
+                approval = Some((text(&d["id"]), lines.join("\n"), structured));
             }
             "approval/decided" => {
                 if approval
                     .as_ref()
-                    .is_some_and(|(id, _)| d["id"].as_str() == Some(id))
+                    .is_some_and(|(id, _, _)| d["id"].as_str() == Some(id))
                 {
                     approval = None;
                 }
@@ -279,7 +378,13 @@ fn harness(rows: Vec<Value>) -> Excerpt {
             _ => {}
         }
     }
-    out.question = approval.or(question).map(|(_, q)| q).unwrap_or_default();
+    if let Some((_, q, structured)) = approval {
+        out.question = q;
+        out.structured_approval = Some(structured);
+    } else if let Some((_, q, structured)) = question {
+        out.question = q;
+        out.structured_questions = structured;
+    }
     out
 }
 
@@ -330,7 +435,13 @@ fn qoder_desktop(database: &Path, native: &str) -> Option<Excerpt> {
                     Some("completed" | "failed" | "error" | "cancelled" | "interrupted")
                 )
         }) {
-            out.question = content::questions(&tool["input"]["questions"]);
+            if let Some(items) = parse_questions_array(&tool["input"]["questions"]) {
+                let normalized = normalize_questions_value(&items);
+                out.question = content::questions(&normalized);
+                out.structured_questions = Some(normalized);
+            } else {
+                out.question = content::questions(&tool["input"]["questions"]);
+            }
         }
     }
     Some(out)

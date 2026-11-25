@@ -13,8 +13,8 @@ use rusqlite::params;
 use serde_json::{Value, json};
 use std::{path::PathBuf, time::Duration};
 
-pub(super) const FORM: &str = "aieyes/opencodeForm";
-pub(super) const PERMISSION: &str = "aieyes/opencodePermission";
+pub(crate) const FORM: &str = "aieyes/opencodeForm";
+pub(crate) const PERMISSION: &str = "aieyes/opencodePermission";
 const UNSUPPORTED: &str = "aieyes/opencodeUnsupported";
 
 struct Client {
@@ -350,13 +350,244 @@ fn client(source: &Source, target: &Session) -> Option<Client> {
 }
 
 /// The pending question or permission request, as the card and reply code expect it.
-pub(super) fn request(source: &Source, target: &Session) -> Option<Value> {
+pub(crate) fn request(source: &Source, target: &Session) -> Option<Value> {
     client(source, target)?.pending(target).ok().flatten()
 }
 
+/// Fast loopback probe for the session monitor so pending in-memory permissions/forms show up as NeedsInput.
+pub(crate) fn probe_pending_id(source: &Source, native: &str) -> Option<(String, String)> {
+    if !id(native, "ses_") {
+        return None;
+    }
+    let path = registration(source)?;
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() > 65536 {
+        return None;
+    }
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    let url = reqwest::Url::parse(value["url"].as_str().unwrap_or("")).ok()?;
+    if url.scheme() != "http"
+        || !matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    let password = value["password"].as_str().filter(|s| !s.is_empty())?;
+    let http = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_millis(200))
+        .timeout(Duration::from_millis(350))
+        .build()
+        .ok()?;
+    let origin = url.origin().ascii_serialization();
+    for (kind, prefix) in [("permission", "per"), ("form", "frm_")] {
+        let Ok(resp) = http
+            .get(format!("{origin}/api/session/{native}/{kind}"))
+            .basic_auth("opencode", Some(password))
+            .send()
+        else {
+            return None;
+        };
+        if resp.status().as_u16() != 200 {
+            continue;
+        }
+        let Ok(body) = resp.bytes() else {
+            continue;
+        };
+        if body.len() > 1024 * 1024 {
+            continue;
+        }
+        let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
+            continue;
+        };
+        if let Some(item_id) = parsed["data"]
+            .as_array()
+            .and_then(|rows| rows.first())
+            .and_then(|row| row["id"].as_str())
+            .filter(|v| id(v, prefix))
+        {
+            return Some((kind.to_owned(), item_id.to_owned()));
+        }
+    }
+    None
+}
+
 /// `None` when the source is not an OpenCode session reachable through the service.
-pub(super) fn excerpt(source: &Source, target: &Session) -> Option<content::Excerpt> {
+pub(crate) fn excerpt(source: &Source, target: &Session) -> Option<content::Excerpt> {
     Some(client(source, target)?.excerpt(target))
+}
+
+/// Structured desktop reply for OpenCode forms, permissions, and follow-up text.
+pub(crate) fn execute_structured(
+    source: &Source,
+    target: &Session,
+    expected_hash: Option<&str>,
+    action: &str,
+    answers_map: Option<&Value>,
+    text: Option<&str>,
+) -> Option<Outcome> {
+    let client = client(source, target)?;
+    let pending = match client.pending(target) {
+        Ok(value) => value,
+        Err(error) => return Some(Outcome::blocked(&error.to_string())),
+    };
+    let Some(request) = pending else {
+        if matches!(action, "approve" | "decline" | "cancel") {
+            return Some(Outcome::blocked("当前没有待处理的审批请求"));
+        }
+        if target.session.phase == Phase::NeedsInput {
+            return Some(Outcome::blocked("原会话没有可回答的请求，请核对原窗口"));
+        }
+        if target.session.phase.active() {
+            return Some(Outcome::blocked("原会话仍在执行，请等待本轮结束后重试"));
+        }
+        let body = text.unwrap_or("").trim();
+        if body.is_empty() {
+            return Some(Outcome::blocked("输入内容不能为空"));
+        }
+        return Some(client.followup(target, body));
+    };
+    if expected_hash != Some(&codex::fingerprint(&request)) {
+        return Some(Outcome::blocked("问题已改变或尚未同步，请刷新后再操作"));
+    }
+    let body = match structured_body(&request, action, answers_map, text) {
+        Ok(value) => value,
+        Err(error) => return Some(Outcome::blocked(&error.to_string())),
+    };
+    let item = request["params"]["itemId"].as_str().unwrap_or("");
+    let kind = if request["method"] == FORM {
+        "form"
+    } else {
+        "permission"
+    };
+    let path = format!(
+        "/api/session/{}/{kind}/{item}/reply",
+        target.session.native_session
+    );
+    Some(match client.call(Method::POST, &path, Some(&body)) {
+        Ok((200 | 204, _)) => Outcome::confirmed(
+            "原会话已接收回答",
+            json!({"adapter":"opencode","requestId":item}),
+        ),
+        Ok((404 | 409, _)) => Outcome::blocked("原会话的问题已结束或改变，请刷新后再操作"),
+        Ok((status, _)) if status < 500 => Outcome::blocked("原会话拒绝了指令，请核对原窗口"),
+        _ => Outcome::uncertain("回答可能已提交，请核对原会话"),
+    })
+}
+
+fn structured_body(
+    request: &Value,
+    action: &str,
+    answers_map: Option<&Value>,
+    text: Option<&str>,
+) -> Result<Value> {
+    match request["method"].as_str().unwrap_or("") {
+        PERMISSION => Ok(json!({"decision": match action {
+            "approve" | "accept" => "once",
+            "decline" | "deny" => "reject",
+            _ => bail!("不支持的审批操作"),
+        }})),
+        FORM => {
+            if let Some(map) = answers_map.and_then(Value::as_object) {
+                let questions = request["params"]["questions"]
+                    .as_array()
+                    .context("原会话问题已不可用")?;
+                ensure!(!questions.is_empty(), "原会话问题已不可用");
+                let mut out = serde_json::Map::new();
+                for q in questions {
+                    let id = q["id"].as_str().context("原会话问题缺少标识")?;
+                    let key = q["key"].as_str().context("原会话问题缺少标识")?;
+                    let raw = map
+                        .get(id)
+                        .or_else(|| map.get(key))
+                        .context("请回答所有问题后再提交")?;
+                    let options = q["options"].as_array().map_or(&[][..], Vec::as_slice);
+                    let pick_scalar = |s: &str| -> Result<Value> {
+                        if let Some(option) = options.iter().find(|o| {
+                            o["label"].as_str().is_some_and(|l| l.eq_ignore_ascii_case(s))
+                                || o["value"].as_str() == Some(s)
+                        }) {
+                            return Ok(option["value"].clone());
+                        }
+                        ensure!(
+                            options.is_empty() || q["custom"] == true,
+                            "回答不在可选项中，请重新选择"
+                        );
+                        Ok(json!(s))
+                    };
+                    let val = match q["kind"].as_str().unwrap_or("") {
+                        "multiselect" => {
+                            let items: Vec<String> = if let Some(arr) = raw.as_array() {
+                                arr.iter()
+                                    .filter_map(Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                                    .map(str::to_owned)
+                                    .collect()
+                            } else if let Some(s) = raw.as_str() {
+                                s.split([',', '，'])
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                                    .map(str::to_owned)
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
+                            ensure!(!items.is_empty(), "问题回答不能为空");
+                            Value::Array(
+                                items
+                                    .iter()
+                                    .map(|s| pick_scalar(s))
+                                    .collect::<Result<_>>()?,
+                            )
+                        }
+                        "boolean" => {
+                            if let Some(b) = raw.as_bool() {
+                                json!(b)
+                            } else {
+                                let s = raw.as_str().unwrap_or("").trim();
+                                ensure!(!s.is_empty(), "问题回答不能为空");
+                                pick_scalar(s)?
+                            }
+                        }
+                        "integer" => {
+                            let s = raw
+                                .as_i64()
+                                .map(|n| n.to_string())
+                                .or_else(|| raw.as_str().map(|s| s.trim().to_owned()))
+                                .unwrap_or_default();
+                            json!(s.parse::<i64>().ok().context("请输入有效的整数")?)
+                        }
+                        "number" => {
+                            let s = raw
+                                .as_f64()
+                                .map(|n| n.to_string())
+                                .or_else(|| raw.as_str().map(|s| s.trim().to_owned()))
+                                .unwrap_or_default();
+                            json!(
+                                s.parse::<f64>()
+                                    .ok()
+                                    .filter(|n| n.is_finite())
+                                    .context("请输入有效的数字")?
+                            )
+                        }
+                        "string" => {
+                            let s = raw.as_str().unwrap_or("").trim();
+                            ensure!(!s.is_empty(), "问题回答不能为空");
+                            pick_scalar(s)?
+                        }
+                        _ => bail!("此类输入需要回到原窗口处理"),
+                    };
+                    out.insert(key.into(), val);
+                }
+                return Ok(json!({"answer":out}));
+            }
+            answer(request, text.unwrap_or(""))
+        }
+        _ => bail!("此类输入需要回到原窗口处理"),
+    }
 }
 
 /// `None` leaves the command to the terminal adapters.

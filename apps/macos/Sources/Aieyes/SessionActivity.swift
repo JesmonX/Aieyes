@@ -23,10 +23,11 @@ struct LiveSession: Identifiable, Decodable, Equatable {
     /// Local agent process; absent for SSH sessions, which never focus a local window.
     var pid: Int32? = nil, processStart: Double? = nil
     var nativeSession: String? = nil, client: String? = nil, subagentCount: Int? = nil
+    var inputStateKey: String? = nil
     init(id: String, source: String, phase: SessionPhase, updatedAt: Date) {
         self.id = id; self.source = source; self.phase = phase; self.updatedAt = updatedAt
     }
-    enum CodingKeys: String, CodingKey { case id, source, phase, updatedAt, provider, machine, machineId, sourceId, turnId, workspace, turnStartedAt, turnEndedAt, usage, pid, processStart, nativeSession, client, subagentCount }
+    enum CodingKeys: String, CodingKey { case id, source, phase, updatedAt, provider, machine, machineId, sourceId, turnId, workspace, turnStartedAt, turnEndedAt, usage, pid, processStart, nativeSession, client, subagentCount, inputStateKey }
     init(from decoder: Decoder) throws {
         let row = try decoder.container(keyedBy: CodingKeys.self)
         id = try row.decode(String.self, forKey: .id)
@@ -48,6 +49,7 @@ struct LiveSession: Identifiable, Decodable, Equatable {
         nativeSession = try row.decodeIfPresent(String.self, forKey: .nativeSession)
         client = try row.decodeIfPresent(String.self, forKey: .client)
         subagentCount = try row.decodeIfPresent(Int.self, forKey: .subagentCount)
+        inputStateKey = try row.decodeIfPresent(String.self, forKey: .inputStateKey)
     }
     var focusable: Bool { machineId == "local" && ((pid ?? 0) > 0 || threadURL != nil) }
     var threadURL: URL? {

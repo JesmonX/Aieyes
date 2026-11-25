@@ -293,6 +293,7 @@ struct AccountFlowResult {
     /// Webhook delivery, server alerts, minute history and the launch record.
     let outbound = OutboundEventService()
     let channels = ChatChannelService()
+    let interaction = SessionInteractionStore()
     private let automaticEngine = EngineClient(configurationOnly: true)
     private var automaticTask: Task<Void, Never>?
     @Published var automaticSaving = false
@@ -888,6 +889,7 @@ struct AccountFlowResult {
             resetNotifications.start()
             outbound.start(self)
             channels.start(self)
+            interaction.start(self)
             startSessionMonitoring()
             startRuntimeMonitoring()
             synchronizeAccountDeployments()
@@ -1536,7 +1538,7 @@ struct AccountFlowResult {
         sessionTask?.cancel(); sessionTask = nil
         runtimeTask?.cancel(); runtimeRefresh?.cancel(); summaryEngine.stop()
         if let runtimeObserver { NotificationCenter.default.removeObserver(runtimeObserver) }
-        automaticTask?.cancel(); automaticEngine.stop(); resetNotifications.stop(); outbound.stop(); channels.stop()
+        automaticTask?.cancel(); automaticEngine.stop(); resetNotifications.stop(); outbound.stop(); channels.stop(); interaction.stop()
         filterRefresh?.cancel(); reloadTask?.cancel(); quotaScheduleTask?.cancel()
         deploymentSyncTask?.cancel(); settingsRefreshTask?.cancel(); generalSaveTask?.cancel(); petLibraryTask?.cancel()
         for task in antigravityRefreshTasks.values { task.cancel() }

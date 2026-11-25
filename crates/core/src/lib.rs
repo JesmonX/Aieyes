@@ -64,6 +64,7 @@ pub mod rolling_estimates;
 pub mod runtime;
 pub mod session_events;
 pub mod session_hooks;
+pub mod session_interaction;
 mod session_processes;
 pub mod session_sounds;
 pub mod session_usage;
@@ -533,6 +534,9 @@ impl Engine {
             "webhooks.dispatch" => self.dispatch_webhooks(),
             "webhooks.test" => self.test_webhook(&params),
             name if name.starts_with("channels.") => self.channel_call(name, params),
+            name if name.starts_with("sessions.interaction.") => {
+                session_interaction::call(&self.store, name, params)
+            }
             "hosts.history" => {
                 let settings = self.store.settings()?;
                 self.sync_host_observer(&settings);
@@ -605,6 +609,7 @@ impl Engine {
                 );
                 // Channel publication runs on its own worker; the observer hands off identity only.
                 let _ = channels::observe(&self.store, &snapshot);
+                let _ = session_interaction::observe(&self.store, &snapshot);
                 for (kind, session) in
                     webhooks::session_transitions(&mut self.session_marks, &snapshot.sessions)
                 {

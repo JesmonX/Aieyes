@@ -51,9 +51,13 @@ const PANEL_HEIGHT: f64 = 720.0;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 const ORBIT_POPOVER_WIDTH: f64 = 320.0;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
+const ORBIT_INTERACTION_WIDTH: f64 = 368.0;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 const ORBIT_POPOVER_MIN_HEIGHT: f64 = 188.0;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 const ORBIT_POPOVER_MAX_HEIGHT: f64 = 360.0;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+const ORBIT_INTERACTION_MAX_HEIGHT: f64 = 480.0;
 /// Mirrors `Preferences::panel_compact` so geometry code needs no state lock.
 static PANEL_COMPACT: AtomicBool = AtomicBool::new(false);
 fn panel_width() -> f64 {
@@ -130,6 +134,9 @@ struct ShellState {
     snapshot: Snapshot,
     orbit_agents: Vec<aieyes_core::pets::PetOrbitAgent>,
     orbit_agent: Option<String>,
+    orbit_auto: bool,
+    orbit_preferred_session: Option<String>,
+    dismissed_waiting: std::collections::HashSet<String>,
     pet_asset: Value,
     floating: bool,
     visible: bool,
@@ -383,29 +390,33 @@ fn panel_dimensions(
     (width, height)
 }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
-fn orbit_popover_logical_height(state: &ShellState, provider: &str) -> f64 {
-    let count = state
+fn orbit_popover_logical_size(state: &ShellState, provider: &str) -> (f64, f64) {
+    let agent = state
         .orbit_agents
         .iter()
-        .find(|item| item.provider == provider)
-        .map(|item| item.active_count)
-        .unwrap_or(0);
-    if count == 0 {
-        return ORBIT_POPOVER_MIN_HEIGHT;
+        .find(|item| item.provider == provider);
+    let count = agent.map(|item| item.active_count).unwrap_or(0);
+    if agent.is_some_and(|item| item.phase == aieyes_core::sessions::Phase::NeedsInput) {
+        let h = (380.0 + (count.saturating_sub(1).min(2) as f64) * 52.0)
+            .clamp(320.0, ORBIT_INTERACTION_MAX_HEIGHT);
+        return (ORBIT_INTERACTION_WIDTH, h);
     }
-    (124.0 + (count.min(3) as f64) * 76.0).clamp(ORBIT_POPOVER_MIN_HEIGHT, ORBIT_POPOVER_MAX_HEIGHT)
+    if count == 0 {
+        return (ORBIT_POPOVER_WIDTH, ORBIT_POPOVER_MIN_HEIGHT);
+    }
+    (
+        ORBIT_POPOVER_WIDTH,
+        (124.0 + (count.min(3) as f64) * 76.0)
+            .clamp(ORBIT_POPOVER_MIN_HEIGHT, ORBIT_POPOVER_MAX_HEIGHT),
+    )
 }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn active_panel_size(app: &AppHandle, scale: f64, work_height: Option<u32>) -> (u32, u32) {
     if let Ok(state) = app.state::<Desktop>().state.lock()
         && let Some(provider) = state.orbit_agent.as_deref()
     {
-        return panel_dimensions(
-            ORBIT_POPOVER_WIDTH,
-            orbit_popover_logical_height(&state, provider),
-            scale,
-            work_height,
-        );
+        let (w, h) = orbit_popover_logical_size(&state, provider);
+        return panel_dimensions(w, h, scale, work_height);
     }
     panel_size(scale, work_height)
 }
@@ -690,6 +701,9 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             snapshot: Snapshot::default(),
             orbit_agents: Vec::new(),
             orbit_agent: None,
+            orbit_auto: false,
+            orbit_preferred_session: None,
+            dismissed_waiting: std::collections::HashSet::new(),
             pet_asset: Value::Null,
             floating: false,
             visible: false,
@@ -833,6 +847,8 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             aieyes_core::models::Settings,
             Vec<aieyes_core::models::QuotaSnapshot>,
         )> = None;
+        let mut waiting_seeded = false;
+        let mut known_waiting = std::collections::HashSet::<String>::new();
         loop {
             let preferences = store
                 .settings()
@@ -844,12 +860,49 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                         monitor.read_with_usage(&settings, std::time::SystemTime::now(), &store);
                     webhooks.observe(&store, &settings, &snapshot.sessions);
                     let _ = aieyes_core::channels::observe(&store, &snapshot);
+                    let _ = aieyes_core::session_interaction::observe(&store, &snapshot);
                     snapshot
                 }
                 Err(_) => Snapshot {
                     unavailable: true,
                     ..Snapshot::default()
                 },
+            };
+            let auto_popup_enabled = aieyes_core::session_interaction::call_status(&store)
+                .map(|(enabled, auto_popup)| enabled && auto_popup)
+                .unwrap_or(false);
+            let current_waiting: Vec<(String, String, String)> = snapshot
+                .sessions
+                .iter()
+                .filter(|s| s.phase == aieyes_core::sessions::Phase::NeedsInput)
+                .map(|s| {
+                    let key = format!(
+                        "{}|{}",
+                        s.id,
+                        s.input_state_key
+                            .as_deref()
+                            .unwrap_or(&s.turn_id)
+                    );
+                    (key, s.id.clone(), s.provider.clone())
+                })
+                .collect();
+            let current_waiting_keys: std::collections::HashSet<String> =
+                current_waiting.iter().map(|(k, _, _)| k.clone()).collect();
+            let auto_candidate = if !waiting_seeded {
+                waiting_seeded = true;
+                known_waiting = current_waiting_keys.clone();
+                None
+            } else {
+                let candidate = if auto_popup_enabled {
+                    current_waiting
+                        .iter()
+                        .find(|(k, _, _)| !known_waiting.contains(k))
+                        .cloned()
+                } else {
+                    None
+                };
+                known_waiting = current_waiting_keys.clone();
+                candidate
             };
             let current = store
                 .db
@@ -935,6 +988,11 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                         quota_ring,
                         orbit_agents,
                     );
+                    if let Some((dedup_key, session_id, provider)) = auto_candidate {
+                        maybe_auto_open_orbit(&app, &dedup_key, &session_id, &provider, &current_waiting_keys);
+                    } else if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+                        state.dismissed_waiting.retain(|k| current_waiting_keys.contains(k));
+                    }
                     refresh_menu(&app);
                 })
                 .is_err()
@@ -2119,6 +2177,8 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "pet": pet,
         "petOrbit": state.orbit_agents,
         "orbitAgent": state.orbit_agent,
+        "orbitAuto": state.orbit_auto,
+        "orbitPreferredSession": state.orbit_preferred_session,
         "summary": crate::localization::text(&state.snapshot.summary()), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
         "sources": state.snapshot.sources, "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
         "hidden": state.hidden, "panelOpen": state.panel, "panelPinned": state.pin,
@@ -2350,6 +2410,61 @@ fn detail_view(view: &Value) -> Result<Value, String> {
     Ok(Value::Object(filter))
 }
 
+fn maybe_auto_open_orbit(
+    app: &AppHandle,
+    dedup_key: &str,
+    session_id: &str,
+    provider: &str,
+    current_waiting: &std::collections::HashSet<String>,
+) {
+    let target_provider = {
+        let desktop = app.state::<Desktop>();
+        let Ok(mut state) = desktop.state.lock() else {
+            return;
+        };
+        state.dismissed_waiting.retain(|k| current_waiting.contains(k));
+        if state.dismissed_waiting.contains(dedup_key)
+            || !state.visible
+            || state.hidden
+            || state.panel
+            || state.native_interacting
+        {
+            return;
+        }
+        let agent_id = aieyes_core::contracts::provider(provider)
+            .map(|p| p.agent_id)
+            .unwrap_or(provider);
+        let resolved = state
+            .orbit_agents
+            .iter()
+            .find(|a| a.provider == agent_id)
+            .or_else(|| {
+                state.orbit_agents.iter().find(|a| {
+                    a.provider == aieyes_core::pets::ORBIT_OVERFLOW_PROVIDER
+                        && a.overflow_providers.iter().any(|p| p == agent_id)
+                })
+            })
+            .map(|a| a.provider.clone());
+        let Some(orbit_provider) = resolved else {
+            return;
+        };
+        state.dismissed_waiting.insert(dedup_key.to_owned());
+        state.orbit_agent = Some(orbit_provider.clone());
+        state.orbit_auto = true;
+        state.orbit_preferred_session = Some(session_id.to_owned());
+        orbit_provider
+    };
+    let _ = target_provider;
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    {
+        let _ = request_native_panel(app, PanelRequest::Set(true));
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        let _ = set_panel(app, true);
+    }
+}
+
 fn open_orbit_agent(app: &AppHandle, provider: &str) -> Result<(), String> {
     let provider = provider.trim();
     if provider.is_empty() {
@@ -2360,9 +2475,13 @@ fn open_orbit_agent(app: &AppHandle, provider: &str) -> Result<(), String> {
         let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
         if state.panel && state.orbit_agent.as_deref() == Some(provider) {
             state.orbit_agent = None;
+            state.orbit_auto = false;
+            state.orbit_preferred_session = None;
             true
         } else {
             state.orbit_agent = Some(provider.to_owned());
+            state.orbit_auto = false;
+            state.orbit_preferred_session = None;
             false
         }
     };
@@ -2401,12 +2520,39 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
         "focus-panel" => {
             if let Ok(mut state) = app.state::<Desktop>().state.lock() {
                 state.orbit_agent = None;
+                state.orbit_auto = false;
+                state.orbit_preferred_session = None;
             }
             set_panel(app, true)
         }
         "close-panel" => {
             if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+                if let Some(provider) = state.orbit_agent.as_deref() {
+                    let matching_keys: Vec<String> = state
+                        .snapshot
+                        .sessions
+                        .iter()
+                        .filter(|s| {
+                            s.phase == aieyes_core::sessions::Phase::NeedsInput
+                                && (provider == aieyes_core::pets::ORBIT_OVERFLOW_PROVIDER
+                                    || aieyes_core::contracts::provider(&s.provider)
+                                        .map(|p| p.agent_id)
+                                        .unwrap_or(&s.provider)
+                                        == provider)
+                        })
+                        .map(|s| {
+                            format!(
+                                "{}|{}",
+                                s.id,
+                                s.input_state_key.as_deref().unwrap_or(&s.turn_id)
+                            )
+                        })
+                        .collect();
+                    state.dismissed_waiting.extend(matching_keys);
+                }
                 state.orbit_agent = None;
+                state.orbit_auto = false;
+                state.orbit_preferred_session = None;
             }
             set_panel(app, false)
         }

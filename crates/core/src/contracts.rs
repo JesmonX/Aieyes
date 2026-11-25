@@ -189,6 +189,11 @@ pub const METHODS: &[Method] = &[
     Method { name: "channels.automation.take", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "channels.automation.finish", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "channels.dispatch", lane: Lane::Network, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "sessions.interaction.status", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "sessions.interaction.configure", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "sessions.interaction.inspect", lane: Lane::Network, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "sessions.interaction.respond", lane: Lane::Network, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "sessions.interaction.handoff", lane: Lane::Network, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
 ];
 #[rustfmt::skip]
 pub const PROVIDERS: &[Provider] = &[
@@ -247,7 +252,7 @@ pub const SESSION_SOUND_TONES: &[(&str, &str, &str)] = &[
     ("droplet", "水滴", "droplet"),
     ("pulse", "电子", "pulse"),
 ];
-pub const CONTRACT_HASH: &str = "c12a715ae4710fb5b07f17ea416eb9948dcc6fc869944d2bcd43972693c09193";
+pub const CONTRACT_HASH: &str = "e32ef382b1fa345d2adb562f8f3bb15855002347b46622c8531767d653ecc187";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

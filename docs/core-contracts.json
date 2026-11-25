@@ -1989,6 +1989,46 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null
+    },
+    {
+      "name": "sessions.interaction.status",
+      "lane": "configuration",
+      "updateBehavior": "observe",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "sessions.interaction.configure",
+      "lane": "configuration",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "sessions.interaction.inspect",
+      "lane": "network",
+      "updateBehavior": "cancel",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "sessions.interaction.respond",
+      "lane": "network",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "sessions.interaction.handoff",
+      "lane": "network",
+      "updateBehavior": "finish",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
     }
   ],
   "petFrameDurations": [

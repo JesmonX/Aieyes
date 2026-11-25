@@ -1,10 +1,14 @@
 use super::{Session, content, control::Outcome, socket};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashSet,
+    path::Path,
+    time::{Duration, Instant},
+};
 use tungstenite::Message;
 
-pub(super) struct Client {
+pub(crate) struct Client {
     socket: socket::Socket,
     sequence: u64,
     pending: Vec<Value>,
@@ -117,6 +121,16 @@ impl Client {
         Ok(thread)
     }
     pub fn pending(&mut self, target: &Session) -> Result<Option<Value>> {
+        self.pending_matching(target, |_| true)
+    }
+    pub(crate) fn pending_approval(&mut self, target: &Session) -> Result<Option<Value>> {
+        self.pending_matching(target, is_approval)
+    }
+    fn pending_matching(
+        &mut self,
+        target: &Session,
+        matches_request: impl Fn(&Value) -> bool,
+    ) -> Result<Option<Value>> {
         let until = Instant::now() + Duration::from_millis(450);
         while Instant::now() < until {
             if let Some(v) = self.next()? {
@@ -128,7 +142,8 @@ impl Client {
             .iter()
             .rev()
             .find(|r| {
-                r["params"]["threadId"].as_str() == Some(&target.session.native_session)
+                matches_request(r)
+                    && r["params"]["threadId"].as_str() == Some(&target.session.native_session)
                     && (target.session.turn_id.is_empty()
                         || r["params"]["turnId"].as_str() == Some(&target.session.turn_id))
             })
@@ -153,6 +168,23 @@ impl Client {
             Ok(v) => v,
             Err(e) => return Outcome::blocked(&e.to_string()),
         };
+        self.send_answer(target, request, result)
+    }
+    pub fn answer_structured(
+        &mut self,
+        target: &Session,
+        request: &Value,
+        action: &str,
+        answers: Option<&Value>,
+        text: Option<&str>,
+    ) -> Outcome {
+        let result = match structured_payload(request, action, answers, text) {
+            Ok(v) => v,
+            Err(e) => return Outcome::blocked(&e.to_string()),
+        };
+        self.send_answer(target, request, result)
+    }
+    fn send_answer(&mut self, target: &Session, request: &Value, result: Value) -> Outcome {
         if let Err(error) = self.verify(target) {
             return Outcome::blocked(&error.to_string());
         }
@@ -197,6 +229,22 @@ impl Client {
             Ok(text) => text,
             Err(error) => return Outcome::blocked(&error.to_string()),
         };
+        self.send_async_input(target, &input)
+    }
+    pub fn answer_async_structured(
+        &mut self,
+        target: &Session,
+        request: &Value,
+        answers: Option<&Value>,
+        text: Option<&str>,
+    ) -> Outcome {
+        let input = match async_answer_structured(request, answers, text) {
+            Ok(text) => text,
+            Err(error) => return Outcome::blocked(&error.to_string()),
+        };
+        self.send_async_input(target, &input)
+    }
+    fn send_async_input(&mut self, target: &Session, input: &str) -> Outcome {
         match self.verify(target) {
             Ok(thread) if thread["status"]["type"] == "active" => {}
             Ok(_) => return Outcome::blocked("原会话状态已改变，指令已保留"),
@@ -211,8 +259,41 @@ impl Client {
     }
 }
 
+pub(crate) fn is_approval(request: &Value) -> bool {
+    matches!(
+        request["method"].as_str(),
+        Some("item/commandExecution/requestApproval" | "item/fileChange/requestApproval")
+    )
+}
+
+/// Check runtime status without resuming a thread or reading its turn contents.
+pub(crate) fn waiting_approvals(root: &Path, ids: &[&str]) -> Result<HashSet<String>> {
+    let mut client = Client::open(root)?;
+    let mut waiting = HashSet::new();
+    for batch in ids.chunks(100) {
+        let result = client.call(
+            "thread/list",
+            json!({"includedThreadIds":batch,"limit":batch.len(),"useStateDbOnly":true}),
+        )?;
+        for thread in result["data"].as_array().into_iter().flatten() {
+            let Some(id) = thread["id"].as_str().filter(|id| batch.contains(id)) else {
+                continue;
+            };
+            let status = &thread["status"];
+            if status["type"] == "active"
+                && status["activeFlags"]
+                    .as_array()
+                    .is_some_and(|flags| flags.iter().any(|flag| flag == "waitingOnApproval"))
+            {
+                waiting.insert(id.to_owned());
+            }
+        }
+    }
+    Ok(waiting)
+}
+
 /// Local representation of the host's async question, scoped to its original turn.
-pub(super) fn async_request(target: &Session, excerpt: &content::Excerpt) -> Option<Value> {
+pub(crate) fn async_request(target: &Session, excerpt: &content::Excerpt) -> Option<Value> {
     let raw = excerpt.async_request.as_ref()?;
     let call = raw["callId"].as_str().filter(|s| !s.is_empty())?;
     let questions = raw["questions"].as_array()?.iter().enumerate().map(|(i,q)| {
@@ -240,7 +321,83 @@ fn async_answer(request: &Value, text: &str) -> Result<String> {
     ))
 }
 
-pub(super) fn valid_id(id: &str) -> bool {
+fn async_answer_structured(
+    request: &Value,
+    answers_map: Option<&Value>,
+    text: Option<&str>,
+) -> Result<String> {
+    let answers = structured_payload(request, "answer", answers_map, text)?;
+    let p = &request["params"];
+    let rows = p["questions"]
+        .as_array()
+        .context("原会话问题已不可用")?
+        .iter()
+        .map(|q| {
+            let id = q["id"].as_str().unwrap_or("");
+            json!({"answer":answers["answers"][id]["answers"][0],"question":q["question"],"questionItemId":json!(["request_user_input_async",p["itemId"],q["questionIndex"]]).to_string()})
+        })
+        .collect::<Vec<_>>();
+    Ok(format!(
+        "<send_user_message_question_reply>\n{}\n</send_user_message_question_reply>",
+        serde_json::to_string(&rows)?
+    ))
+}
+
+pub(crate) fn structured_payload(
+    request: &Value,
+    action: &str,
+    answers_map: Option<&Value>,
+    text: Option<&str>,
+) -> Result<Value> {
+    let p = &request["params"];
+    match request["method"].as_str().unwrap_or("") {
+        "item/tool/requestUserInput" | "tool/requestUserInput" | "aieyes/asyncQuestion" => {
+            if let Some(map) = answers_map.and_then(Value::as_object) {
+                let questions = p["questions"].as_array().context("原会话问题已不可用")?;
+                ensure!(!questions.is_empty(), "原会话问题已不可用");
+                let mut answers = serde_json::Map::new();
+                for q in questions {
+                    let id = q["id"].as_str().context("原会话问题缺少标识")?;
+                    let raw = map.get(id).context("请回答所有问题后再提交")?;
+                    let picked = if let Some(s) = raw.as_str() {
+                        s.trim().to_owned()
+                    } else if let Some(arr) = raw.as_array() {
+                        arr.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    } else {
+                        String::new()
+                    };
+                    ensure!(!picked.is_empty(), "问题回答不能为空");
+                    answers.insert(id.into(), json!({"answers":[picked]}));
+                }
+                return Ok(json!({"answers":answers}));
+            }
+            answer(request, text.unwrap_or(""))
+        }
+        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+            let decision = match action {
+                "approve" | "accept" => "accept",
+                "decline" | "deny" => "decline",
+                "cancel" => "cancel",
+                _ => anyhow::bail!("不支持的审批操作"),
+            };
+            if let Some(allowed) = p["availableDecisions"].as_array() {
+                ensure!(
+                    allowed.iter().any(|v| v.as_str() == Some(decision)),
+                    "原会话不允许此审批选项"
+                );
+            }
+            Ok(json!({"decision":decision}))
+        }
+        _ => anyhow::bail!("此类输入需要回到原窗口处理"),
+    }
+}
+
+pub(crate) fn valid_id(id: &str) -> bool {
     id.len() == 36
         && id.bytes().enumerate().all(|(i, b)| {
             if matches!(i, 8 | 13 | 18 | 23) {
@@ -250,7 +407,7 @@ pub(super) fn valid_id(id: &str) -> bool {
             }
         })
 }
-pub(super) fn fingerprint(request: &Value) -> String {
+pub(crate) fn fingerprint(request: &Value) -> String {
     let p = &request["params"];
     let params: serde_json::Map<String, Value> = [
         "threadId",
@@ -273,7 +430,7 @@ pub(super) fn fingerprint(request: &Value) -> String {
     .collect();
     crate::models::hash(&json!({"method":request["method"],"params":params}).to_string())
 }
-pub(super) fn describe(request: &Value, language: &str) -> String {
+pub(crate) fn describe(request: &Value, language: &str) -> String {
     let p = &request["params"];
     let tr = |text: &str| crate::localization::translate(language, text).into_owned();
     match request["method"].as_str().unwrap_or("") {

@@ -104,6 +104,9 @@ pub struct LiveSession {
     /// Stable native question IDs; internal metadata, never question text.
     #[serde(skip)]
     pub input_request: String,
+    /// Opaque state key identifying the current waiting-for-input prompt (never prompt content).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_state_key: Option<String>,
     #[serde(skip)]
     pub parent_id: String,
     #[serde(skip)]
@@ -2495,6 +2498,85 @@ pub struct SessionMonitor {
     local: Reader,
     remote: HashMap<String, RemoteWorker>,
     usage: crate::session_usage::SessionUsageReader,
+    opencode_probes: HashMap<String, (std::time::Instant, Option<(String, String)>)>,
+    codex_approvals: CodexApprovalProbe,
+}
+
+type TurnIdentity = (String, String);
+
+#[derive(Default)]
+struct CodexApprovalProbe {
+    started_at: Option<Instant>,
+    pending: Option<mpsc::Receiver<HashSet<TurnIdentity>>>,
+    waiting: HashSet<TurnIdentity>,
+}
+
+impl CodexApprovalProbe {
+    fn update(&mut self, snapshot: &mut Snapshot, settings: &Settings) {
+        if let Some(pending) = &self.pending {
+            match pending.try_recv() {
+                Ok(waiting) => {
+                    self.waiting = waiting;
+                    self.pending = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.waiting.clear();
+                    self.pending = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
+        let mut threads = HashMap::<PathBuf, Vec<(String, TurnIdentity)>>::new();
+        for session in &mut snapshot.sessions {
+            if !matches!(session.provider.as_str(), "codex" | "chatgpt-work")
+                || session.machine_id != "local"
+                || session.background
+                || session.expired
+                || !session.phase.active()
+                || session.turn_id.is_empty()
+                || !crate::channels::codex::valid_id(&session.native_session)
+            {
+                continue;
+            }
+            let Some(source) = settings.sources.iter().find(|source| {
+                source.id == session.source_id
+                    && source.host_id.is_none()
+                    && settings.source_enabled(source)
+            }) else {
+                continue;
+            };
+            let turn = (session.id.clone(), session.turn_id.clone());
+            if self.waiting.contains(&turn) {
+                session.phase = Phase::NeedsInput;
+                session.input_request = crate::session_interaction::CODEX_APPROVAL_INPUT.into();
+            }
+            let root = expand(&normalized_source(source).path);
+            threads.entry(root).or_default().push((session.native_session.clone(), turn));
+        }
+        if threads.is_empty()
+            || self.pending.is_some()
+            || self.started_at.is_some_and(|at| at.elapsed() < Duration::from_secs(2))
+        {
+            return;
+        }
+        let (send, receive) = mpsc::channel();
+        self.started_at = Some(Instant::now());
+        self.pending = Some(receive);
+        // The pet's session poll must stay responsive even when a control socket stalls.
+        std::thread::spawn(move || {
+            let mut waiting = HashSet::new();
+            for (root, threads) in threads {
+                let ids = threads.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
+                if let Ok(approvals) = crate::channels::codex::waiting_approvals(&root, &ids) {
+                    waiting.extend(threads.into_iter().filter_map(|(id, turn)| {
+                        approvals.contains(&id).then_some(turn)
+                    }));
+                }
+            }
+            let _ = send.send(waiting);
+        });
+    }
 }
 impl SessionMonitor {
     /// `read` plus token totals from imported history; active local sessions are imported promptly.
@@ -2505,8 +2587,72 @@ impl SessionMonitor {
         store: &crate::store::Store,
     ) -> Snapshot {
         let mut snapshot = self.read(settings, now);
+        self.enrich_opencode_pending(&mut snapshot, settings);
+        self.codex_approvals.update(&mut snapshot, settings);
+        self.enrich_input_state_keys(&mut snapshot);
         self.usage.enrich(&mut snapshot, store, settings);
         snapshot
+    }
+    /// Probe in-memory OpenCode permission/form requests on a bounded cadence so the pet and
+    /// orbit popup surface NeedsInput promptly even without the Feishu channel running.
+    fn enrich_opencode_pending(&mut self, snapshot: &mut Snapshot, settings: &Settings) {
+        let now_instant = std::time::Instant::now();
+        let mut active_ids = HashSet::new();
+        for session in &mut snapshot.sessions {
+            if session.provider != "opencode"
+                || session.machine_id != "local"
+                || session.native_session.is_empty()
+                || !matches!(
+                    session.phase,
+                    Phase::Working | Phase::Thinking | Phase::Tool | Phase::NeedsInput
+                )
+            {
+                continue;
+            }
+            active_ids.insert(session.id.clone());
+            let cached = self
+                .opencode_probes
+                .get(&session.id)
+                .filter(|(at, _)| now_instant.duration_since(*at) < std::time::Duration::from_millis(2500))
+                .map(|(_, hit)| hit.clone());
+            let hit = match cached {
+                Some(hit) => hit,
+                None => {
+                    let found = settings
+                        .sources
+                        .iter()
+                        .find(|s| {
+                            s.id == session.source_id
+                                && s.provider == "opencode"
+                                && s.host_id.is_none()
+                                && settings.source_enabled(s)
+                        })
+                        .and_then(|source| {
+                            crate::channels::opencode::probe_pending_id(
+                                source,
+                                &session.native_session,
+                            )
+                        });
+                    self.opencode_probes
+                        .insert(session.id.clone(), (now_instant, found.clone()));
+                    found
+                }
+            };
+            if let Some((kind, item_id)) = hit {
+                session.phase = Phase::NeedsInput;
+                session.input_request = format!("opencode:{kind}:{item_id}");
+            }
+        }
+        self.opencode_probes.retain(|id, _| active_ids.contains(id));
+    }
+    fn enrich_input_state_keys(&self, snapshot: &mut Snapshot) {
+        for session in &mut snapshot.sessions {
+            if session.phase == Phase::NeedsInput {
+                session.input_state_key = Some(crate::session_interaction::state_key(session));
+            } else {
+                session.input_state_key = None;
+            }
+        }
     }
     /// Sessions Aieyes started itself, as `internal-session:` kv keys.
     pub fn set_internal(&mut self, keys: HashSet<String>) {
@@ -3260,6 +3406,98 @@ mod adapter_tests {
             ..Default::default()
         }
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_live_approval_opens_a_card_when_the_transcript_is_still_in_tool_phase() {
+        use crate::session_interaction;
+        use std::os::unix::net::UnixListener;
+        use tungstenite::Message;
+
+        const NATIVE: &str = "11111111-2222-4333-8444-555555555555";
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let control = root.join("app-server-control");
+        fs::create_dir(&control).unwrap();
+        let listener = UnixListener::bind(control.join("app-server-control.sock")).unwrap();
+        let server = std::thread::spawn(move || {
+            let thread = json!({"id":NATIVE,"status":{"type":"active","activeFlags":["waitingOnApproval"]}});
+            for connection in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut ws = tungstenite::accept(stream).unwrap();
+                while let Ok(Message::Text(text)) = ws.read() {
+                    let rpc: Value = serde_json::from_str(&text).unwrap();
+                    let method = rpc["method"].as_str().unwrap();
+                    let result = match method {
+                        "initialize" => json!({}),
+                        "initialized" => continue,
+                        "thread/list" if connection == 0 => {
+                            assert_eq!(rpc["params"]["includedThreadIds"], json!([NATIVE]));
+                            json!({"data":[thread]})
+                        }
+                        "thread/read" | "thread/resume" if connection == 1 => json!({"thread":thread}),
+                        "thread/loaded/list" if connection == 1 => json!({"data":[NATIVE]}),
+                        "thread/turns/list" if connection == 1 => json!({"data":[{"id":"turn"}]}),
+                        _ => panic!("unexpected RPC: {method}"),
+                    };
+                    ws.send(Message::Text(json!({"id":rpc["id"],"result":result}).to_string().into())).unwrap();
+                    if method == "thread/resume" {
+                        for (id, prompt, item) in [
+                            (7, "item/commandExecution/requestApproval", json!({"command":"/bin/pwd"})),
+                            (8, "item/tool/requestUserInput", json!({"questions":[]})),
+                        ] {
+                            let mut params = item;
+                            params["threadId"] = json!(NATIVE);
+                            params["turnId"] = json!("turn");
+                            params["itemId"] = json!(id.to_string());
+                            ws.send(Message::Text(json!({"id":id,"method":prompt,"params":params}).to_string().into())).unwrap();
+                        }
+                    }
+                }
+            }
+        });
+
+        let settings = Settings {
+            sources: vec![source(&root, "codex")],
+            ..Default::default()
+        };
+        let store = crate::store::Store::open(&root.join("data")).unwrap();
+        store.save_settings(&settings).unwrap();
+        let mut snapshot = Snapshot {
+            sessions: vec![LiveSession {
+                id: "session".into(),
+                source_id: "codex".into(),
+                provider: "codex".into(),
+                machine_id: "local".into(),
+                native_session: NATIVE.into(),
+                turn_id: "turn".into(),
+                phase: Phase::Tool,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut monitor = SessionMonitor::default();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while snapshot.sessions[0].phase != Phase::NeedsInput && Instant::now() < deadline {
+            monitor.codex_approvals.update(&mut snapshot, &settings);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(snapshot.sessions[0].phase, Phase::NeedsInput);
+        monitor.enrich_input_state_keys(&mut snapshot);
+        session_interaction::observe(&store, &snapshot).unwrap();
+        let card = session_interaction::call(
+            &store,
+            "sessions.interaction.inspect",
+            json!({"sessionId":"session"}),
+        )
+        .unwrap();
+        assert_eq!(card["kind"], "approval");
+        assert_eq!(card["canRespond"], true);
+        assert_eq!(card["approval"]["command"], "/bin/pwd");
+        server.join().unwrap();
+    }
+
     #[test]
     fn trae_ide_process_status_does_not_create_sessions_or_failures() {
         let temp = tempfile::tempdir().unwrap();

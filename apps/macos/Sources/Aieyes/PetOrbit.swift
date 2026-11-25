@@ -519,11 +519,14 @@ struct PetOrbitNodeView: View {
 struct PetAgentSessionPopoverView: View {
     let model: AppModel
     let initialAgent: PetOrbitAgent
+    let autoOpened: Bool
     @ObservedObject var live: LiveSessionState
     @ObservedObject var orbit: PetOrbitStore
+    @ObservedObject var interaction: SessionInteractionStore
     var onOpenSessions: () -> Void
     var onClose: () -> Void
 
+    @State private var selectedWaitingID: String?
     @State private var focusMessage: String?
     @State private var focusGeneration = 0
     @State private var focusingID: String?
@@ -533,13 +536,18 @@ struct PetAgentSessionPopoverView: View {
         model: AppModel,
         agent: PetOrbitAgent,
         orbit: PetOrbitStore,
+        autoOpened: Bool = false,
+        preferredSessionID: String? = nil,
         onOpenSessions: @escaping () -> Void,
         onClose: @escaping () -> Void
     ) {
         self.model = model
         self.initialAgent = agent
+        self.autoOpened = autoOpened
         self.live = model.live
         self.orbit = orbit
+        self.interaction = model.interaction
+        self._selectedWaitingID = State(initialValue: preferredSessionID)
         self.onOpenSessions = onOpenSessions
         self.onClose = onClose
     }
@@ -552,10 +560,31 @@ struct PetAgentSessionPopoverView: View {
         PetOrbitStore.activeSessions(for: currentAgent, in: live.sessions)
     }
 
+    private var waitingSessions: [LiveSession] {
+        activeSessions.filter { $0.phase == .needsInput }
+    }
+
+    private var otherSessions: [LiveSession] {
+        activeSessions.filter { $0.phase != .needsInput }
+    }
+
+    private var activeWaitingSession: LiveSession? {
+        if let id = selectedWaitingID, let hit = waitingSessions.first(where: { $0.id == id }) {
+            return hit
+        }
+        return waitingSessions.first
+    }
+
+    private var showInteractionCard: Bool {
+        interaction.status.enabled && activeWaitingSession != nil
+    }
+
     var body: some View {
         let _ = interfaceLanguage
         let agent = currentAgent
         let sessions = activeSessions
+        let waiting = waitingSessions
+        let others = otherSessions
         VStack(alignment: .leading, spacing: 10) {
             header(agent: agent, activeCount: sessions.count)
             Divider().opacity(0.5)
@@ -570,6 +599,69 @@ struct PetAgentSessionPopoverView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 8)
+            } else if showInteractionCard, let target = activeWaitingSession {
+                if waiting.count > 1 {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(waiting) { item in
+                                let picked = item.id == target.id
+                                Button {
+                                    selectedWaitingID = item.id
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Circle()
+                                            .fill(Palette.warn)
+                                            .frame(width: 6, height: 6)
+                                        Text(item.project ?? Format.provider(item.provider))
+                                            .font(AppFont.caption)
+                                            .lineLimit(1)
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        picked ? Palette.warn.opacity(0.18) : Color.primary.opacity(0.05),
+                                        in: Capsule()
+                                    )
+                                    .overlay(
+                                        Capsule().strokeBorder(picked ? Palette.warn.opacity(0.6) : Color.clear, lineWidth: 1)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        PetInteractionCardView(
+                            session: target,
+                            store: interaction,
+                            onFocusSession: { focus(target) },
+                            onCompleted: {
+                                let remaining = waitingSessions.filter { $0.id != target.id }
+                                if let next = remaining.first {
+                                    selectedWaitingID = next.id
+                                } else if autoOpened {
+                                    onClose()
+                                }
+                            }
+                        )
+                        if !others.isEmpty {
+                            Divider().opacity(0.4)
+                            Text(L("其他进行中会话"))
+                                .font(AppFont.caption)
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(Array(others.enumerated()), id: \.element.id) { index, session in
+                                    if index > 0 { Divider().opacity(0.3) }
+                                    sessionRow(session)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(maxHeight: 420)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
@@ -600,13 +692,14 @@ struct PetAgentSessionPopoverView: View {
                 }
                 .controlSize(.small)
                 Button(L("关闭")) {
+                    interaction.markDismissed(sessions: waiting)
                     onClose()
                 }
                 .controlSize(.small)
             }
         }
         .padding(12)
-        .frame(width: 316)
+        .frame(width: showInteractionCard ? 364 : 316)
         .font(AppFont.body)
         .aieyesAccent()
     }

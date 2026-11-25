@@ -354,6 +354,9 @@ struct SettingsView: View {
                 PetTimingControl()
                 PetLibraryView(model: model)
             }
+            Section(L("等待输入快捷交互")) {
+                PetInteractionSettingsView(store: model.interaction)
+            }
             Section(L("菜单栏")) {
                 HelpNote(title: L("菜单栏"), text: L("菜单栏显示今日全部数据，独立于页面筛选。"))
                 Picker(L("显示内容"), selection: $model.settingsDraft.menuMetric) { Text(L("图标")).tag("icon"); Text(L("今日全部 Token")).tag("tokens"); Text(L("首个账户剩余额度")).tag("quota"); Text(L("首台服务器 CPU")).tag("cpu") }

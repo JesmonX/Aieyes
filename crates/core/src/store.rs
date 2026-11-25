@@ -130,6 +130,7 @@ impl Store {
         crate::quota_notifications::setup(&db)?;
         crate::webhooks::setup(&db)?;
         crate::channels::setup(&db)?;
+        crate::session_interaction::setup(&db)?;
         crate::remote_history::setup(&db)?;
         crate::qoder_state::setup(&db)?;
         crate::codex_api::usage::setup(&db)?;

@@ -96,11 +96,16 @@
       return sa !== sb ? sb - sa : String(a.id).localeCompare(String(b.id));
     });
 
+    const interactionShown = !!window.AieyesOrbitInteraction?.update(next, entry, active);
+    const listSessions = interactionShown ? active.filter((s) => s.phase !== 'needsInput') : active;
     const list = document.querySelector('#orbit-session-list');
     if (!active.length) {
       list.innerHTML = `<div class="orbit-empty"><span>${esc(AieyesI18n.t("当前会话已结束"))}</span><small>${esc(AieyesI18n.t("可打开会话页查看最近结束记录"))}</small></div>`;
+    } else if (!listSessions.length) {
+      list.innerHTML = '';
     } else {
-      list.innerHTML = active.map((s) => {
+      const heading = interactionShown ? `<div class="orbit-subhead">${esc(AieyesI18n.t("其他进行中会话"))}</div>` : '';
+      list.innerHTML = heading + listSessions.map((s) => {
         const key = sessionsApi.phaseKey(s.phase), label = sessionsApi.phaseLabel(s.phase);
         const symbol = typeof uiIcon === 'function' ? uiIcon(key) : '';
         const focus = sessionsApi.canFocus(s) ? ` role="button" tabindex="0" data-focus-session="${esc(s.id)}" title="${esc(sessionsApi.focusHelp(s))}"` : '';
@@ -160,6 +165,7 @@
     }
     if (was && !panelOpen) {
       stopOrbitTick();
+      window.AieyesOrbitInteraction?.reset();
       window.AieyesSingleSelect?.closeActive(false);
       window.AieyesMotion?.panel(false);
       closeMenu();
@@ -177,7 +183,7 @@
       requestAnimationFrame(() => {if (!orbitAgent && typeof drawTrend === 'function') drawTrend();invoke('desktop_panel_ready', { generation: window.AIEYES_SHELL_GENERATION ?? 0 }).catch(failure);});
       // The Linux panel window takes keyboard focus; park it on the panel itself so opening shows no
       // focus ring or tooltip, and Tab starts at the first control.
-      if (info?.platform === 'linux') requestAnimationFrame(() => {const target = orbitAgent ? document.querySelector('#orbit-popover') : panel;if (target) {target.tabIndex = -1;target.focus({ preventScroll: true });}});
+      if (info?.platform === 'linux' && !next?.orbitAuto && !info?.orbitAuto) requestAnimationFrame(() => {const target = orbitAgent ? document.querySelector('#orbit-popover') : panel;if (target) {target.tabIndex = -1;target.focus({ preventScroll: true });}});
       // Mouse-opened floating surfaces preserve the other application's keyboard focus.
       const refresh = !orbitAgent && window.AieyesApp?.refreshPanel;
       if (refresh) refresh().catch((error) => failure(error));

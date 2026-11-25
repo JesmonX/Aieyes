@@ -13,7 +13,7 @@ const MAX_TAIL: u64 = 2 * 1024 * 1024;
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub(super) struct Excerpt {
+pub(crate) struct Excerpt {
     pub text: String,
     pub question: String,
     pub user_text: String,
@@ -24,9 +24,13 @@ pub(super) struct Excerpt {
     pub claude_request: Option<Value>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub claude_answered_call: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_questions: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_approval: Option<Value>,
 }
 
-pub(super) fn clip(text: &str, limit: usize) -> String {
+pub(crate) fn clip(text: &str, limit: usize) -> String {
     if text.len() <= limit {
         return text.to_owned();
     }
@@ -386,7 +390,7 @@ fn paths(source: &Source, target: &Session) -> (PathBuf, Vec<String>) {
     (root, paths)
 }
 
-pub(super) fn local(source: &Source, target: &Session) -> Excerpt {
+pub(crate) fn local(source: &Source, target: &Session) -> Excerpt {
     let (root, paths) = paths(source, target);
     for path in paths.iter().take(8) {
         if let Ok((rows, _)) = records(Path::new(path), &root, target) {

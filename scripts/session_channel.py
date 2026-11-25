@@ -637,7 +637,7 @@ def run(request):
     if source['id'] != session['sourceId'] or not provider_matches or (source.get('hostId') or 'local') != session['machineId']:
         return result('blocked', '会话来源身份不符')
     if request['action'] == 'read':
-        out = dict(excerpt=excerpt(source, target), question=None, promptHash=None, approval=False, questionRequest=None)
+        out = dict(excerpt=excerpt(source, target), question=None, promptHash=None, approval=False, questionRequest=None, approvalRequest=None)
         pending_async = async_request(target,out['excerpt']) if session['phase'] == 'needsInput' else None
         if pending_async:
             out['promptHash']=fingerprint(pending_async)
@@ -652,7 +652,8 @@ def run(request):
                 if pending:
                     out['question'] = clip(describe(pending, request.get('language'))); out['promptHash'] = fingerprint(pending)
                     out['approval'] = pending['method'] in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval')
-                    if not out['approval']:out['questionRequest']=pending
+                    if out['approval']:out['approvalRequest']=pending
+                    else:out['questionRequest']=pending
             except (OSError, ValueError, Rejected, TimeoutError):
                 pass
             finally:

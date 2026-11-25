@@ -3,15 +3,15 @@
 mod actions;
 mod cards;
 pub mod claude;
-mod codex;
+pub(crate) mod codex;
 mod config;
-mod content;
-mod control;
+pub(crate) mod content;
+pub(crate) mod control;
 mod db;
 mod feishu;
-mod opencode;
+pub(crate) mod opencode;
 mod protocol;
-mod readers;
+pub(crate) mod readers;
 mod service;
 mod socket;
 
