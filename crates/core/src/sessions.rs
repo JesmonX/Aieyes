@@ -2552,11 +2552,16 @@ impl CodexApprovalProbe {
                 session.input_request = crate::session_interaction::CODEX_APPROVAL_INPUT.into();
             }
             let root = expand(&normalized_source(source).path);
-            threads.entry(root).or_default().push((session.native_session.clone(), turn));
+            threads
+                .entry(root)
+                .or_default()
+                .push((session.native_session.clone(), turn));
         }
         if threads.is_empty()
             || self.pending.is_some()
-            || self.started_at.is_some_and(|at| at.elapsed() < Duration::from_secs(2))
+            || self
+                .started_at
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(2))
         {
             return;
         }
@@ -2567,11 +2572,16 @@ impl CodexApprovalProbe {
         std::thread::spawn(move || {
             let mut waiting = HashSet::new();
             for (root, threads) in threads {
-                let ids = threads.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
+                let ids = threads
+                    .iter()
+                    .map(|(id, _)| id.as_str())
+                    .collect::<Vec<_>>();
                 if let Ok(approvals) = crate::channels::codex::waiting_approvals(&root, &ids) {
-                    waiting.extend(threads.into_iter().filter_map(|(id, turn)| {
-                        approvals.contains(&id).then_some(turn)
-                    }));
+                    waiting.extend(
+                        threads
+                            .into_iter()
+                            .filter_map(|(id, turn)| approvals.contains(&id).then_some(turn)),
+                    );
                 }
             }
             let _ = send.send(waiting);
@@ -2613,7 +2623,9 @@ impl SessionMonitor {
             let cached = self
                 .opencode_probes
                 .get(&session.id)
-                .filter(|(at, _)| now_instant.duration_since(*at) < std::time::Duration::from_millis(2500))
+                .filter(|(at, _)| {
+                    now_instant.duration_since(*at) < std::time::Duration::from_millis(2500)
+                })
                 .map(|(_, hit)| hit.clone());
             let hit = match cached {
                 Some(hit) => hit,
@@ -3421,10 +3433,13 @@ mod adapter_tests {
         fs::create_dir(&control).unwrap();
         let listener = UnixListener::bind(control.join("app-server-control.sock")).unwrap();
         let server = std::thread::spawn(move || {
-            let thread = json!({"id":NATIVE,"status":{"type":"active","activeFlags":["waitingOnApproval"]}});
+            let thread =
+                json!({"id":NATIVE,"status":{"type":"active","activeFlags":["waitingOnApproval"]}});
             for connection in 0..2 {
                 let (stream, _) = listener.accept().unwrap();
-                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
                 let mut ws = tungstenite::accept(stream).unwrap();
                 while let Ok(Message::Text(text)) = ws.read() {
                     let rpc: Value = serde_json::from_str(&text).unwrap();
@@ -3436,22 +3451,36 @@ mod adapter_tests {
                             assert_eq!(rpc["params"]["includedThreadIds"], json!([NATIVE]));
                             json!({"data":[thread]})
                         }
-                        "thread/read" | "thread/resume" if connection == 1 => json!({"thread":thread}),
+                        "thread/read" | "thread/resume" if connection == 1 => {
+                            json!({"thread":thread})
+                        }
                         "thread/loaded/list" if connection == 1 => json!({"data":[NATIVE]}),
                         "thread/turns/list" if connection == 1 => json!({"data":[{"id":"turn"}]}),
                         _ => panic!("unexpected RPC: {method}"),
                     };
-                    ws.send(Message::Text(json!({"id":rpc["id"],"result":result}).to_string().into())).unwrap();
+                    ws.send(Message::Text(
+                        json!({"id":rpc["id"],"result":result}).to_string().into(),
+                    ))
+                    .unwrap();
                     if method == "thread/resume" {
                         for (id, prompt, item) in [
-                            (7, "item/commandExecution/requestApproval", json!({"command":"/bin/pwd"})),
+                            (
+                                7,
+                                "item/commandExecution/requestApproval",
+                                json!({"command":"/bin/pwd"}),
+                            ),
                             (8, "item/tool/requestUserInput", json!({"questions":[]})),
                         ] {
                             let mut params = item;
                             params["threadId"] = json!(NATIVE);
                             params["turnId"] = json!("turn");
                             params["itemId"] = json!(id.to_string());
-                            ws.send(Message::Text(json!({"id":id,"method":prompt,"params":params}).to_string().into())).unwrap();
+                            ws.send(Message::Text(
+                                json!({"id":id,"method":prompt,"params":params})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .unwrap();
                         }
                     }
                 }

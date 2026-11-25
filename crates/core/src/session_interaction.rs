@@ -628,7 +628,8 @@ fn inspect(store: &Store, params: &Value) -> Result<Value> {
 
     // 2. Local Claude / Qoder CLI pending PermissionRequest hook (approval or AskUserQuestion)
     if claude::hooked(&source.provider)
-        && let Ok(Some(req)) = claude::pending_request(store, &source.id, &target.session.native_session)
+        && let Ok(Some(req)) =
+            claude::pending_request(store, &source.id, &target.session.native_session)
     {
         payload["adapter"] = json!("claudeHook");
         payload["canRespond"] = json!(true);
@@ -654,9 +655,7 @@ fn inspect(store: &Store, params: &Value) -> Result<Value> {
     if matches!(source.provider.as_str(), "codex" | "chatgpt-work") {
         let excerpt = content::local(&source, &target);
         let waiting_on_approval = is_codex_approval(&target);
-        if !waiting_on_approval
-            && let Some(async_req) = codex::async_request(&target, &excerpt)
-        {
+        if !waiting_on_approval && let Some(async_req) = codex::async_request(&target, &excerpt) {
             let can_connect = codex::Client::open(&expand(&source.path)).is_ok();
             payload["promptHash"] = json!(codex::fingerprint(&async_req));
             payload["questions"] = json!(normalize_questions(&async_req));
@@ -751,7 +750,11 @@ fn inspect(store: &Store, params: &Value) -> Result<Value> {
         let structured = claude::request(&target, &excerpt)
             .map(|req| normalize_questions(&req))
             .unwrap_or_default();
-        payload["kind"] = json!(if structured.is_empty() { "readonly" } else { "questions" });
+        payload["kind"] = json!(if structured.is_empty() {
+            "readonly"
+        } else {
+            "questions"
+        });
         payload["questions"] = json!(structured);
         payload["textPrompt"] = json!(excerpt.question);
         payload["needsClaudeHook"] = json!(!(cfg.claude_questions || cfg.claude_approvals));
@@ -764,13 +767,13 @@ fn inspect(store: &Store, params: &Value) -> Result<Value> {
     }
 
     if let Some(questions) = excerpt.structured_questions.as_ref() {
-        let synthetic = json!({"method": "aieyes/readonlyQuestions", "params": {"questions": questions}});
+        let synthetic =
+            json!({"method": "aieyes/readonlyQuestions", "params": {"questions": questions}});
         payload["kind"] = json!("questions");
         payload["canRespond"] = json!(false);
         payload["questions"] = json!(normalize_questions(&synthetic));
         payload["textPrompt"] = json!(excerpt.question);
-        payload["readonlyReason"] =
-            json!(tr("此 Agent 暂无原生回传接口，请点击跳转到原窗口处理"));
+        payload["readonlyReason"] = json!(tr("此 Agent 暂无原生回传接口，请点击跳转到原窗口处理"));
         return Ok(payload);
     }
 
@@ -785,8 +788,7 @@ fn inspect(store: &Store, params: &Value) -> Result<Value> {
             "decisions": [],
         });
         payload["textPrompt"] = json!(excerpt.question);
-        payload["readonlyReason"] =
-            json!(tr("此 Agent 暂无原生回传接口，请点击跳转到原窗口处理"));
+        payload["readonlyReason"] = json!(tr("此 Agent 暂无原生回传接口，请点击跳转到原窗口处理"));
         return Ok(payload);
     }
 
@@ -803,13 +805,15 @@ fn inspect(store: &Store, params: &Value) -> Result<Value> {
         return Ok(payload);
     }
     payload["kind"] = json!("readonly");
-    payload["readonlyReason"] = json!(if claude::hooked(&source.provider) && !cfg.claude_approvals {
-        tr("可在设置中开启 Claude / Qoder 工具授权弹窗，或点击跳转到原窗口确认")
-    } else if !desktop_gui && !allow_terminal && target.session.pid.is_some() {
-        tr("此 Agent 无原生回传接口；可点击跳转到原窗口，或在设置中启用终端适配输入")
-    } else {
-        tr("此 Agent 暂无原生回传接口，请点击跳转到原窗口处理")
-    });
+    payload["readonlyReason"] = json!(
+        if claude::hooked(&source.provider) && !cfg.claude_approvals {
+            tr("可在设置中开启 Claude / Qoder 工具授权弹窗，或点击跳转到原窗口确认")
+        } else if !desktop_gui && !allow_terminal && target.session.pid.is_some() {
+            tr("此 Agent 无原生回传接口；可点击跳转到原窗口，或在设置中启用终端适配输入")
+        } else {
+            tr("此 Agent 暂无原生回传接口，请点击跳转到原窗口处理")
+        }
+    );
     Ok(payload)
 }
 
@@ -859,7 +863,12 @@ fn respond(store: &Store, params: &Value) -> Result<Value> {
     let settings = store.settings()?;
     let source = match control::source(&settings, &target) {
         Ok(s) => s,
-        Err(error) => return Ok(outcome_json(control::Outcome::blocked(&error.to_string()), &lang)),
+        Err(error) => {
+            return Ok(outcome_json(
+                control::Outcome::blocked(&error.to_string()),
+                &lang,
+            ));
+        }
     };
     let allow_terminal = effective_allow_terminal(store, &cfg);
 
@@ -877,16 +886,15 @@ fn respond(store: &Store, params: &Value) -> Result<Value> {
         ) {
             Ok(v) => serde_json::from_value::<control::Outcome>(v)
                 .unwrap_or_else(|_| control::Outcome::uncertain("远程输入结果无效，请核对原会话")),
-            Err(_) => {
-                control::Outcome::uncertain("远程连接中断，无法确认提交结果；请核对原会话")
-            }
+            Err(_) => control::Outcome::uncertain("远程连接中断，无法确认提交结果；请核对原会话"),
         };
         return Ok(outcome_json(out, &lang));
     }
 
     // 2. Local Claude / Qoder CLI pending PermissionRequest hook
     if claude::hooked(&source.provider)
-        && let Ok(Some(req)) = claude::pending_request(store, &source.id, &target.session.native_session)
+        && let Ok(Some(req)) =
+            claude::pending_request(store, &source.id, &target.session.native_session)
     {
         if req.kind == "approval" {
             if expected_hash != Some(req.question_hash.as_str()) {
@@ -928,14 +936,8 @@ fn respond(store: &Store, params: &Value) -> Result<Value> {
 
     // 4. Local OpenCode
     if source.provider == "opencode"
-        && let Some(out) = opencode::execute_structured(
-            &source,
-            &target,
-            expected_hash,
-            action,
-            answers,
-            text,
-        )
+        && let Some(out) =
+            opencode::execute_structured(&source, &target, expected_hash, action, answers, text)
     {
         return Ok(outcome_json(out, &lang));
     }
@@ -1105,8 +1107,12 @@ fn handoff(store: &Store, params: &Value) -> Result<Value> {
     let req_id = if !request_id.is_empty() {
         Some(request_id.to_owned())
     } else if let Some(target) = target {
-        claude::pending_request(store, &target.session.source_id, &target.session.native_session)?
-            .map(|r| r.id)
+        claude::pending_request(
+            store,
+            &target.session.source_id,
+            &target.session.native_session,
+        )?
+        .map(|r| r.id)
     } else {
         None
     };
@@ -1149,9 +1155,9 @@ mod tests {
             event_at: (now() * 1000) as u64,
             native_session: native.into(),
             pid: Some(std::process::id()),
-            process_start: crate::sessions::focus_target(std::process::id(), 0)["ancestors"][0]
-                ["start"]
-                .as_u64(),
+            process_start:
+                crate::sessions::focus_target(std::process::id(), 0)["ancestors"][0]["start"]
+                    .as_u64(),
             ..Default::default()
         }
     }
@@ -1609,11 +1615,7 @@ mod tests {
                 }
             ]
         });
-        std::fs::write(
-            log_dir.join("transcript.jsonl"),
-            format!("{}\n", row),
-        )
-        .unwrap();
+        std::fs::write(log_dir.join("transcript.jsonl"), format!("{}\n", row)).unwrap();
 
         let source = Source {
             id: "agy-src".into(),

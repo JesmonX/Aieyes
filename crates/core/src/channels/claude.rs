@@ -261,7 +261,7 @@ pub(crate) fn pending_request(
     source_id: &str,
     native: &str,
 ) -> Result<Option<PendingClaude>> {
-    let row: Option<(String, String, String, String, String, String, u32, u64)> = store
+    let row = store
         .db
         .query_row(
             "SELECT id,kind,tool_name,call_id,question_hash,input,pid,process_start \
@@ -276,7 +276,7 @@ pub(crate) fn pending_request(
                     r.get(2)?,
                     r.get(3)?,
                     r.get(4)?,
-                    r.get(5)?,
+                    r.get::<_, String>(5)?,
                     r.get(6)?,
                     r.get(7)?,
                 ))
@@ -656,17 +656,20 @@ pub(crate) fn hook_summary(store: &Store) -> Value {
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
             .and_then(|v| {
-                v["hooks"]["PermissionRequest"]
-                    .as_array()
-                    .and_then(|arr| {
-                        arr.iter().find_map(|r| {
-                            let has = r["hooks"].as_array().is_some_and(|hs| {
-                                hs.iter()
-                                    .any(|h| h["command"].as_str().is_some_and(|s| s.contains(MARKER)))
-                            });
-                            has.then(|| r["matcher"].as_str().unwrap_or("AskUserQuestion").to_owned())
+                v["hooks"]["PermissionRequest"].as_array().and_then(|arr| {
+                    arr.iter().find_map(|r| {
+                        let has = r["hooks"].as_array().is_some_and(|hs| {
+                            hs.iter()
+                                .any(|h| h["command"].as_str().is_some_and(|s| s.contains(MARKER)))
+                        });
+                        has.then(|| {
+                            r["matcher"]
+                                .as_str()
+                                .unwrap_or("AskUserQuestion")
+                                .to_owned()
                         })
                     })
+                })
             })
             .unwrap_or_else(|| "none".into());
         rows.push(json!({

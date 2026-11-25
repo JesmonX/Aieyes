@@ -506,7 +506,9 @@ fn structured_body(
                     let options = q["options"].as_array().map_or(&[][..], Vec::as_slice);
                     let pick_scalar = |s: &str| -> Result<Value> {
                         if let Some(option) = options.iter().find(|o| {
-                            o["label"].as_str().is_some_and(|l| l.eq_ignore_ascii_case(s))
+                            o["label"]
+                                .as_str()
+                                .is_some_and(|l| l.eq_ignore_ascii_case(s))
                                 || o["value"].as_str() == Some(s)
                         }) {
                             return Ok(option["value"].clone());
