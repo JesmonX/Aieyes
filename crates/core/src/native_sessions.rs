@@ -221,7 +221,7 @@ pub(crate) fn refresh(
             let tools = db.prepare("SELECT json_extract(data,'$.tool') FROM part WHERE message_id=?1 AND json_valid(data) AND json_extract(data,'$.type')='tool' AND json_extract(data,'$.state.status') IN ('pending','running') LIMIT 64")?.query_map([&row.turn],|r|r.get::<_,Option<String>>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
             if !tools.is_empty() {
                 kind = if tools.iter().any(|t| t.as_deref() == Some("question")) {
-                    "PermissionRequest"
+                    "Question"
                 } else {
                     "tool"
                 };
@@ -659,7 +659,8 @@ pub(crate) fn workbuddy_phase(status: &str) -> &'static str {
     {
         "completed" | "complete" | "done" | "pending" | "idle" | "await_input" | "awaitinput"
         | "waiting_input" | "waiting_user_input" | "connected" | "archived" => "complete",
-        "waiting_permission" | "waiting_question" => "PermissionRequest",
+        "waiting_permission" => "PermissionRequest",
+        "waiting_question" => "Question",
         "failed" | "error" => "failed",
         "cancelled" | "canceled" | "aborted" | "interrupted" | "terminated" => "interrupted",
         "tool_start" | "tool_end" | "tool_executing" => "tool",
@@ -1338,6 +1339,7 @@ if sys.stdin.readline().strip()=='restore':
             ]
         );
         assert_eq!(workbuddy_phase("Completed"), "complete");
+        assert_eq!(workbuddy_phase("waiting_question"), "Question");
         assert_eq!(workbuddy_phase("tool-executing"), "tool");
         assert_eq!(workbuddy_phase("future"), "unknown");
     }

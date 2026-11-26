@@ -168,8 +168,12 @@ pub fn cancel_query(id: &str) -> serde_json::Value {
     }
     serde_json::json!({"cancelled":count})
 }
-type Progress = std::sync::Arc<Mutex<Box<dyn FnMut(serde_json::Value) + Send>>>;
-thread_local! { static QUERY_PROGRESS: RefCell<Option<Progress>> = const { RefCell::new(None) }; }
+pub(crate) type Progress = std::sync::Arc<Mutex<Box<dyn FnMut(serde_json::Value) + Send>>>;
+thread_local! {
+    static QUERY_PROGRESS: RefCell<Option<Progress>> = const { RefCell::new(None) };
+    /// Callbacks this thread is currently running, innermost last.
+    static DELIVERING: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
 pub(crate) struct QueryProgress(Option<Progress>);
 impl Drop for QueryProgress {
     fn drop(&mut self) {
@@ -179,10 +183,37 @@ impl Drop for QueryProgress {
 pub(crate) fn query_progress(callback: Progress) -> QueryProgress {
     QueryProgress(QUERY_PROGRESS.with(|p| p.replace(Some(callback))))
 }
+struct Delivering;
+impl Drop for Delivering {
+    fn drop(&mut self) {
+        DELIVERING.with(|d| d.borrow_mut().pop());
+    }
+}
+/// Every progress event goes through here. A callback may synchronously run
+/// engine or store work that reports progress again on the same thread (a slow
+/// dashboard read calls `report_query`); its mutex is already held by this
+/// thread, so that nested report is dropped instead of deadlocking. Other
+/// threads still wait their turn, which keeps delivery order unchanged.
+pub(crate) fn deliver(callback: &Progress, value: serde_json::Value) {
+    let id = Arc::as_ptr(callback) as *const () as usize;
+    if DELIVERING.with(|d| d.borrow().contains(&id)) {
+        return;
+    }
+    // A callback that panicked must not turn later reports into panics.
+    let mut callback = callback.lock().unwrap_or_else(|e| e.into_inner());
+    DELIVERING.with(|d| d.borrow_mut().push(id));
+    let _delivering = Delivering;
+    callback(value);
+}
 pub(crate) fn report_query(done: i64, total: i64) {
-    QUERY_PROGRESS.with(|p| { if let Some(callback) = p.borrow().as_ref() {
-        callback.lock().unwrap()(serde_json::json!({"kind":"dashboard.progress","stage":format!("dashboard:{done}:{total}"),"done":done,"total":total}));
-    }});
+    // Clone out of the slot first: the callback may install or restore a slot.
+    let Some(callback) = QUERY_PROGRESS.with(|p| p.borrow().clone()) else {
+        return;
+    };
+    deliver(
+        &callback,
+        serde_json::json!({"kind":"dashboard.progress","stage":format!("dashboard:{done}:{total}"),"done":done,"total":total}),
+    );
 }
 
 #[cfg(test)]
@@ -196,5 +227,96 @@ mod query_tests {
         assert!(check().is_ok());
         assert_eq!(cancel_query("query-regression")["cancelled"], 1);
         assert!(check().is_err());
+    }
+
+    /// Runs `body` on its own thread and fails instead of hanging the suite.
+    fn within_timeout<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(body());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(20))
+            .expect("progress reporting deadlocked when re-entered from its own callback")
+    }
+    type Seen = Arc<Mutex<Vec<serde_json::Value>>>;
+    #[test]
+    fn a_callback_that_reports_progress_again_does_not_deadlock() {
+        let seen = within_timeout(|| {
+            let seen = Seen::default();
+            let log = seen.clone();
+            let progress: Progress = Arc::new(Mutex::new(Box::new(move |value| {
+                log.lock().unwrap().push(value);
+                // What a slow dashboard read does on the callback's own thread.
+                report_query(99, 100);
+            })));
+            {
+                let _slot = query_progress(progress.clone());
+                report_query(1, 3);
+                deliver(&progress, serde_json::json!({"stage":"direct"}));
+                report_query(2, 3);
+            }
+            // The slot is restored, so nothing is delivered after the call.
+            report_query(3, 3);
+            seen
+        });
+        let seen = seen.lock().unwrap();
+        let stages: Vec<_> = seen.iter().map(|v| v["stage"].as_str().unwrap()).collect();
+        assert_eq!(stages, ["dashboard:1:3", "direct", "dashboard:2:3"]);
+    }
+    #[test]
+    fn nested_reports_only_skip_the_callback_already_running() {
+        let seen = within_timeout(|| {
+            let seen = Seen::default();
+            let inner_log = seen.clone();
+            let inner: Progress = Arc::new(Mutex::new(Box::new(move |value| {
+                inner_log.lock().unwrap().push(value);
+            })));
+            let outer_log = seen.clone();
+            let outer: Progress = Arc::new(Mutex::new(Box::new(move |value| {
+                outer_log.lock().unwrap().push(value);
+                // A different callback installed from inside this one still hears.
+                let _slot = query_progress(inner.clone());
+                report_query(5, 9);
+            })));
+            let _slot = query_progress(outer);
+            report_query(1, 9);
+            report_query(2, 9);
+            seen
+        });
+        let seen = seen.lock().unwrap();
+        let stages: Vec<_> = seen.iter().map(|v| v["stage"].as_str().unwrap()).collect();
+        assert_eq!(
+            stages,
+            [
+                "dashboard:1:9",
+                "dashboard:5:9",
+                "dashboard:2:9",
+                "dashboard:5:9"
+            ]
+        );
+    }
+    #[test]
+    fn engine_progress_callbacks_may_report_query_progress() {
+        let seen = within_timeout(|| {
+            let root = tempfile::tempdir().unwrap();
+            let mut engine = crate::Engine::open(root.path()).unwrap();
+            let settings = engine.call("settings.get", serde_json::json!({})).unwrap();
+            let seen = Seen::default();
+            let log = seen.clone();
+            engine
+                .call_with_progress(
+                    "settings.save",
+                    settings,
+                    Box::new(move |value| {
+                        log.lock().unwrap().push(value);
+                        report_query(1, 2);
+                    }),
+                )
+                .unwrap();
+            seen
+        });
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert!(seen[0]["stage"].is_string(), "{seen:?}");
     }
 }

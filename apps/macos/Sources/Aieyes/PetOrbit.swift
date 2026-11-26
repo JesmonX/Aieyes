@@ -20,6 +20,11 @@ struct PetOrbitAgent: Identifiable, Equatable {
     var quota: PetOrbitQuota?
     var id: String { provider }
     var isOverflow: Bool { provider == PetOrbitLayout.overflowProvider }
+    /// Spoken summary of the badge: agent, whether it waits for input, and its session count.
+    var accessibilitySummary: String {
+        [title, phase == .needsInput ? L("等待输入") : nil, L("{0} 个进行中", activeCount)]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
     var title: String {
         isOverflow ? L("其他运行中 Agent") : Format.provider(displayProvider)
     }
@@ -122,6 +127,8 @@ enum PetOrbitLayout {
     @Published private(set) var agents: [PetOrbitAgent] = []
     @Published var selectedProvider: String? = nil
     @Published var hoveredProvider: String? = nil
+    /// Opens an agent's session popover without the mouse; set by the pet window for accessibility actions.
+    var openAgent: ((PetOrbitAgent) -> Void)?
     private var subscriptions = Set<AnyCancellable>()
     private var pending = false
     private weak var model: AppModel?
@@ -575,8 +582,23 @@ struct PetAgentSessionPopoverView: View {
         return waitingSessions.first
     }
 
+    /// The session the user chose to send an instruction to. It is looked up among all sessions so
+    /// the card and its draft survive the turn ending; once it asks for input it becomes a waiting card.
+    private var followUpSession: LiveSession? {
+        guard interaction.status.enabled, let id = interaction.followUpSessionID,
+              let hit = live.sessions.first(where: { $0.id == id }), hit.phase != .needsInput,
+              currentAgent.isOverflow
+                ? currentAgent.overflowProviders.contains(CoreContract.agentProvider(hit.provider))
+                : CoreContract.sameAgent(hit.provider, currentAgent.provider) else { return nil }
+        return hit
+    }
+
+    static func offersFollowUp(enabled: Bool, session: LiveSession, agentWaiting: Bool) -> Bool {
+        enabled && session.phase != .needsInput && !agentWaiting
+    }
+
     private var showInteractionCard: Bool {
-        interaction.status.enabled && activeWaitingSession != nil
+        interaction.status.enabled && (activeWaitingSession != nil || followUpSession != nil)
     }
 
     var body: some View {
@@ -588,7 +610,7 @@ struct PetAgentSessionPopoverView: View {
         VStack(alignment: .leading, spacing: 10) {
             header(agent: agent, activeCount: sessions.count)
             Divider().opacity(0.5)
-            if sessions.isEmpty {
+            if sessions.isEmpty && followUpSession == nil {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(L("当前会话已结束"))
                         .font(AppFont.body)
@@ -599,12 +621,43 @@ struct PetAgentSessionPopoverView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 8)
+            } else if activeWaitingSession == nil, let target = followUpSession {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        PetInteractionCardView(
+                            session: target,
+                            store: interaction,
+                            autoFocus: true,
+                            onFocusSession: { focus(target) },
+                            onOpenSessions: onOpenSessions,
+                            onCompleted: {}
+                        )
+                        HStack {
+                            Spacer()
+                            Button(L("返回会话列表")) { interaction.followUpSessionID = nil }
+                                .controlSize(.small)
+                        }
+                        let rest = sessions.filter { $0.id != target.id }
+                        if !rest.isEmpty {
+                            Divider().opacity(0.4)
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(Array(rest.enumerated()), id: \.element.id) { index, session in
+                                    if index > 0 { Divider().opacity(0.3) }
+                                    sessionRow(session)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(maxHeight: 420)
             } else if showInteractionCard, let target = activeWaitingSession {
                 if waiting.count > 1 {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(waiting) { item in
                                 let picked = item.id == target.id
+                                let name = Self.chipTitle(for: item, among: waiting)
                                 Button {
                                     selectedWaitingID = item.id
                                 } label: {
@@ -612,7 +665,8 @@ struct PetAgentSessionPopoverView: View {
                                         Circle()
                                             .fill(Palette.warn)
                                             .frame(width: 6, height: 6)
-                                        Text(item.project ?? Format.provider(item.provider))
+                                            .accessibilityHidden(true)
+                                        Text(name)
                                             .font(AppFont.caption)
                                             .lineLimit(1)
                                     }
@@ -627,6 +681,8 @@ struct PetAgentSessionPopoverView: View {
                                     )
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityLabel(L("{0} 等待输入", name))
+                                .accessibilityAddTraits(picked ? .isSelected : [])
                             }
                         }
                     }
@@ -636,9 +692,14 @@ struct PetAgentSessionPopoverView: View {
                         PetInteractionCardView(
                             session: target,
                             store: interaction,
+                            autoFocus: !autoOpened,
                             onFocusSession: { focus(target) },
+                            onOpenSessions: onOpenSessions,
                             onCompleted: {
-                                let remaining = waitingSessions.filter { $0.id != target.id }
+                                // Sessions already answered from here wait on the agent, not on the user.
+                                let remaining = waitingSessions.filter { item in
+                                    item.id != target.id && !(interaction.payloads[item.id].map(interaction.isCompleted) ?? false)
+                                }
                                 if let next = remaining.first {
                                     selectedWaitingID = next.id
                                 } else if autoOpened {
@@ -702,6 +763,19 @@ struct PetAgentSessionPopoverView: View {
         .frame(width: showInteractionCard ? 364 : 316)
         .font(AppFont.body)
         .aieyesAccent()
+        // A follow-up picked before this agent started asking must not come back, long after the
+        // click, once the waiting card is answered.
+        .onChange(of: activeWaitingSession?.id) { _, waitingID in
+            if waitingID != nil && interaction.followUpSessionID != nil { interaction.followUpSessionID = nil }
+        }
+    }
+
+    /// Chip title for a waiting session; sessions that share a project name get their short identity.
+    static func chipTitle(for session: LiveSession, among sessions: [LiveSession]) -> String {
+        let name = session.project ?? Format.provider(session.provider)
+        let shared = sessions.filter { ($0.project ?? Format.provider($0.provider)) == name }.count > 1
+        guard shared, let identity = session.shortIdentity else { return name }
+        return name + " #" + identity
     }
 
     private func header(agent: PetOrbitAgent, activeCount: Int) -> some View {
@@ -839,14 +913,31 @@ struct PetAgentSessionPopoverView: View {
         .padding(.vertical, 4)
         .contentShape(Rectangle())
 
-        if session.focusable {
-            Button { focus(session) } label: { content }
-                .buttonStyle(.plain)
-                .help(session.focusHelp)
-                .accessibilityHint(session.focusHelp)
-                .disabled(focusingID == session.id)
-        } else {
-            content
+        HStack(alignment: .top, spacing: 6) {
+            if session.focusable {
+                Button { focus(session) } label: { content }
+                    .buttonStyle(.plain)
+                    .help(session.focusHelp)
+                    .accessibilityHint(session.focusHelp)
+                    .disabled(focusingID == session.id)
+            } else {
+                content
+            }
+            // Whether an instruction can actually be sent is core's call; the card says so either way.
+            // While this agent has a request waiting, its card owns the popover and the follow-up
+            // card could not be shown, so the button is not offered.
+            if Self.offersFollowUp(enabled: interaction.status.enabled, session: session, agentWaiting: activeWaitingSession != nil) {
+                Button {
+                    interaction.followUpSessionID = session.id
+                } label: {
+                    Image(systemName: "text.bubble")
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.top, 6)
+                }
+                .buttonStyle(.borderless)
+                .help(L("发送后续指令"))
+                .accessibilityLabel(L("发送后续指令"))
+            }
         }
     }
 

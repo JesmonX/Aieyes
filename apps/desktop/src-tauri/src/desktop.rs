@@ -48,16 +48,19 @@ const PANEL_WIDTH: f64 = 450.0;
 const PANEL_COMPACT_WIDTH: f64 = 360.0;
 const PANEL_HEIGHT: f64 = 720.0;
 /// Lightweight orbit session popover width & height bounds in logical pixels.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 const ORBIT_POPOVER_WIDTH: f64 = 320.0;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 const ORBIT_INTERACTION_WIDTH: f64 = 368.0;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 const ORBIT_POPOVER_MIN_HEIGHT: f64 = 188.0;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 const ORBIT_POPOVER_MAX_HEIGHT: f64 = 360.0;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 const ORBIT_INTERACTION_MAX_HEIGHT: f64 = 480.0;
+/// Upper bound for a popover sized to the interaction card the renderer measured.
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+const ORBIT_INTERACTION_CONTENT_MAX_HEIGHT: f64 = 560.0;
 /// Mirrors `Preferences::panel_compact` so geometry code needs no state lock.
 static PANEL_COMPACT: AtomicBool = AtomicBool::new(false);
 fn panel_width() -> f64 {
@@ -136,7 +139,17 @@ struct ShellState {
     orbit_agent: Option<String>,
     orbit_auto: bool,
     orbit_preferred_session: Option<String>,
+    /// Height in logical pixels the open popover's interaction card needs, as measured by the renderer.
+    #[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
+    orbit_content_height: Option<f64>,
+    /// The open popover holds an unsent answer; focus loss and outside clicks must not close it.
+    orbit_draft: bool,
+    /// An auto-opened Linux popover is shown without keyboard focus until the user presses inside it.
+    #[cfg(target_os = "linux")]
+    orbit_passive: bool,
     dismissed_waiting: std::collections::HashSet<String>,
+    /// Waiting requests that could not auto-open yet because another panel was in the way.
+    pending_auto: Vec<AutoCandidate>,
     pet_asset: Value,
     floating: bool,
     visible: bool,
@@ -155,8 +168,110 @@ struct ShellState {
 #[cfg(not(target_os = "windows"))]
 impl ShellState {
     fn can_dismiss_panel(&self) -> bool {
-        self.panel && !self.pin && !self.native_interacting
+        self.panel && !self.pin && !self.native_interacting && !self.holds_orbit_draft()
     }
+}
+impl ShellState {
+    fn new(preferences: Preferences) -> Self {
+        Self {
+            accent: "system".into(),
+            quota_ring: None,
+            quota_label: String::new(),
+            hidden: preferences.hidden,
+            preferences,
+            snapshot: Snapshot::default(),
+            orbit_agents: Vec::new(),
+            orbit_agent: None,
+            orbit_auto: false,
+            orbit_preferred_session: None,
+            orbit_content_height: None,
+            orbit_draft: false,
+            #[cfg(target_os = "linux")]
+            orbit_passive: false,
+            dismissed_waiting: std::collections::HashSet::new(),
+            pending_auto: Vec::new(),
+            pet_asset: Value::Null,
+            floating: false,
+            visible: false,
+            panel: false,
+            panel_page: "agent".into(),
+            pin: false,
+            reason: String::new(),
+            page: "agent".into(),
+            dirty: false,
+            native_interacting: false,
+            panel_generation: 0,
+            panel_epoch: 0,
+            recovery: String::new(),
+        }
+    }
+    fn holds_orbit_draft(&self) -> bool {
+        self.panel && self.orbit_agent.is_some() && self.orbit_draft
+    }
+    /// Forgets the orbit popover together with how it was opened. `orbit_auto` and the preferred
+    /// session describe one popover; left behind, they would mark the next panel as auto-opened.
+    fn clear_orbit(&mut self) {
+        self.orbit_agent = None;
+        self.orbit_auto = false;
+        self.orbit_preferred_session = None;
+    }
+    /// The panel window closed: nothing of the popover it may have shown survives.
+    fn panel_closed(&mut self) {
+        self.clear_orbit();
+        self.orbit_draft = false;
+        self.orbit_content_height = None;
+    }
+    /// Leaves the orbit popover for the full panel; true when a popover was showing.
+    fn leave_orbit(&mut self) -> bool {
+        let was_orbit = self.panel && self.orbit_agent.is_some();
+        self.clear_orbit();
+        was_orbit
+    }
+    /// Only a popover that is actually selected can have opened by itself.
+    fn orbit_is_auto(&self) -> bool {
+        self.orbit_auto && self.orbit_agent.is_some()
+    }
+}
+/// One waiting request that may open the orbit popover by itself.
+#[derive(Debug, Clone, PartialEq)]
+struct AutoCandidate {
+    /// `session id|input state key`: a request pops up at most once.
+    key: String,
+    session_id: String,
+    provider: String,
+}
+/// Pick the next request to pop up. Requests that the open popover already lists count as shown;
+/// the rest wait in `pending` while `blocked` (another panel is open, or the pet is hidden).
+fn next_auto_popup(
+    pending: &mut Vec<AutoCandidate>,
+    dismissed: &mut std::collections::HashSet<String>,
+    current: &std::collections::HashSet<String>,
+    blocked: bool,
+    open_orbit: Option<&str>,
+    resolve: impl Fn(&str) -> Option<String>,
+) -> Option<(AutoCandidate, String)> {
+    dismissed.retain(|key| current.contains(key));
+    pending.retain(|item| current.contains(&item.key) && !dismissed.contains(&item.key));
+    if let Some(open) = open_orbit {
+        pending.retain(|item| {
+            let shown = resolve(&item.provider).as_deref() == Some(open);
+            if shown {
+                dismissed.insert(item.key.clone());
+            }
+            !shown
+        });
+    }
+    if blocked {
+        return None;
+    }
+    // An agent the orbit does not show yet stays queued; later requests are not held behind it.
+    let (index, orbit) = pending
+        .iter()
+        .enumerate()
+        .find_map(|(index, item)| resolve(&item.provider).map(|orbit| (index, orbit)))?;
+    let item = pending.remove(index);
+    dismissed.insert(item.key.clone());
+    Some((item, orbit))
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -395,11 +510,24 @@ fn orbit_popover_logical_size(state: &ShellState, provider: &str) -> (f64, f64) 
         .orbit_agents
         .iter()
         .find(|item| item.provider == provider);
-    let count = agent.map(|item| item.active_count).unwrap_or(0);
-    if agent.is_some_and(|item| item.phase == aieyes_core::sessions::Phase::NeedsInput) {
-        let h = (380.0 + (count.saturating_sub(1).min(2) as f64) * 52.0)
+    orbit_popover_size(
+        agent.is_some_and(|item| item.phase == aieyes_core::sessions::Phase::NeedsInput),
+        agent.map(|item| item.active_count).unwrap_or(0),
+        state.orbit_content_height,
+    )
+}
+/// A card is on screen when a session waits for input, or when the page reports one for a running
+/// session (follow-up instruction or interrupt); both use the wider popover and the card's height.
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+fn orbit_popover_size(needs_input: bool, count: usize, measured: Option<f64>) -> (f64, f64) {
+    let card_reported = measured.is_some_and(|height| height.is_finite() && height > 0.0);
+    if needs_input || card_reported {
+        let estimate = (380.0 + (count.saturating_sub(1).min(2) as f64) * 52.0)
             .clamp(320.0, ORBIT_INTERACTION_MAX_HEIGHT);
-        return (ORBIT_INTERACTION_WIDTH, h);
+        return (
+            ORBIT_INTERACTION_WIDTH,
+            orbit_interaction_height(measured, estimate),
+        );
     }
     if count == 0 {
         return (ORBIT_POPOVER_WIDTH, ORBIT_POPOVER_MIN_HEIGHT);
@@ -409,6 +537,21 @@ fn orbit_popover_logical_size(state: &ShellState, provider: &str) -> (f64, f64) 
         (124.0 + (count.min(3) as f64) * 76.0)
             .clamp(ORBIT_POPOVER_MIN_HEIGHT, ORBIT_POPOVER_MAX_HEIGHT),
     )
+}
+/// The measured card height wins over the estimate used before the card has rendered.
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+fn orbit_interaction_height(measured: Option<f64>, estimate: f64) -> f64 {
+    match measured {
+        Some(height) if height.is_finite() && height > 0.0 => {
+            height.clamp(188.0, ORBIT_INTERACTION_CONTENT_MAX_HEIGHT)
+        }
+        _ => estimate,
+    }
+}
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn open_orbit_size(state: &ShellState) -> Option<(f64, f64)> {
+    let provider = state.orbit_agent.as_deref().filter(|_| state.panel)?;
+    Some(orbit_popover_logical_size(state, provider))
 }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn active_panel_size(app: &AppHandle, scale: f64, work_height: Option<u32>) -> (u32, u32) {
@@ -692,32 +835,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
     let menu = build_context_menu(app.handle(), false, false, false, false)?;
     app.manage(Desktop {
         path,
-        state: Mutex::new(ShellState {
-            accent: "system".into(),
-            quota_ring: None,
-            quota_label: String::new(),
-            hidden: preferences.hidden,
-            preferences,
-            snapshot: Snapshot::default(),
-            orbit_agents: Vec::new(),
-            orbit_agent: None,
-            orbit_auto: false,
-            orbit_preferred_session: None,
-            dismissed_waiting: std::collections::HashSet::new(),
-            pet_asset: Value::Null,
-            floating: false,
-            visible: false,
-            panel: false,
-            panel_page: "agent".into(),
-            pin: false,
-            reason: String::new(),
-            page: "agent".into(),
-            dirty: false,
-            native_interacting: false,
-            panel_generation: 0,
-            panel_epoch: 0,
-            recovery: String::new(),
-        }),
+        state: Mutex::new(ShellState::new(preferences)),
         #[cfg(target_os = "windows")]
         tray_clicks: Mutex::default(),
         #[cfg(not(target_os = "linux"))]
@@ -879,31 +997,29 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                     let key = format!(
                         "{}|{}",
                         s.id,
-                        s.input_state_key
-                            .as_deref()
-                            .unwrap_or(&s.turn_id)
+                        s.input_state_key.as_deref().unwrap_or(&s.turn_id)
                     );
                     (key, s.id.clone(), s.provider.clone())
                 })
                 .collect();
             let current_waiting_keys: std::collections::HashSet<String> =
                 current_waiting.iter().map(|(k, _, _)| k.clone()).collect();
-            let auto_candidate = if !waiting_seeded {
-                waiting_seeded = true;
-                known_waiting = current_waiting_keys.clone();
-                None
+            // Requests already waiting at launch are not popped up; every later one is offered once.
+            let auto_candidates: Vec<AutoCandidate> = if waiting_seeded && auto_popup_enabled {
+                current_waiting
+                    .iter()
+                    .filter(|(key, _, _)| !known_waiting.contains(key))
+                    .map(|(key, session_id, provider)| AutoCandidate {
+                        key: key.clone(),
+                        session_id: session_id.clone(),
+                        provider: provider.clone(),
+                    })
+                    .collect()
             } else {
-                let candidate = if auto_popup_enabled {
-                    current_waiting
-                        .iter()
-                        .find(|(k, _, _)| !known_waiting.contains(k))
-                        .cloned()
-                } else {
-                    None
-                };
-                known_waiting = current_waiting_keys.clone();
-                candidate
+                Vec::new()
             };
+            waiting_seeded = true;
+            known_waiting = current_waiting_keys.clone();
             let current = store
                 .db
                 .query_row(
@@ -988,11 +1104,12 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                         quota_ring,
                         orbit_agents,
                     );
-                    if let Some((dedup_key, session_id, provider)) = auto_candidate {
-                        maybe_auto_open_orbit(&app, &dedup_key, &session_id, &provider, &current_waiting_keys);
-                    } else if let Ok(mut state) = app.state::<Desktop>().state.lock() {
-                        state.dismissed_waiting.retain(|k| current_waiting_keys.contains(k));
-                    }
+                    maybe_auto_open_orbit(
+                        &app,
+                        auto_candidates,
+                        auto_popup_enabled,
+                        &current_waiting_keys,
+                    );
                     refresh_menu(&app);
                 })
                 .is_err()
@@ -1228,11 +1345,20 @@ enum PanelRequest {
 }
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 impl PanelRequest {
-    fn resolve(self, open: bool, pinned: bool, interacting: bool, generation: u64) -> Option<bool> {
+    /// `draft` is `ShellState::holds_orbit_draft`: an unsent answer in the orbit popover survives
+    /// every passive dismissal, whichever path asks for it.
+    fn resolve(
+        self,
+        open: bool,
+        pinned: bool,
+        interacting: bool,
+        draft: bool,
+        generation: u64,
+    ) -> Option<bool> {
         match self {
             Self::Set(value) => Some(value),
             Self::Toggle => Some(!open),
-            Self::Dismiss => (open && !pinned && !interacting).then_some(false),
+            Self::Dismiss => (open && !pinned && !interacting && !draft).then_some(false),
             Self::Restore(expected) => (expected == generation).then_some(open),
         }
     }
@@ -1267,6 +1393,7 @@ fn request_native_panel(app: &AppHandle, request: PanelRequest) -> Result<(), St
                         state.panel,
                         state.pin,
                         state.native_interacting,
+                        state.holds_orbit_draft(),
                         state.panel_generation,
                     )
                 };
@@ -1284,16 +1411,16 @@ fn request_native_panel(app: &AppHandle, request: PanelRequest) -> Result<(), St
 fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if crate::linux_bridge::active(app) {
-        let orbit_agent = app
+        let (orbit_agent, orbit_auto) = app
             .state::<Desktop>()
             .state
             .lock()
-            .ok()
-            .and_then(|s| s.orbit_agent.clone());
+            .map(|s| (s.orbit_agent.clone(), s.orbit_is_auto()))
+            .unwrap_or_default();
         if !crate::linux_bridge::send(
             app,
             "panel",
-            json!({"open": open, "orbitAgent": orbit_agent}),
+            json!({"open": open, "orbitAgent": orbit_agent, "orbitAuto": orbit_auto}),
         ) {
             if open {
                 let _ = activate_main(app);
@@ -1303,7 +1430,7 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
         if let Ok(mut state) = app.state::<Desktop>().state.lock() {
             state.panel = open;
             if !open {
-                state.orbit_agent = None;
+                state.panel_closed();
             }
             state.panel_epoch = state.panel_epoch.wrapping_add(1);
         }
@@ -1453,17 +1580,29 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
         }
         state.panel = open;
         if !open {
-            state.orbit_agent = None;
+            state.panel_closed();
         }
     }
     #[cfg(target_os = "linux")]
     {
         if open {
             use gtk::prelude::*;
+            // A popover that opened by itself must not take the keyboard from the app in use. It
+            // is mapped without focus and claims it on the first press inside (desktop_orbit_popover).
+            let (passive, was_passive) = {
+                let desktop = app.state::<Desktop>();
+                let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+                let passive = state.orbit_is_auto();
+                (
+                    passive,
+                    std::mem::replace(&mut state.orbit_passive, passive),
+                )
+            };
             let native = window.gtk_window().map_err(|e| e.to_string())?;
-            native.set_accept_focus(true);
+            native.set_accept_focus(!passive);
+            native.set_focus_on_map(!passive);
             window.show().map_err(|e| e.to_string())?;
-            if !was_open {
+            if !passive && (!was_open || was_passive) {
                 // Use the activating click's timestamp; CurrentTime can be
                 // rejected by focus-stealing prevention on X11 window managers.
                 crate::native_pet::focus_window(&native);
@@ -1482,7 +1621,7 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
                         .state::<Desktop>()
                         .state
                         .lock()
-                        .is_ok_and(|s| s.panel && !s.native_interacting)
+                        .is_ok_and(|s| s.panel && !s.native_interacting && !s.orbit_passive)
                     {
                         return;
                     }
@@ -1495,6 +1634,9 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
                 });
             }
         } else {
+            if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+                state.orbit_passive = false;
+            }
             window.hide().map_err(|e| e.to_string())?;
         }
     }
@@ -1637,6 +1779,124 @@ pub fn desktop_panel_ready(app: AppHandle, generation: u64) -> Result<(), String
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     repair_panel_geometry(&app)?;
     emit_shell(&app);
+    Ok(())
+}
+
+/// Fit the open orbit popover to its current content and keep it attached to the pet.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn resize_orbit_popover(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if crate::linux_bridge::active(app) {
+        // The X11 helper owns the popover window and sizes it from its own copy of the state.
+        return Ok(());
+    }
+    let open = {
+        let desktop = app.state::<Desktop>();
+        let state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+        state.panel && state.orbit_agent.is_some()
+    };
+    let Some(window) = app.get_webview_window("floating").filter(|_| open) else {
+        return Ok(());
+    };
+    let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? else {
+        return Ok(());
+    };
+    let area = monitor.work_area();
+    let scale = monitor.scale_factor();
+    let (width, height) = active_panel_size(app, scale, Some(area.size.height));
+    let width = width.min(
+        area.size
+            .width
+            .saturating_sub((24.0 * scale).round() as u32)
+            .max(1),
+    );
+    let actual = window.inner_size().map_err(|e| e.to_string())?;
+    if actual.width.abs_diff(width) <= 1 && actual.height.abs_diff(height) <= 1 {
+        return Ok(());
+    }
+    // Without the pet's geometry (tray-only display) the popover grows in place.
+    if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>()
+        && let Ok((x, y, ball_width, ball_height, _)) = pet_window.geometry()
+    {
+        let pos = panel_rect(
+            Position { x, y },
+            (ball_width as i32, ball_height as i32),
+            (width as i32, height as i32),
+            (
+                area.position.x,
+                area.position.y,
+                area.size.width,
+                area.size.height,
+            ),
+            (PANEL_GAP * scale) as i32,
+        );
+        window
+            .set_position(PhysicalPosition::new(pos.x, pos.y))
+            .map_err(|e| e.to_string())?;
+    }
+    window
+        .set_size(PhysicalSize::new(width, height))
+        .map_err(|e| e.to_string())
+}
+/// The orbit popover's renderer reports what the shell cannot see: the height its interaction
+/// card needs (0 when there is none), whether it holds an unsent answer, and the first press
+/// inside a popover that opened without keyboard focus.
+#[tauri::command]
+pub fn desktop_orbit_popover(
+    app: AppHandle,
+    height: Option<f64>,
+    draft: Option<bool>,
+    focus: Option<bool>,
+) -> Result<(), String> {
+    let resize = {
+        let desktop = app.state::<Desktop>();
+        let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+        if !state.panel || state.orbit_agent.is_none() {
+            return Ok(());
+        }
+        if let Some(draft) = draft {
+            state.orbit_draft = draft;
+        }
+        match height {
+            Some(height) => {
+                let next = (height.is_finite() && height > 0.0).then_some(height.round());
+                std::mem::replace(&mut state.orbit_content_height, next) != next
+            }
+            None => false,
+        }
+    };
+    #[cfg(target_os = "linux")]
+    if crate::linux_bridge::child()
+        && let Some(draft) = draft
+    {
+        // Outside clicks on the pet are judged by the main process.
+        crate::linux_bridge::request(&app, "desktop_orbit_popover", json!({"draft": draft}));
+    }
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    if resize {
+        resize_orbit_popover(&app)?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    let _ = resize;
+    #[cfg(target_os = "linux")]
+    if focus == Some(true) && !crate::linux_bridge::active(&app) {
+        let claim = {
+            let desktop = app.state::<Desktop>();
+            let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+            std::mem::take(&mut state.orbit_passive)
+        };
+        if claim && let Some(window) = app.get_webview_window("floating") {
+            use gtk::prelude::*;
+            let native = window.gtk_window().map_err(|e| e.to_string())?;
+            native.set_accept_focus(true);
+            crate::native_pet::focus_window(&native);
+            window
+                .with_webview(|view| view.inner().grab_focus())
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = focus;
     Ok(())
 }
 
@@ -1958,10 +2218,23 @@ fn update(
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     let previous_size = entry_size(app);
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    let mut orbit_resized = false;
     if let Ok(mut state) = desktop.state.lock() {
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        let previous_orbit = open_orbit_size(&state);
         state.snapshot = snapshot;
         state.orbit_agents = orbit_agents;
         state.pet_asset = pet_asset;
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            orbit_resized = previous_orbit != open_orbit_size(&state);
+        }
+    }
+    // The popover is narrower without an interaction card: follow the agent in and out of waiting.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    if orbit_resized {
+        let _ = resize_orbit_popover(app);
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     if previous_size != entry_size(app)
@@ -2177,7 +2450,7 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "pet": pet,
         "petOrbit": state.orbit_agents,
         "orbitAgent": state.orbit_agent,
-        "orbitAuto": state.orbit_auto,
+        "orbitAuto": state.orbit_is_auto(),
         "orbitPreferredSession": state.orbit_preferred_session,
         "summary": crate::localization::text(&state.snapshot.summary()), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
         "sources": state.snapshot.sources, "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
@@ -2410,51 +2683,57 @@ fn detail_view(view: &Value) -> Result<Value, String> {
     Ok(Value::Object(filter))
 }
 
+/// Queue the new waiting requests and pop up the next one once no other panel is in the way.
 fn maybe_auto_open_orbit(
     app: &AppHandle,
-    dedup_key: &str,
-    session_id: &str,
-    provider: &str,
+    candidates: Vec<AutoCandidate>,
+    enabled: bool,
     current_waiting: &std::collections::HashSet<String>,
 ) {
-    let target_provider = {
+    {
         let desktop = app.state::<Desktop>();
-        let Ok(mut state) = desktop.state.lock() else {
+        let Ok(mut guard) = desktop.state.lock() else {
             return;
         };
-        state.dismissed_waiting.retain(|k| current_waiting.contains(k));
-        if state.dismissed_waiting.contains(dedup_key)
-            || !state.visible
-            || state.hidden
-            || state.panel
-            || state.native_interacting
-        {
-            return;
+        let state = &mut *guard;
+        if enabled {
+            state.pending_auto.extend(candidates);
+        } else {
+            state.pending_auto.clear();
         }
-        let agent_id = aieyes_core::contracts::provider(provider)
-            .map(|p| p.agent_id)
-            .unwrap_or(provider);
-        let resolved = state
-            .orbit_agents
-            .iter()
-            .find(|a| a.provider == agent_id)
-            .or_else(|| {
-                state.orbit_agents.iter().find(|a| {
-                    a.provider == aieyes_core::pets::ORBIT_OVERFLOW_PROVIDER
-                        && a.overflow_providers.iter().any(|p| p == agent_id)
+        let blocked = !state.visible || state.hidden || state.panel || state.native_interacting;
+        let open_orbit = state.orbit_agent.clone().filter(|_| state.panel);
+        let agents = &state.orbit_agents;
+        let resolve = |provider: &str| {
+            let agent_id = aieyes_core::contracts::provider(provider)
+                .map(|p| p.agent_id)
+                .unwrap_or(provider);
+            agents
+                .iter()
+                .find(|a| a.provider == agent_id)
+                .or_else(|| {
+                    agents.iter().find(|a| {
+                        a.provider == aieyes_core::pets::ORBIT_OVERFLOW_PROVIDER
+                            && a.overflow_providers.iter().any(|p| p == agent_id)
+                    })
                 })
-            })
-            .map(|a| a.provider.clone());
-        let Some(orbit_provider) = resolved else {
+                .map(|a| a.provider.clone())
+        };
+        let Some((candidate, orbit_provider)) = next_auto_popup(
+            &mut state.pending_auto,
+            &mut state.dismissed_waiting,
+            current_waiting,
+            blocked,
+            open_orbit.as_deref(),
+            resolve,
+        ) else {
             return;
         };
-        state.dismissed_waiting.insert(dedup_key.to_owned());
-        state.orbit_agent = Some(orbit_provider.clone());
+        state.orbit_agent = Some(orbit_provider);
         state.orbit_auto = true;
-        state.orbit_preferred_session = Some(session_id.to_owned());
-        orbit_provider
-    };
-    let _ = target_provider;
+        state.orbit_preferred_session = Some(candidate.session_id);
+        state.orbit_content_height = None;
+    }
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         let _ = request_native_panel(app, PanelRequest::Set(true));
@@ -2474,11 +2753,12 @@ fn open_orbit_agent(app: &AppHandle, provider: &str) -> Result<(), String> {
         let desktop = app.state::<Desktop>();
         let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
         if state.panel && state.orbit_agent.as_deref() == Some(provider) {
-            state.orbit_agent = None;
-            state.orbit_auto = false;
-            state.orbit_preferred_session = None;
+            state.clear_orbit();
             true
         } else {
+            if state.orbit_agent.as_deref() != Some(provider) {
+                state.orbit_content_height = None;
+            }
             state.orbit_agent = Some(provider.to_owned());
             state.orbit_auto = false;
             state.orbit_preferred_session = None;
@@ -2519,9 +2799,7 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
         }
         "focus-panel" => {
             if let Ok(mut state) = app.state::<Desktop>().state.lock() {
-                state.orbit_agent = None;
-                state.orbit_auto = false;
-                state.orbit_preferred_session = None;
+                state.clear_orbit();
             }
             set_panel(app, true)
         }
@@ -2550,20 +2828,27 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
                         .collect();
                     state.dismissed_waiting.extend(matching_keys);
                 }
-                state.orbit_agent = None;
-                state.orbit_auto = false;
-                state.orbit_preferred_session = None;
+                state.clear_orbit();
             }
             set_panel(app, false)
         }
         #[cfg(target_os = "windows")]
         "tray-panel" => {
             if let Ok(mut state) = app.state::<Desktop>().state.lock() {
-                state.orbit_agent = None;
+                state.clear_orbit();
             }
             open_tray_panel(app)
         }
         "dismiss-panel" => {
+            // An outside click must not throw away an answer that is being written.
+            if app
+                .state::<Desktop>()
+                .state
+                .lock()
+                .is_ok_and(|s| s.holds_orbit_draft())
+            {
+                return Ok(());
+            }
             let was_orbit = app
                 .state::<Desktop>()
                 .state
@@ -2573,7 +2858,7 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
             {
                 if was_orbit {
                     if let Ok(mut state) = app.state::<Desktop>().state.lock() {
-                        state.orbit_agent = None;
+                        state.clear_orbit();
                     }
                     return request_native_panel(app, PanelRequest::Set(false));
                 }
@@ -2590,7 +2875,7 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
                         .can_dismiss_panel();
                 if close {
                     if let Ok(mut state) = app.state::<Desktop>().state.lock() {
-                        state.orbit_agent = None;
+                        state.clear_orbit();
                     }
                     set_panel(app, false)?;
                 }
@@ -2602,9 +2887,7 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
             let switched_from_orbit = {
                 let desktop = app.state::<Desktop>();
                 let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
-                let was_orbit = state.panel && state.orbit_agent.is_some();
-                state.orbit_agent = None;
-                was_orbit
+                state.leave_orbit()
             };
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             return request_native_panel(
@@ -2984,6 +3267,9 @@ fn set_web_panel(app: &AppHandle, open: bool) -> Result<(), String> {
             return Ok(());
         }
         state.panel = open;
+        if !open {
+            state.panel_closed();
+        }
     }
     let window = app.get_webview_window("floating").ok_or("桌宠不可用")?;
     let scale = window.scale_factor().map_err(|error| error.to_string())?;
@@ -3760,6 +4046,7 @@ pub(crate) fn refresh_tray_icon(app: &AppHandle) {
 #[cfg(target_os = "linux")]
 pub(crate) fn helper_status(app: &AppHandle, info: Value) {
     crate::linux_bridge::remember(app, &info);
+    let mut orbit_resized = false;
     if let Ok(mut state) = app.state::<Desktop>().state.lock() {
         state.floating = info["petEnabled"] == true;
         state.visible = state.floating && info["hidden"] != true;
@@ -3769,11 +4056,19 @@ pub(crate) fn helper_status(app: &AppHandle, info: Value) {
         state.preferences.pet_uniform_timing = info["petUniformTiming"] == true;
         state.preferences.show_count = info["showCount"] == true;
         state.pet_asset = json!({"pet":info["petAsset"]});
+        let previous_orbit = open_orbit_size(&state);
         state.orbit_agents = crate::pet_orbit::parse_agents(&info);
         state.orbit_agent = info["orbitAgent"].as_str().map(str::to_owned);
+        if state.orbit_agent.is_none() {
+            state.clear_orbit();
+        }
+        orbit_resized = previous_orbit != open_orbit_size(&state);
         if let Some(page) = info["panelPage"].as_str() {
             state.panel_page = page.into();
         }
+    }
+    if orbit_resized {
+        let _ = resize_orbit_popover(app);
     }
     if let Some(language) = info["language"].as_str() {
         crate::localization::set_language(language);
@@ -3802,7 +4097,12 @@ pub(crate) fn helper_control(app: &AppHandle, name: &str, payload: Value) {
                 )
             };
             if let Ok(mut state) = app.state::<Desktop>().state.lock() {
-                state.orbit_agent = if open { orbit_agent } else { None };
+                let orbit_agent = if open { orbit_agent } else { None };
+                if state.orbit_agent != orbit_agent {
+                    state.orbit_content_height = None;
+                }
+                state.orbit_auto = orbit_agent.is_some() && payload["orbitAuto"] == true;
+                state.orbit_agent = orbit_agent;
             }
             let _ = set_native_panel_on_ui(app, open);
         }
@@ -3822,6 +4122,63 @@ pub(crate) fn helper_control(app: &AppHandle, name: &str, payload: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn auto_opened_orbit() -> ShellState {
+        let mut state = ShellState::new(Preferences::default());
+        state.panel = true;
+        state.orbit_agent = Some("claude".into());
+        state.orbit_auto = true;
+        state.orbit_preferred_session = Some("session-1".into());
+        state.orbit_content_height = Some(180.0);
+        state.orbit_draft = true;
+        state
+    }
+    fn assert_no_orbit_left(state: &ShellState) {
+        assert_eq!(state.orbit_agent, None);
+        assert!(!state.orbit_auto, "auto flag outlived its popover");
+        assert_eq!(state.orbit_preferred_session, None);
+        assert!(!state.orbit_is_auto());
+    }
+    #[test]
+    fn closing_an_auto_opened_orbit_forgets_that_it_was_automatic() {
+        // dismiss-panel, tray-panel and the orbit-agent toggle drop the popover.
+        let mut state = auto_opened_orbit();
+        state.clear_orbit();
+        assert_no_orbit_left(&state);
+
+        // The panel window closing (outside click, Dismiss, helper "panel" close).
+        let mut state = auto_opened_orbit();
+        state.panel = false;
+        state.panel_closed();
+        assert_no_orbit_left(&state);
+        assert!(!state.orbit_draft);
+        assert_eq!(state.orbit_content_height, None);
+
+        // toggle-panel switches from the popover to the full panel, which the user opened.
+        let mut state = auto_opened_orbit();
+        assert!(state.leave_orbit());
+        assert_no_orbit_left(&state);
+        assert!(!state.leave_orbit());
+        state.panel = false;
+        state.orbit_agent = Some("claude".into());
+        assert!(
+            !state.leave_orbit(),
+            "a hidden popover is not switched from"
+        );
+        assert_no_orbit_left(&state);
+    }
+    #[test]
+    fn auto_flag_is_reported_only_with_a_selected_orbit() {
+        let mut state = auto_opened_orbit();
+        assert!(state.orbit_is_auto());
+        state.orbit_agent = None;
+        assert!(
+            !state.orbit_is_auto(),
+            "a stale flag must not reach desktop_info"
+        );
+        state.orbit_agent = Some("claude".into());
+        state.orbit_auto = false;
+        assert!(!state.orbit_is_auto());
+    }
     #[test]
     fn identical_status_ignores_check_timestamps_but_keeps_health_and_session_changes() {
         use aieyes_core::sessions::SourceHealth;
@@ -3864,38 +4221,151 @@ mod tests {
         );
     }
 
+    fn candidate(key: &str, provider: &str) -> AutoCandidate {
+        AutoCandidate {
+            key: key.into(),
+            session_id: key.split('|').next().unwrap_or(key).into(),
+            provider: provider.into(),
+        }
+    }
+    #[test]
+    fn auto_popup_candidates_wait_for_an_open_panel_and_pop_once() {
+        use std::collections::HashSet;
+        let resolve = |provider: &str| (provider != "unknown").then(|| provider.to_owned());
+        let current: HashSet<String> = ["a|1", "b|1", "c|1", "u|1"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let mut dismissed = HashSet::new();
+        let mut pending = vec![candidate("a|1", "claude"), candidate("b|1", "codex")];
+
+        let (first, orbit) =
+            next_auto_popup(&mut pending, &mut dismissed, &current, false, None, resolve).unwrap();
+        assert_eq!((first.key.as_str(), orbit.as_str()), ("a|1", "claude"));
+        assert!(dismissed.contains("a|1"));
+
+        // The first popover is open: the other agent's request waits instead of being dropped,
+        // and a new request of the agent on screen counts as shown.
+        pending.push(candidate("c|1", "claude"));
+        assert!(
+            next_auto_popup(
+                &mut pending,
+                &mut dismissed,
+                &current,
+                true,
+                Some("claude"),
+                resolve
+            )
+            .is_none()
+        );
+        assert_eq!(pending, vec![candidate("b|1", "codex")]);
+        assert!(dismissed.contains("c|1"));
+
+        // An agent the orbit does not show stays queued without holding back the next request.
+        pending.insert(0, candidate("u|1", "unknown"));
+        let (second, _) =
+            next_auto_popup(&mut pending, &mut dismissed, &current, false, None, resolve).unwrap();
+        assert_eq!(second.key, "b|1");
+        assert_eq!(pending, vec![candidate("u|1", "unknown")]);
+        assert!(
+            next_auto_popup(&mut pending, &mut dismissed, &current, false, None, resolve).is_none()
+        );
+
+        // A request never pops twice, and one that stopped waiting leaves the queue and the record.
+        pending.push(candidate("a|1", "claude"));
+        pending.push(candidate("gone|1", "claude"));
+        assert!(
+            next_auto_popup(&mut pending, &mut dismissed, &current, false, None, resolve).is_none()
+        );
+        let later: HashSet<String> = ["b|1".to_owned()].into_iter().collect();
+        assert!(
+            next_auto_popup(&mut pending, &mut dismissed, &later, false, None, resolve).is_none()
+        );
+        assert!(pending.is_empty());
+        assert_eq!(dismissed, later);
+    }
+    #[test]
+    fn orbit_popover_height_follows_the_measured_card_within_bounds() {
+        assert_eq!(orbit_interaction_height(None, 380.0), 380.0);
+        assert_eq!(orbit_interaction_height(Some(0.0), 432.0), 432.0);
+        assert_eq!(orbit_interaction_height(Some(f64::NAN), 432.0), 432.0);
+        assert_eq!(orbit_interaction_height(Some(120.0), 380.0), 188.0);
+        assert_eq!(orbit_interaction_height(Some(301.0), 380.0), 301.0);
+        assert_eq!(
+            orbit_interaction_height(Some(2000.0), 380.0),
+            ORBIT_INTERACTION_CONTENT_MAX_HEIGHT
+        );
+    }
+    #[test]
+    fn orbit_popover_widens_for_a_card_on_a_running_session() {
+        // No card: the plain session list.
+        assert_eq!(orbit_popover_size(false, 0, None), (320.0, 188.0));
+        assert_eq!(orbit_popover_size(false, 2, None), (320.0, 276.0));
+        assert_eq!(orbit_popover_size(false, 2, Some(0.0)), (320.0, 276.0));
+        // A waiting session: estimated until the card reports its height.
+        assert_eq!(orbit_popover_size(true, 1, None), (368.0, 380.0));
+        assert_eq!(orbit_popover_size(true, 2, Some(301.0)), (368.0, 301.0));
+        // A follow-up card on a running session is sized like any other card.
+        assert_eq!(orbit_popover_size(false, 1, Some(412.0)), (368.0, 412.0));
+        assert_eq!(
+            orbit_popover_size(false, 1, Some(5000.0)),
+            (368.0, ORBIT_INTERACTION_CONTENT_MAX_HEIGHT)
+        );
+    }
     #[test]
     fn panel_requests_resolve_at_execution_and_ignore_stale_rebuilds() {
         assert_eq!(
-            PanelRequest::Set(true).resolve(false, false, false, 1),
+            PanelRequest::Set(true).resolve(false, false, false, false, 1),
             Some(true)
         );
         assert_eq!(
-            PanelRequest::Toggle.resolve(true, false, false, 1),
+            PanelRequest::Toggle.resolve(true, false, false, false, 1),
             Some(false)
         );
         assert_eq!(
-            PanelRequest::Dismiss.resolve(true, false, false, 1),
+            PanelRequest::Dismiss.resolve(true, false, false, false, 1),
             Some(false)
         );
-        assert_eq!(PanelRequest::Dismiss.resolve(true, true, false, 1), None);
+        assert_eq!(
+            PanelRequest::Dismiss.resolve(true, true, false, false, 1),
+            None
+        );
         // Escape/close and pet toggles remain explicit actions when pinned.
         assert_eq!(
-            PanelRequest::Set(false).resolve(true, true, false, 1),
+            PanelRequest::Set(false).resolve(true, true, false, false, 1),
             Some(false)
         );
         assert_eq!(
-            PanelRequest::Toggle.resolve(true, true, false, 1),
-            Some(false)
-        );
-        assert_eq!(PanelRequest::Dismiss.resolve(true, false, true, 1), None);
-        assert_eq!(PanelRequest::Dismiss.resolve(false, false, false, 1), None);
-        assert_eq!(
-            PanelRequest::Restore(1).resolve(false, false, false, 1),
+            PanelRequest::Toggle.resolve(true, true, false, false, 1),
             Some(false)
         );
         assert_eq!(
-            PanelRequest::Restore(1).resolve(true, false, false, 2),
+            PanelRequest::Dismiss.resolve(true, false, true, false, 1),
+            None
+        );
+        assert_eq!(
+            PanelRequest::Dismiss.resolve(false, false, false, false, 1),
+            None
+        );
+        // An unsent orbit answer blocks outside clicks and focus loss, not explicit actions.
+        assert_eq!(
+            PanelRequest::Dismiss.resolve(true, false, false, true, 1),
+            None
+        );
+        assert_eq!(
+            PanelRequest::Set(false).resolve(true, false, false, true, 1),
+            Some(false)
+        );
+        assert_eq!(
+            PanelRequest::Toggle.resolve(true, false, false, true, 1),
+            Some(false)
+        );
+        assert_eq!(
+            PanelRequest::Restore(1).resolve(false, false, false, false, 1),
+            Some(false)
+        );
+        assert_eq!(
+            PanelRequest::Restore(1).resolve(true, false, false, false, 2),
             None
         );
     }

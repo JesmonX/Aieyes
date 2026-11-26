@@ -1,0 +1,22 @@
+{
+  "data": [
+    {
+      "id": "per_213b2cf6a001atszzmoQHG52Wk",
+      "sessionID": "ses_dec4df878ffe9FgvEm07re0zcf",
+      "action": "shell",
+      "resources": [
+        "echo probe > out.txt",
+        "ls -la"
+      ],
+      "save": [
+        "echo *",
+        "ls *"
+      ],
+      "source": {
+        "type": "tool",
+        "messageID": "msg_213b2cb700015kjy7BMQXzZi4E",
+        "id": "chatcmpl-tool-a056d3e52d4f866c"
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "data": [
+    {
+      "id": "per_213b7ee470014WOOaCW00XFocx",
+      "sessionID": "ses_dec4df878ffe9FgvEm07re0zcf",
+      "action": "shell",
+      "resources": [
+        "mkdir -p d1"
+      ],
+      "save": [
+        "mkdir *"
+      ],
+      "source": {
+        "type": "tool",
+        "messageID": "msg_213b7e989001MjiGdbRZ6aotkf",
+        "id": "chatcmpl-tool-9319008f80d8ddce"
+      }
+    },
+    {
+      "id": "per_213b7ee49001wRHGbaQiBtkskg",
+      "sessionID": "ses_dec4df878ffe9FgvEm07re0zcf",
+      "action": "shell",
+      "resources": [
+        "touch t1.txt"
+      ],
+      "save": [
+        "touch *"
+      ],
+      "source": {
+        "type": "tool",
+        "messageID": "msg_213b7e989001MjiGdbRZ6aotkf",
+        "id": "chatcmpl-tool-8469400334862654"
+      }
+    }
+  ]
+}

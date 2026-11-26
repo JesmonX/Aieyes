@@ -1,6 +1,9 @@
 //! Bounded readers for agents whose history is not a Claude or Codex transcript.
 //! They make a pending question or approval and the final reply readable. These agents have
 //! no verified answer interface, so a reply still goes through the terminal adapters.
+//!
+//! Record formats were observed with Kimi Code 2.4.1, Grok CLI 1.0.62 and 1.0.92, Copilot CLI 1.0.105 and
+//! CodeBuddy Code 2.187.0. A row that does not match is skipped, never guessed at.
 use super::{
     Session,
     content::{self, Excerpt, clip, text_blocks},
@@ -8,7 +11,10 @@ use super::{
 };
 use crate::{models::Source, sessions::Phase, store::expand};
 use serde_json::{Value, json};
-use std::{io::Read, path::Path};
+use std::{
+    io::{Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
+};
 
 const MAX_TAIL: usize = 2 * 1024 * 1024;
 
@@ -16,6 +22,11 @@ const MAX_TAIL: usize = 2 * 1024 * 1024;
 pub(crate) fn excerpt(source: &Source, target: &Session) -> Option<Excerpt> {
     let waiting = target.session.phase == Phase::NeedsInput;
     let native = &target.session.native_session;
+    let root = expand(&source.path);
+    // Kimi names a session `<folder>:<agent>`; its record is found by that derived name only.
+    if source.provider == "kimi" {
+        return Some(bounded(kimi(kimi_rows(&root, target)?, native, waiting)));
+    }
     // The native identifier becomes a path component or a query parameter.
     if native.is_empty()
         || native.len() > 128
@@ -25,8 +36,7 @@ pub(crate) fn excerpt(source: &Source, target: &Session) -> Option<Excerpt> {
     {
         return None;
     }
-    let root = expand(&source.path);
-    let mut out = match source.provider.as_str() {
+    let out = match source.provider.as_str() {
         "kiro" => {
             let folder = crate::native_sessions::kiro::directory(&source.path)?;
             let path = std::fs::read_dir(&folder)
@@ -48,12 +58,127 @@ pub(crate) fn excerpt(source: &Source, target: &Session) -> Option<Excerpt> {
         "qoder" | "qoder-cn" => {
             qoder_desktop(&crate::qoder_desktop::database(&source.path)?, native)?
         }
+        "grok" => {
+            let events = named(target, "events.jsonl")?;
+            let updates = events.with_file_name("updates.jsonl");
+            grok(
+                content::records(&events, &root, target).ok()?.0,
+                content::records(&updates, &root, target)
+                    .map(|r| r.0)
+                    .unwrap_or_default(),
+                waiting,
+            )
+        }
+        "copilot" => {
+            let events = named(target, "events.jsonl")?;
+            let rows = content::records(&events, &root, target).ok()?.0;
+            copilot(rows, waiting, &|call| copilot_field_order(&events, call))
+        }
+        "codebuddy" | "workbuddy" => {
+            let base = if root.is_file() {
+                root.parent()?
+            } else {
+                &root
+            };
+            let path = transcript(base, target)?;
+            codebuddy(
+                content::records(&path, base, target).ok()?.0,
+                waiting,
+                target.session.input_kind == "approval",
+            )
+        }
         _ => return None,
     };
+    Some(bounded(out))
+}
+
+fn bounded(mut out: Excerpt) -> Excerpt {
     out.text = clip(&out.text, 10000);
     out.question = clip(&out.question, 10000);
     out.user_text = clip(&out.user_text, MAX_INPUT);
-    Some(out)
+    out
+}
+
+/// The session's own record files, the active one first.
+fn candidates(target: &Session) -> impl Iterator<Item = &Path> {
+    std::iter::once(&target.path)
+        .chain(&target.log_paths)
+        .filter(|p| !p.is_empty())
+        .take(8)
+        .map(Path::new)
+}
+
+/// The record named `file` inside this session's own folder.
+fn named(target: &Session, file: &str) -> Option<PathBuf> {
+    candidates(target)
+        .find(|p| {
+            p.file_name().is_some_and(|n| n == file)
+                && p.parent()
+                    .and_then(Path::file_name)
+                    .and_then(|n| n.to_str())
+                    == Some(&target.session.native_session)
+        })
+        .map(Path::to_path_buf)
+}
+
+/// CodeBuddy and WorkBuddy name a transcript after its session: `projects/<project>/<id>.jsonl`.
+/// WorkBuddy sessions come from its database, so the transcript is looked up by that name.
+fn transcript(root: &Path, target: &Session) -> Option<PathBuf> {
+    let native = &target.session.native_session;
+    let own = |p: &Path| {
+        p.extension().is_some_and(|e| e == "jsonl")
+            && p.file_stem().and_then(|n| n.to_str()) == Some(native)
+    };
+    if let Some(path) = candidates(target).find(|p| own(p)) {
+        return Some(path.to_path_buf());
+    }
+    std::fs::read_dir(root.join("projects"))
+        .ok()?
+        .filter_map(|e| e.ok())
+        .take(4096)
+        .map(|e| e.path().join(format!("{native}.jsonl")))
+        .find(|p| p.is_file())
+}
+
+/// A bounded tail of committed JSONL rows from a record below `root`. The caller has already
+/// established whose record it is.
+fn tail_rows(path: &Path, root: &Path) -> Option<Vec<Value>> {
+    let path = path.canonicalize().ok()?;
+    if !path.starts_with(root.canonicalize().ok()?) || !path.is_file() {
+        return None;
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    let size = file.metadata().ok()?.len();
+    let offset = size.saturating_sub(MAX_TAIL as u64);
+    file.seek(SeekFrom::Start(offset)).ok()?;
+    let mut data = Vec::new();
+    file.take(MAX_TAIL as u64).read_to_end(&mut data).ok()?;
+    let data = if offset > 0 {
+        data.splitn(2, |b| *b == b'\n').nth(1).unwrap_or_default()
+    } else {
+        &data
+    };
+    Some(
+        data.split_inclusive(|b| *b == b'\n')
+            .filter(|l| l.ends_with(b"\n"))
+            .filter_map(|l| serde_json::from_slice(l).ok())
+            .collect(),
+    )
+}
+
+/// What a tool call would run or touch, for an approval card.
+fn call_subject(args: &Value) -> &str {
+    [
+        "command",
+        "file_path",
+        "filePath",
+        "path",
+        "target_file",
+        "url",
+    ]
+    .iter()
+    .find_map(|k| args[*k].as_str().filter(|s| !s.is_empty()))
+    .unwrap_or("")
 }
 
 fn millis(value: &Value) -> i64 {
@@ -93,7 +218,9 @@ fn normalize_questions_value(items: &[Value]) -> Value {
                 .as_str()
                 .or_else(|| q["title"].as_str())
                 .unwrap_or("");
-            let multi = q["multiSelect"] == true || q["is_multi_select"] == true;
+            let multi = q["multiSelect"] == true
+                || q["is_multi_select"] == true
+                || q["multi_select"] == true;
             let options = q["options"]
                 .as_array()
                 .into_iter()
@@ -445,4 +572,462 @@ fn qoder_desktop(database: &Path, native: &str) -> Option<Excerpt> {
         }
     }
     Some(out)
+}
+
+/// Kimi's `wire.jsonl` of the agent this session is named after.
+fn kimi_rows(root: &Path, target: &Session) -> Option<Vec<Value>> {
+    let native = &target.session.native_session;
+    if native.is_empty() || native.len() > 160 {
+        return None;
+    }
+    let path = candidates(target).find(|p| {
+        p.file_name().is_some_and(|n| n == "wire.jsonl")
+            && crate::native_agents::session_id(p) == *native
+    })?;
+    tail_rows(path, root)
+}
+
+/// Kimi logs `interaction.request` when it opens an approval or a question menu and
+/// `interaction.resolved` with the same identifier when the user has answered it.
+fn kimi(rows: Vec<Value>, native: &str, waiting: bool) -> Excerpt {
+    let mut out = Excerpt::default();
+    let mut pending: Vec<Value> = Vec::new();
+    for v in rows {
+        match v["type"].as_str().unwrap_or("") {
+            "turn.prompt" => {
+                out.user_text = text_blocks(&v["input"]);
+                out.user_at = v["time"].as_i64().unwrap_or(0);
+                out.text.clear();
+                pending.clear();
+            }
+            "context.append_loop_event" => match v["event"]["type"].as_str() {
+                Some("content.part") if v["event"]["part"]["type"] == "text" => {
+                    out.text = text(&v["event"]["part"]["text"]);
+                }
+                // Text before a tool call is progress, not the reply.
+                Some("tool.call") => out.text.clear(),
+                _ => {}
+            },
+            "interaction.request" => pending.push(v),
+            "interaction.resolved" => pending.retain(|p| p["id"] != v["id"]),
+            "turn.ended" if v["reason"] != "blocked" => pending.clear(),
+            _ => {}
+        }
+    }
+    if !waiting {
+        return out;
+    }
+    let session = native.split(':').next().unwrap_or("");
+    // A request that names another session is not this one's prompt.
+    let Some(row) = pending.into_iter().next_back().filter(|p| {
+        p["request"]["sessionId"]
+            .as_str()
+            .is_none_or(|id| id == session)
+    }) else {
+        out.question = out.text.clone();
+        return out;
+    };
+    let request = &row["request"];
+    if row["kind"] == "question" {
+        if let Some(items) = parse_questions_array(&request["questions"]) {
+            let normalized = normalize_questions_value(&items);
+            out.question = content::questions(&normalized);
+            out.structured_questions = Some(normalized);
+        }
+    } else if row["kind"] == "approval" {
+        let display = &request["display"];
+        let tool = request["toolName"].as_str().unwrap_or("Tool");
+        let command = call_subject(display);
+        let details = match display["operation"].as_str() {
+            Some("edit") => format!(
+                "- {}\n+ {}",
+                display["before"].as_str().unwrap_or(""),
+                display["after"].as_str().unwrap_or("")
+            ),
+            _ => text(&display["content"]),
+        };
+        let reason = text(&request["action"]);
+        out.question = [tool, &reason, command]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.structured_approval = Some(json!({
+            "toolName": tool,
+            "reason": reason,
+            "command": clip(command, 4000),
+            "details": clip(&details, 2000),
+            "kind": match display["kind"].as_str() {
+                Some("command") => "command",
+                Some("file_io") => "fileChange",
+                _ => "tool",
+            },
+            "cwd": display["cwd"].as_str().unwrap_or(""),
+        }));
+    }
+    out
+}
+
+/// Grok keeps lifecycle rows in `events.jsonl` and the tool calls themselves in
+/// `updates.jsonl`. A permission row names only its tool, so the command is shown only when
+/// exactly one unfinished call of that tool exists.
+fn grok(events: Vec<Value>, updates: Vec<Value>, waiting: bool) -> Excerpt {
+    let mut out = Excerpt::default();
+    // (call, tool, kind, input)
+    let mut calls: Vec<(String, String, String, Value)> = Vec::new();
+    for v in updates {
+        let u = &v["params"]["update"];
+        let call = u["toolCallId"].as_str().unwrap_or("");
+        match u["sessionUpdate"].as_str().unwrap_or("") {
+            "user_message_chunk" => {
+                out.user_text = text(&u["content"]["text"]);
+                out.user_at = v["timestamp"].as_i64().unwrap_or(0) * 1000;
+                out.text.clear();
+                calls.clear();
+            }
+            "agent_message_chunk" => {
+                if let Some(chunk) = u["content"]["text"].as_str() {
+                    out.text.push_str(chunk);
+                }
+            }
+            "tool_call" if !call.is_empty() => {
+                // Text before a tool call is progress, not the reply.
+                out.text.clear();
+                let meta = &u["_meta"]["x.ai/tool"];
+                calls.retain(|c| c.0 != call);
+                calls.push((
+                    call.to_owned(),
+                    text(if meta["name"].is_string() {
+                        &meta["name"]
+                    } else {
+                        &u["title"]
+                    }),
+                    text(&meta["kind"]),
+                    u["rawInput"].clone(),
+                ));
+            }
+            "tool_call_update"
+                if matches!(
+                    u["status"].as_str(),
+                    Some("completed" | "failed" | "cancelled" | "canceled" | "rejected")
+                ) =>
+            {
+                calls.retain(|c| c.0 != call);
+            }
+            _ => {}
+        }
+    }
+    // The tools with an open permission dialog, oldest first. Rows name only the tool, and two
+    // parallel calls of one tool each have their own entry.
+    let mut pending: Vec<String> = Vec::new();
+    for v in events {
+        let tool = v["tool_name"].as_str().unwrap_or("");
+        let close = |pending: &mut Vec<String>| {
+            if let Some(i) = pending.iter().rposition(|t| t == tool) {
+                pending.remove(i);
+            }
+        };
+        match v["type"].as_str().unwrap_or("") {
+            "permission_requested" => pending.push(tool.to_owned()),
+            "permission_resolved" | "permission_response" | "permission_responded" => {
+                if tool.is_empty() {
+                    pending.pop();
+                } else {
+                    close(&mut pending);
+                }
+            }
+            // Another tool finishing says nothing about this one's dialog.
+            "tool_completed" | "tool_finished" | "tool_failed" if !tool.is_empty() => {
+                close(&mut pending)
+            }
+            "turn_started" | "turn_ended" => pending.clear(),
+            _ => {}
+        }
+    }
+    if !waiting {
+        return out;
+    }
+    if let Some(tool) = pending.pop().filter(|t| !t.is_empty()) {
+        let mut same = calls.iter().filter(|c| c.1 == tool);
+        let only = match (same.next(), same.next()) {
+            (Some(call), None) => Some(call),
+            _ => None,
+        };
+        let input = only.map_or(&Value::Null, |c| &c.3);
+        let command = call_subject(input);
+        let reason = input["description"].as_str().unwrap_or("");
+        out.question = [tool.as_str(), reason, command]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.structured_approval = Some(json!({
+            "toolName": tool,
+            "reason": reason,
+            "command": clip(command, 4000),
+            "details": "",
+            "kind": match only.map(|c| c.2.as_str()) {
+                Some("execute") => "command",
+                Some("edit" | "write" | "delete" | "move") => "fileChange",
+                _ => "tool",
+            },
+        }));
+    } else if let Some(items) = calls
+        .iter()
+        .rfind(|c| c.1 == "ask_user_question" || c.2 == "ask_user")
+        .and_then(|c| parse_questions_array(&c.3["questions"]))
+    {
+        let normalized = normalize_questions_value(&items);
+        out.question = content::questions(&normalized);
+        out.structured_questions = Some(normalized);
+    } else {
+        out.question = out.text.clone();
+    }
+    out
+}
+
+/// Copilot CLI `events.jsonl`: a permission is open between `permission.requested` and
+/// `permission.completed`, a question while its `ask_user` tool call runs.
+/// `order` gives the field names of an `ask_user` form as its record lists them.
+fn copilot(rows: Vec<Value>, waiting: bool, order: &dyn Fn(&str) -> Vec<String>) -> Excerpt {
+    let mut out = Excerpt::default();
+    let mut permissions: Vec<Value> = Vec::new();
+    let mut asks: Vec<(String, Value)> = Vec::new();
+    for v in rows {
+        let d = &v["data"];
+        match v["type"].as_str().unwrap_or("") {
+            "user.message" => {
+                out.user_text = text(&d["content"]);
+                out.user_at = millis(&v["timestamp"]);
+                out.text.clear();
+                permissions.clear();
+                asks.clear();
+            }
+            "assistant.message" => {
+                // Text beside tool requests is progress, not the reply.
+                out.text = if d["toolRequests"].as_array().is_none_or(|a| a.is_empty()) {
+                    text(&d["content"])
+                } else {
+                    String::new()
+                };
+            }
+            "tool.execution_start" if d["toolName"] == "ask_user" => {
+                asks.push((text(&d["toolCallId"]), d["arguments"].clone()));
+            }
+            "tool.execution_complete" => {
+                asks.retain(|a| d["toolCallId"].as_str() != Some(&a.0));
+            }
+            "permission.requested" => permissions.push(v["data"].clone()),
+            "permission.completed" => permissions.retain(|p| p["requestId"] != d["requestId"]),
+            "abort" | "session.abort" | "assistant.abort" | "session.error" => {
+                permissions.clear();
+                asks.clear();
+            }
+            _ => {}
+        }
+    }
+    if !waiting {
+        return out;
+    }
+    if let Some(p) = permissions.last() {
+        let request = &p["permissionRequest"];
+        let kind = request["kind"].as_str().unwrap_or("tool");
+        let command = ["fullCommandText", "fileName", "path", "url", "toolName"]
+            .iter()
+            .find_map(|k| request[*k].as_str().filter(|s| !s.is_empty()))
+            .unwrap_or("");
+        let reason = request["intention"].as_str().unwrap_or("");
+        out.question = [kind, reason, command]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.structured_approval = Some(json!({
+            "toolName": kind,
+            "reason": reason,
+            "command": clip(command, 4000),
+            "details": clip(request["diff"].as_str().unwrap_or(""), 2000),
+            "kind": match kind {
+                "shell" => "command",
+                "write" => "fileChange",
+                _ => "tool",
+            },
+        }));
+    } else if let Some((call, args)) = asks.last() {
+        let message = args["message"].as_str().unwrap_or("");
+        let fields = args["requestedSchema"]["properties"]
+            .as_object()
+            .filter(|m| !m.is_empty() && m.len() <= 32);
+        // Only a form made of plain choices is shown as one; anything else is its message.
+        let items = fields.and_then(|map| {
+            // A parsed object is sorted by key; the form is shown in the order it was written.
+            let mut listed: Vec<_> = map.iter().collect();
+            if listed.len() > 1 {
+                let written = order(call);
+                listed.sort_by_key(|(key, _)| {
+                    written
+                        .iter()
+                        .position(|name| name == *key)
+                        .unwrap_or(usize::MAX)
+                });
+            }
+            listed
+                .into_iter()
+                .map(|(key, f)| {
+                    // Numbers and booleans are shown as written; anything else is not a choice.
+                    let options = f["enum"]
+                        .as_array()
+                        .filter(|o| !o.is_empty())?
+                        .iter()
+                        .map(|o| match o {
+                            Value::String(_) => Some(o.clone()),
+                            Value::Number(_) | Value::Bool(_) => Some(json!(o.to_string())),
+                            _ => None,
+                        })
+                        .collect::<Option<Vec<_>>>()?;
+                    let title = if map.len() == 1 && !message.is_empty() {
+                        message
+                    } else {
+                        f["title"]
+                            .as_str()
+                            .or_else(|| f["description"].as_str())
+                            .unwrap_or(key)
+                    };
+                    Some(json!({"id": key, "question": title, "options": options}))
+                })
+                .collect::<Option<Vec<_>>>()
+        });
+        if let Some(items) = items {
+            let normalized = normalize_questions_value(&items);
+            out.question = content::questions(&normalized);
+            if fields.is_some_and(|m| m.len() > 1) && !message.is_empty() {
+                out.question = format!("{message}\n{}", out.question);
+            }
+            out.structured_questions = Some(normalized);
+        } else {
+            out.question = message.to_owned();
+        }
+    } else {
+        out.question = out.text.clone();
+    }
+    out
+}
+
+/// The field names of the `ask_user` form of `call`, in the order its record lists them.
+/// Read from the bounded tail of the record that `content::records` has already accepted.
+fn copilot_field_order(path: &Path, call: &str) -> Vec<String> {
+    use super::claude::elicitation::Keys;
+    #[derive(serde::Deserialize)]
+    struct Schema {
+        #[serde(default)]
+        properties: Keys,
+    }
+    #[derive(serde::Deserialize)]
+    struct Arguments {
+        #[serde(rename = "requestedSchema")]
+        schema: Schema,
+    }
+    #[derive(serde::Deserialize)]
+    struct Data {
+        #[serde(rename = "toolCallId", default)]
+        call: String,
+        arguments: Arguments,
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "type")]
+        kind: String,
+        data: Data,
+    }
+    let read = || -> Option<Vec<u8>> {
+        let mut file = std::fs::File::open(path).ok()?;
+        let size = file.metadata().ok()?.len();
+        file.seek(SeekFrom::Start(size.saturating_sub(MAX_TAIL as u64)))
+            .ok()?;
+        let mut data = Vec::new();
+        file.take(MAX_TAIL as u64).read_to_end(&mut data).ok()?;
+        Some(data)
+    };
+    let Some(data) = read() else {
+        return Vec::new();
+    };
+    data.split(|b| *b == b'\n')
+        .rev()
+        .filter(|line| line.windows(15).any(|w| w == b"requestedSchema"))
+        .filter_map(|line| serde_json::from_slice::<Row>(line).ok())
+        .find(|row| row.kind == "tool.execution_start" && row.data.call == call)
+        .map(|row| row.data.arguments.schema.properties.0)
+        .unwrap_or_default()
+}
+
+/// CodeBuddy and WorkBuddy transcripts: a `function_call` row stays unanswered until a result
+/// row names its `callId`. `approval` says the session is known to wait on a permission.
+fn codebuddy(rows: Vec<Value>, waiting: bool, approval: bool) -> Excerpt {
+    let mut out = Excerpt::default();
+    // (call, tool, arguments)
+    let mut calls: Vec<(String, String, String)> = Vec::new();
+    for v in rows {
+        // A subagent's rows are not this session's conversation.
+        if v["isSidechain"] == true {
+            continue;
+        }
+        match (v["type"].as_str().unwrap_or(""), v["role"].as_str()) {
+            ("message", Some("user")) => {
+                out.user_text = text_blocks(&v["content"]);
+                out.user_at = v["timestamp"].as_i64().unwrap_or(0);
+                out.text.clear();
+                calls.clear();
+            }
+            ("message", Some("assistant")) if v["status"] == "completed" => {
+                out.text = text_blocks(&v["content"]);
+            }
+            ("function_call", _) => {
+                // Text before a tool call is progress, not the reply.
+                out.text.clear();
+                calls.push((text(&v["callId"]), text(&v["name"]), text(&v["arguments"])));
+            }
+            ("function_call_output" | "function_call_result", _) => {
+                calls.retain(|c| v["callId"].as_str() != Some(&c.0));
+            }
+            _ => {}
+        }
+    }
+    if !waiting {
+        return out;
+    }
+    let args = |raw: &str| serde_json::from_str::<Value>(raw).unwrap_or(Value::Null);
+    if let Some(items) = calls
+        .iter()
+        .rfind(|c| c.1 == "AskUserQuestion")
+        .and_then(|c| parse_questions_array(&args(&c.2)["questions"]))
+    {
+        let normalized = normalize_questions_value(&items);
+        out.question = content::questions(&normalized);
+        out.structured_questions = Some(normalized);
+    } else if approval && calls.len() == 1 {
+        // With several calls in flight the transcript does not say which one is being asked.
+        let (_, tool, raw) = &calls[0];
+        let input = args(raw);
+        let command = call_subject(&input);
+        let reason = input["description"].as_str().unwrap_or("");
+        let details = ["content", "new_string"]
+            .iter()
+            .find_map(|k| input[*k].as_str())
+            .unwrap_or("");
+        out.question = [tool.as_str(), reason, command]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.structured_approval = Some(json!({
+            "toolName": tool,
+            "reason": reason,
+            "command": clip(command, 4000),
+            "details": clip(details, 2000),
+            "kind": if input["command"].is_string() { "command" } else { "tool" },
+        }));
+    } else if !approval {
+        out.question = out.text.clone();
+    }
+    out
 }

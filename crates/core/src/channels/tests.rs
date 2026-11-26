@@ -2561,3 +2561,537 @@ fn qoder_cli_shares_the_question_hook_and_desktop_sources_are_left_alone() {
         "macOS"
     );
 }
+
+/// Rows as written by Kimi Code 2.4.1 (`interaction.request` / `interaction.resolved`).
+#[test]
+fn kimi_pending_approval_and_question_are_readable_until_resolved() {
+    let (dir, store, _) = fixture();
+    enabled(&store, true);
+    let root = dir.path().join("kimi");
+    let folder = format!("session_{NATIVE}");
+    let agent = root
+        .join("sessions/wd_fixture")
+        .join(&folder)
+        .join("agents/main");
+    std::fs::create_dir_all(&agent).unwrap();
+    let path = agent.join("wire.jsonl");
+    let native = format!("{folder}:main");
+    let part = |kind: &str, text: &str| json!({"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","turnId":"0","part":{"type":kind,(kind):text,"text":text}},"time":3});
+    let mut rows = vec![
+        json!({"type":"metadata","protocol_version":"1.5","created_at":1}),
+        json!({"type":"turn.prompt","agentId":"main","input":[{"type":"text","text":"Remove the folder"}],"turnId":0,"time":1_795_631_203_441_i64}),
+        part("think", "PRIVATE REASONING"),
+        part("text", "PRIVATE PROGRESS"),
+        json!({"type":"context.append_loop_event","agentId":"main","event":{"type":"tool.call","toolCallId":"call-0","name":"Bash"},"time":4}),
+        json!({"type":"interaction.request","agentId":"main","id":"approval_0","kind":"approval","toolCallId":"call-0","request":{"id":"approval_0","sessionId":folder,"toolName":"Bash","action":"Running: ls","display":{"kind":"command","command":"ls","cwd":"/fixture"}}}),
+        json!({"type":"interaction.resolved","id":"approval_0","response":{"decision":"approved"}}),
+        json!({"type":"interaction.request","agentId":"main","id":"approval_1","kind":"approval","toolCallId":"call-1","request":{"id":"approval_1","sessionId":folder,"toolName":"Bash","action":"Running: rm -rf probe_dir","display":{"kind":"command","command":"rm -rf probe_dir","cwd":"/fixture","language":"bash"}}}),
+    ];
+    save_rows(&path, &rows);
+    let session = |native: &str, phase| {
+        let (source, mut target) = reader_session(&store, "kimi", &root, native, phase);
+        target.path = path.to_string_lossy().into();
+        (source, target)
+    };
+    let (source, waiting) = session(&native, Phase::NeedsInput);
+    let excerpt = readers::excerpt(&source, &waiting).unwrap();
+    let approval = excerpt.structured_approval.unwrap();
+    assert_eq!(approval["toolName"], "Bash");
+    assert_eq!(approval["command"], "rm -rf probe_dir");
+    assert_eq!(approval["reason"], "Running: rm -rf probe_dir");
+    assert_eq!(approval["kind"], "command");
+    assert_eq!(approval["cwd"], "/fixture");
+    assert!(excerpt.question.contains("rm -rf probe_dir") && !excerpt.question.contains("PRIVATE"));
+    assert_eq!(excerpt.user_text, "Remove the folder");
+    assert_eq!(excerpt.user_at, 1_795_631_203_441);
+    // A file write shows its path and content; an edit shows both sides.
+    rows.push(
+        json!({"type":"interaction.resolved","id":"approval_1","response":{"decision":"rejected"}}),
+    );
+    rows.push(json!({"type":"interaction.request","id":"approval_2","kind":"approval","request":{"sessionId":folder,"toolName":"Edit","action":"Editing hello.txt","display":{"kind":"file_io","operation":"edit","path":"/fixture/hello.txt","before":"hi","after":"hello"}}}));
+    save_rows(&path, &rows);
+    let approval = readers::excerpt(&source, &waiting)
+        .unwrap()
+        .structured_approval
+        .unwrap();
+    assert_eq!(approval["kind"], "fileChange");
+    assert_eq!(approval["command"], "/fixture/hello.txt");
+    assert_eq!(approval["details"], "- hi\n+ hello");
+    // A request naming another session is never shown as this session's prompt.
+    rows.push(
+        json!({"type":"interaction.resolved","id":"approval_2","response":{"decision":"approved"}}),
+    );
+    rows.push(json!({"type":"interaction.request","id":"approval_3","kind":"approval","request":{"sessionId":"session_other","toolName":"Bash","action":"Running: FOREIGN","display":{"kind":"command","command":"FOREIGN"}}}));
+    save_rows(&path, &rows);
+    let excerpt = readers::excerpt(&source, &waiting).unwrap();
+    assert!(excerpt.structured_approval.is_none() && !excerpt.question.contains("FOREIGN"));
+    rows.pop();
+    rows.push(json!({"type":"interaction.request","id":"question_1","kind":"question","toolCallId":"call-3","request":{"turnId":0,"toolCallId":"call-3","questions":[{"question":"Which color?","header":"Color","options":[{"label":"Red","description":"Warm"},{"label":"Blue"}]},{"question":"Which fruits?","header":"Fruit","multiSelect":true,"options":[{"label":"Apple"},{"label":"Cherry"}]}]}}));
+    save_rows(&path, &rows);
+    let excerpt = readers::excerpt(&source, &waiting).unwrap();
+    let questions = excerpt.structured_questions.unwrap();
+    assert_eq!(questions[0]["question"], "Which color?");
+    assert_eq!(
+        questions[0]["options"][0],
+        json!({"label":"Red","description":"Warm"})
+    );
+    assert_eq!(questions[1]["multiSelect"], true);
+    assert!(excerpt.question.contains("2. Blue"));
+    // Once resolved, the turn's last text is the reply.
+    rows.push(json!({"type":"interaction.resolved","id":"question_1","response":{}}));
+    rows.push(part("text", "All done"));
+    rows.push(json!({"type":"turn.ended","reason":"completed","turnId":0}));
+    save_rows(&path, &rows);
+    let (source, done) = session(&native, Phase::Complete);
+    let excerpt = readers::excerpt(&source, &done).unwrap();
+    assert_eq!(excerpt.text, "All done");
+    assert!(excerpt.question.is_empty() && excerpt.structured_questions.is_none());
+    // Another agent of the same session, or another session, does not read this record.
+    let (source, other) = session(&format!("{folder}:coder"), Phase::NeedsInput);
+    assert!(readers::excerpt(&source, &other).is_none());
+    let (source, other) = session("session_other:main", Phase::NeedsInput);
+    assert!(readers::excerpt(&source, &other).is_none());
+}
+
+/// Rows as written by Grok CLI 1.0.92: `events.jsonl` names the tool, `updates.jsonl` the call.
+#[test]
+fn grok_pending_permission_and_question_are_read_from_both_records() {
+    let (dir, store, _) = fixture();
+    enabled(&store, true);
+    let root = dir.path().join("grok");
+    let folder = root.join("sessions/%2Ffixture").join(NATIVE);
+    std::fs::create_dir_all(&folder).unwrap();
+    let ts = "2026-11-25T18:29:29.067Z";
+    let event = |kind: &str, tool: &str| json!({"ts":ts,"type":kind,"tool_name":tool});
+    let update = |update: Value| json!({"timestamp":1_795_631_363,"method":"session/update","params":{"sessionId":NATIVE,"update":update}});
+    let call = |id: &str, tool: &str, kind: &str, input: Value| {
+        update(
+            json!({"sessionUpdate":"tool_call","toolCallId":id,"title":tool,"rawInput":input,"_meta":{"x.ai/tool":{"name":tool,"kind":kind}}}),
+        )
+    };
+    let mut events = vec![
+        json!({"ts":ts,"type":"turn_started","session_id":NATIVE,"turn_number":0}),
+        event("tool_started", "list_dir"),
+        event("permission_requested", "list_dir"),
+        json!({"ts":ts,"type":"permission_resolved","tool_name":"list_dir","decision":"allow","wait_ms":0}),
+        json!({"ts":ts,"type":"tool_completed","tool_name":"list_dir","tool_call_id":"call-0"}),
+        event("tool_started", "run_terminal_command"),
+        event("permission_requested", "run_terminal_command"),
+    ];
+    let mut updates = vec![
+        update(
+            json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Remove the folder"}}),
+        ),
+        update(
+            json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"PRIVATE PROGRESS"}}),
+        ),
+        call(
+            "call-0",
+            "list_dir",
+            "list",
+            json!({"target_directory":"/fixture"}),
+        ),
+        update(
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"call-0","kind":"other","rawInput":{"variant":"ListDir"}}),
+        ),
+        update(
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"call-0","status":"completed"}),
+        ),
+        call(
+            "call-1",
+            "run_terminal_command",
+            "execute",
+            json!({"command":"rm -rf probe_dir","description":"Remove it"}),
+        ),
+    ];
+    let save = |events: &[Value], updates: &[Value]| {
+        save_rows(&folder.join("events.jsonl"), events);
+        save_rows(&folder.join("updates.jsonl"), updates);
+    };
+    save(&events, &updates);
+    let session = |phase| {
+        let (source, mut target) = reader_session(&store, "grok", &root, NATIVE, phase);
+        target.path = folder.join("events.jsonl").to_string_lossy().into();
+        (source, target)
+    };
+    let (source, waiting) = session(Phase::NeedsInput);
+    let excerpt = readers::excerpt(&source, &waiting).unwrap();
+    let approval = excerpt.structured_approval.unwrap();
+    assert_eq!(approval["toolName"], "run_terminal_command");
+    assert_eq!(approval["command"], "rm -rf probe_dir");
+    assert_eq!(approval["reason"], "Remove it");
+    assert_eq!(approval["kind"], "command");
+    assert_eq!(excerpt.user_text, "Remove the folder");
+    assert!(!excerpt.question.contains("PRIVATE"));
+    // A parallel call that is allowed automatically and finishes leaves this dialog open.
+    let mut parallel = events.clone();
+    parallel.extend([
+        event("tool_started", "list_dir"),
+        event("permission_requested", "list_dir"),
+        json!({"ts":ts,"type":"permission_resolved","tool_name":"list_dir","decision":"allow","wait_ms":0}),
+        json!({"ts":ts,"type":"tool_completed","tool_name":"list_dir","tool_call_id":"call-9"}),
+    ]);
+    save(&parallel, &updates);
+    let approval = readers::excerpt(&source, &waiting)
+        .unwrap()
+        .structured_approval
+        .expect("the open dialog is still shown");
+    assert_eq!(approval["toolName"], "run_terminal_command");
+    assert_eq!(approval["command"], "rm -rf probe_dir");
+    // Its own answer closes it.
+    parallel.push(json!({"ts":ts,"type":"permission_resolved","tool_name":"run_terminal_command","decision":"allow"}));
+    save(&parallel, &updates);
+    assert!(
+        readers::excerpt(&source, &waiting)
+            .unwrap()
+            .structured_approval
+            .is_none()
+    );
+    save(&events, &updates);
+    // Two unfinished calls of the tool: the permission row cannot say which, so no command.
+    updates.push(call(
+        "call-2",
+        "run_terminal_command",
+        "execute",
+        json!({"command":"OTHER"}),
+    ));
+    save(&events, &updates);
+    let approval = readers::excerpt(&source, &waiting)
+        .unwrap()
+        .structured_approval
+        .unwrap();
+    assert_eq!(approval["toolName"], "run_terminal_command");
+    assert_eq!(approval["command"], "");
+    // The question tool is allowed automatically; its unfinished call carries the options.
+    events.push(json!({"ts":ts,"type":"permission_resolved","tool_name":"run_terminal_command","decision":"deny"}));
+    events.push(event("tool_started", "ask_user_question"));
+    events.push(event("permission_requested", "ask_user_question"));
+    events.push(json!({"ts":ts,"type":"permission_resolved","tool_name":"ask_user_question","decision":"allow","wait_ms":0}));
+    for id in ["call-1", "call-2"] {
+        updates.push(update(
+            json!({"sessionUpdate":"tool_call_update","toolCallId":id,"status":"failed"}),
+        ));
+    }
+    updates.push(call("call-3", "ask_user_question", "ask_user", json!({"questions":[{"question":"Which color?","options":[{"label":"Red","description":"Pick red."},{"label":"Blue"}]},{"question":"Which fruits?","options":[{"label":"Apple"}],"multi_select":true}]})));
+    save(&events, &updates);
+    let excerpt = readers::excerpt(&source, &waiting).unwrap();
+    assert!(excerpt.structured_approval.is_none());
+    let questions = excerpt.structured_questions.unwrap();
+    assert_eq!(questions[0]["options"][0]["description"], "Pick red.");
+    assert_eq!(questions[0]["multiSelect"], false);
+    assert_eq!(questions[1]["multiSelect"], true);
+    updates.push(update(
+        json!({"sessionUpdate":"tool_call_update","toolCallId":"call-3","status":"completed"}),
+    ));
+    updates.push(update(
+        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"All "}}),
+    ));
+    updates.push(update(
+        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}),
+    ));
+    save(&events, &updates);
+    let (source, done) = session(Phase::Complete);
+    let excerpt = readers::excerpt(&source, &done).unwrap();
+    assert_eq!(excerpt.text, "All done");
+    assert!(excerpt.question.is_empty());
+    // A record of another session is refused.
+    let (source, mut other) =
+        reader_session(&store, "grok", &root, "other-session", Phase::NeedsInput);
+    other.path = folder.join("events.jsonl").to_string_lossy().into();
+    assert!(readers::excerpt(&source, &other).is_none());
+}
+
+/// Rows as written by Copilot CLI 1.0.105.
+#[test]
+fn copilot_pending_permission_and_ask_user_form_are_readable() {
+    let (dir, store, _) = fixture();
+    enabled(&store, true);
+    let root = dir.path().join("copilot");
+    let folder = root.join("session-state").join(NATIVE);
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("events.jsonl");
+    let row = |kind: &str, data: Value| json!({"type":kind,"data":data,"timestamp":"2026-11-25T18:56:26.573Z"});
+    let mut rows = vec![
+        row("session.start", json!({"sessionId":NATIVE})),
+        row("user.message", json!({"content":"Remove the folder"})),
+        row(
+            "assistant.message",
+            json!({"content":"PRIVATE PROGRESS","toolRequests":[{"toolCallId":"call-1","name":"bash"}]}),
+        ),
+        row(
+            "tool.execution_start",
+            json!({"toolCallId":"call-1","toolName":"bash","arguments":{"command":"rm -rf probe_dir"}}),
+        ),
+        row(
+            "permission.requested",
+            json!({"requestId":"r0","permissionRequest":{"kind":"shell","fullCommandText":"OLD"}}),
+        ),
+        row(
+            "permission.completed",
+            json!({"requestId":"r0","result":{"kind":"approved"}}),
+        ),
+        row(
+            "permission.requested",
+            json!({"requestId":"r1","permissionRequest":{"kind":"shell","toolCallId":"call-1","fullCommandText":"rm -rf probe_dir","intention":"Remove probe_dir directory"},"promptRequest":{"kind":"commands"}}),
+        ),
+    ];
+    save_rows(&path, &rows);
+    let session = |phase| {
+        let (source, mut target) = reader_session(&store, "copilot", &root, NATIVE, phase);
+        target.path = path.to_string_lossy().into();
+        (source, target)
+    };
+    let (source, waiting) = session(Phase::NeedsInput);
+    let excerpt = readers::excerpt(&source, &waiting).unwrap();
+    let approval = excerpt.structured_approval.unwrap();
+    assert_eq!(approval["toolName"], "shell");
+    assert_eq!(approval["command"], "rm -rf probe_dir");
+    assert_eq!(approval["reason"], "Remove probe_dir directory");
+    assert_eq!(approval["kind"], "command");
+    assert!(!excerpt.question.contains("OLD") && !excerpt.question.contains("PRIVATE"));
+    rows.push(row(
+        "permission.completed",
+        json!({"requestId":"r1","result":{"kind":"approved"}}),
+    ));
+    rows.push(row(
+        "tool.execution_complete",
+        json!({"toolCallId":"call-1"}),
+    ));
+    rows.push(row("tool.execution_start", json!({"toolCallId":"call-2","toolName":"ask_user","arguments":{"message":"Which color would you like?","requestedSchema":{"properties":{"color":{"type":"string","title":"Color","enum":["red","green","blue"]}}}}})));
+    save_rows(&path, &rows);
+    let excerpt = readers::excerpt(&source, &waiting).unwrap();
+    let questions = excerpt.structured_questions.unwrap();
+    assert_eq!(questions[0]["id"], "color");
+    assert_eq!(questions[0]["question"], "Which color would you like?");
+    assert_eq!(questions[0]["options"][2]["label"], "blue");
+    // A free-text field is not a choice: only the message is shown.
+    rows.push(row(
+        "tool.execution_complete",
+        json!({"toolCallId":"call-2"}),
+    ));
+    rows.push(row("tool.execution_start", json!({"toolCallId":"call-3","toolName":"ask_user","arguments":{"message":"What name?","requestedSchema":{"properties":{"name":{"type":"string"}}}}})));
+    save_rows(&path, &rows);
+    let excerpt = readers::excerpt(&source, &waiting).unwrap();
+    assert!(excerpt.structured_questions.is_none());
+    assert_eq!(excerpt.question, "What name?");
+    rows.push(row(
+        "tool.execution_complete",
+        json!({"toolCallId":"call-3"}),
+    ));
+    rows.push(row(
+        "assistant.message",
+        json!({"content":"All done","toolRequests":[]}),
+    ));
+    save_rows(&path, &rows);
+    let (source, done) = session(Phase::Complete);
+    let excerpt = readers::excerpt(&source, &done).unwrap();
+    assert_eq!(excerpt.text, "All done");
+    assert!(excerpt.question.is_empty());
+}
+
+/// A parsed object is sorted by key and option labels are strings: the form is still shown
+/// in the order Copilot wrote it, with number and boolean choices as written.
+#[test]
+fn copilot_form_keeps_its_field_order_and_shows_non_string_choices() {
+    let (dir, store, _) = fixture();
+    enabled(&store, true);
+    let root = dir.path().join("copilot");
+    let folder = root.join("session-state").join(NATIVE);
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("events.jsonl");
+    let head = format!(
+        r#"{{"type":"session.start","data":{{"sessionId":"{NATIVE}"}},"timestamp":"2026-11-25T18:56:26.573Z"}}
+{{"type":"user.message","data":{{"content":"Ask"}},"timestamp":"2026-11-25T18:56:26.573Z"}}
+"#
+    );
+    let ask = |call: &str, properties: &str| {
+        format!(
+            r#"{{"type":"tool.execution_start","data":{{"toolCallId":"{call}","toolName":"ask_user","arguments":{{"message":"Set up","requestedSchema":{{"properties":{properties}}}}}}},"timestamp":"2026-11-25T18:56:27.573Z"}}
+"#
+        )
+    };
+    let form = r#"{"zeta":{"type":"integer","title":"Replicas","enum":[1,2,3]},"alpha":{"type":"boolean","enum":[true,false]},"mid":{"type":"number","enum":[1.5]}}"#;
+    std::fs::write(&path, format!("{head}{}", ask("call-1", form))).unwrap();
+    let (source, mut waiting) = reader_session(&store, "copilot", &root, NATIVE, Phase::NeedsInput);
+    waiting.path = path.to_string_lossy().into();
+    let excerpt = readers::excerpt(&source, &waiting).unwrap();
+    let questions = excerpt.structured_questions.unwrap();
+    let ids: Vec<&str> = questions
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|q| q["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["zeta", "alpha", "mid"]);
+    assert_eq!(
+        questions[0]["options"],
+        json!([{"label":"1"},{"label":"2"},{"label":"3"}])
+    );
+    assert_eq!(
+        questions[1]["options"],
+        json!([{"label":"true"},{"label":"false"}])
+    );
+    assert_eq!(questions[2]["options"], json!([{"label":"1.5"}]));
+    assert!(excerpt.question.contains("1. 1") && excerpt.question.starts_with("Set up\n"));
+
+    // A choice that is not a plain value cannot be shown as one: only the message is.
+    let odd = r#"{"zeta":{"enum":[{"const":1}]},"alpha":{"enum":["a"]}}"#;
+    std::fs::write(
+        &path,
+        format!("{head}{}{}", ask("call-1", form), ask("call-2", odd)),
+    )
+    .unwrap();
+    let excerpt = readers::excerpt(&source, &waiting).unwrap();
+    assert!(excerpt.structured_questions.is_none());
+    assert_eq!(excerpt.question, "Set up");
+}
+
+/// Rows as written by CodeBuddy Code 2.187.0; WorkBuddy uses the same transcript family.
+#[test]
+fn codebuddy_and_workbuddy_pending_question_and_single_approval_are_readable() {
+    let (dir, store, _) = fixture();
+    enabled(&store, true);
+    for provider in ["codebuddy", "workbuddy"] {
+        let root = dir.path().join(provider);
+        let project = root.join("projects/fixture-project");
+        std::fs::create_dir_all(&project).unwrap();
+        let path = project.join(format!("{NATIVE}.jsonl"));
+        let arguments = json!({"questions":[{"question":"Which color?","header":"Color","options":[{"label":"Red","description":"Warm"},{"label":"Blue"}],"multiSelect":false},{"question":"Which fruits?","header":"Fruit","options":[{"label":"Apple"}],"multiSelect":true}]}).to_string();
+        let mut rows = vec![
+            json!({"id":"u1","timestamp":1_795_632_421_755_i64,"type":"message","role":"user","content":[{"type":"input_text","text":"Ask me"}],"sessionId":NATIVE}),
+            json!({"id":"a0","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"PRIVATE PROGRESS"}],"sessionId":NATIVE}),
+            json!({"id":"c0","type":"function_call","callId":"call-0","name":"Read","arguments":"{}","sessionId":NATIVE}),
+            json!({"id":"r0","type":"function_call_result","callId":"call-0","sessionId":NATIVE}),
+            json!({"id":"c1","type":"function_call","callId":"call-1","name":"AskUserQuestion","arguments":arguments,"sessionId":NATIVE}),
+        ];
+        save_rows(&path, &rows);
+        let session = |phase, kind: &str| {
+            let (source, mut target) = reader_session(&store, provider, &root, NATIVE, phase);
+            // WorkBuddy sessions come from its database and carry no transcript path.
+            if provider == "codebuddy" {
+                target.path = path.to_string_lossy().into();
+            }
+            target.session.input_kind = kind.into();
+            (source, target)
+        };
+        let (source, waiting) = session(Phase::NeedsInput, "question");
+        let excerpt = readers::excerpt(&source, &waiting).unwrap();
+        let questions = excerpt.structured_questions.unwrap();
+        assert_eq!(questions[0]["id"], "Color");
+        assert_eq!(
+            questions[0]["options"][0],
+            json!({"label":"Red","description":"Warm"})
+        );
+        assert_eq!(questions[1]["multiSelect"], true);
+        assert_eq!(excerpt.user_text, "Ask me");
+        assert!(!excerpt.question.contains("PRIVATE"));
+        // One unanswered call while the session waits on a permission is that permission.
+        rows.push(
+            json!({"id":"r1","type":"function_call_result","callId":"call-1","sessionId":NATIVE}),
+        );
+        rows.push(json!({"id":"c2","type":"function_call","callId":"call-2","name":"Bash","arguments":"{\"command\":\"rm -rf probe_dir\",\"description\":\"Remove it\"}","sessionId":NATIVE}));
+        save_rows(&path, &rows);
+        let (source, waiting) = session(Phase::NeedsInput, "approval");
+        let approval = readers::excerpt(&source, &waiting)
+            .unwrap()
+            .structured_approval
+            .unwrap();
+        assert_eq!(approval["toolName"], "Bash");
+        assert_eq!(approval["command"], "rm -rf probe_dir");
+        assert_eq!(approval["kind"], "command");
+        // With two calls in flight the transcript does not say which one is being asked.
+        rows.push(json!({"id":"c3","type":"function_call","callId":"call-3","name":"Bash","arguments":"{\"command\":\"OTHER\"}","sessionId":NATIVE}));
+        // A subagent's call is not this session's.
+        rows.push(json!({"id":"c4","type":"function_call","callId":"call-4","name":"AskUserQuestion","arguments":arguments,"isSidechain":true,"sessionId":NATIVE}));
+        save_rows(&path, &rows);
+        let excerpt = readers::excerpt(&source, &waiting).unwrap();
+        assert!(excerpt.structured_approval.is_none() && excerpt.structured_questions.is_none());
+        assert!(excerpt.question.is_empty());
+        for call in ["call-2", "call-3"] {
+            rows.push(
+                json!({"id":call,"type":"function_call_output","callId":call,"sessionId":NATIVE}),
+            );
+        }
+        rows.push(json!({"id":"a1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"All done"}],"sessionId":NATIVE}));
+        save_rows(&path, &rows);
+        let (source, done) = session(Phase::Complete, "");
+        let excerpt = readers::excerpt(&source, &done).unwrap();
+        assert_eq!(excerpt.text, "All done");
+        assert!(excerpt.question.is_empty());
+    }
+}
+
+/// With the terminal adapter on, a chat reply is still never typed into an agent's own
+/// approval dialog or option menu.
+#[test]
+fn chat_reply_is_never_typed_into_an_open_approval_or_option_menu() {
+    let (dir, store, _) = fixture();
+    let mut c = enabled(&store, true);
+    c.allow_terminal = true;
+    config::write(&store.db, &c).unwrap();
+    let root = dir.path().join("copilot");
+    let folder = root.join("session-state").join(NATIVE);
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("events.jsonl");
+    let row = |kind: &str, data: Value| json!({"type":kind,"data":data,"timestamp":"2026-11-25T18:56:26.573Z"});
+    save_rows(
+        &path,
+        &[
+            row("session.start", json!({"sessionId":NATIVE})),
+            row("user.message", json!({"content":"Remove the folder"})),
+            row(
+                "permission.requested",
+                json!({"requestId":"r1","permissionRequest":{"kind":"shell","fullCommandText":"rm -rf probe_dir"}}),
+            ),
+        ],
+    );
+    let source = Source {
+        id: "copilot-source".into(),
+        provider: "copilot".into(),
+        path: root.to_string_lossy().into(),
+        ..Default::default()
+    };
+    store
+        .save_settings(&Settings {
+            sources: vec![source.clone()],
+            ..Default::default()
+        })
+        .unwrap();
+    let reason = |id: &str| -> String {
+        store
+            .db
+            .query_row(
+                "SELECT reason FROM channel_commands WHERE reply_to=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    // The record shows an open permission although the session's kind was not reported.
+    let mut s = live(&source, Phase::NeedsInput);
+    s.path = path.to_string_lossy().into();
+    s.pid = Some(std::process::id());
+    s.process_start = Some(1);
+    let target = observe(&store, s.clone());
+    ingest(
+        &store,
+        incoming("typed", &format!("/send {} y", target.key), ""),
+    );
+    assert_eq!(command_status(&store, "typed"), "blocked");
+    assert!(
+        reason("typed").contains("原会话正在等待选择或确认，终端输入无法可靠送达，请在原窗口处理")
+    );
+    // A question tool whose options no reader lists opens a menu all the same.
+    std::fs::remove_file(&path).unwrap();
+    s.input_kind = "question".into();
+    s.input_request = "ask".into();
+    let target = observe(&store, s);
+    ingest(
+        &store,
+        incoming("menu", &format!("/send {} 1", target.key), ""),
+    );
+    assert_eq!(command_status(&store, "menu"), "blocked");
+    assert!(
+        reason("menu").contains("原会话正在等待选择或确认，终端输入无法可靠送达，请在原窗口处理")
+    );
+}

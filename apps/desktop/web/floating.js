@@ -7,6 +7,7 @@
   const SUPPRESS = 250;
   let start = null,dragged = false,info = null;
   let panelOpen = false,pinned = false,suppress = 0,orbitAgent = null,lastOrbitEntry = null,orbitTimer = 0;
+  let orbitHeight = null,orbitLayoutFrame = 0,orbitFocusAsked = false;
 
   function isDarkTheme() {
     const t = document.documentElement.dataset.theme;
@@ -57,6 +58,29 @@
     return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="${arcPath(180 + half, span)}" fill="none" stroke="${track}" stroke-width="${sw}" stroke-linecap="round"/><path d="${arcPath(180 - half, -span)}" fill="none" stroke="${track}" stroke-width="${sw}" stroke-linecap="round"/>${topFg}${botFg}</svg>`;
   }
   function stopOrbitTick() { if (orbitTimer) { clearInterval(orbitTimer); orbitTimer = 0; } }
+  /* The shell sizes the popover window to an interaction card: report the height its content needs,
+     or 0 when no card is shown so the shell falls back to its own session-list size. */
+  function reportOrbitLayout() {
+    if (orbitLayoutFrame) return;
+    orbitLayoutFrame = requestAnimationFrame(() => {
+      orbitLayoutFrame = 0;
+      const pop = document.querySelector('#orbit-popover');
+      const body = pop?.querySelector('.orbit-body');
+      if (!panelOpen || !orbitAgent || !body) return;
+      const card = document.querySelector('#orbit-interaction');
+      // A card that is still loading has no size worth resizing the window for.
+      if (card && !card.hidden && card.querySelector('.orbit-iloading')) return;
+      let height = 0;
+      if (card && !card.hidden) {
+        const last = [...body.children].filter((el) => !el.hidden && el.offsetHeight > 0).pop();
+        const content = last ? last.getBoundingClientRect().bottom - body.getBoundingClientRect().top + body.scrollTop + (parseFloat(getComputedStyle(body).paddingBottom) || 0) : 0;
+        height = Math.ceil((pop.querySelector('.orbit-head')?.offsetHeight || 0) + content + (pop.querySelector('.orbit-foot')?.offsetHeight || 0));
+      }
+      if (height === orbitHeight) return;
+      orbitHeight = height;
+      invoke('desktop_orbit_popover', { height }).catch(() => {});
+    });
+  }
   function renderOrbitPopover(next) {
     const pop = document.querySelector('#orbit-popover');
     if (!pop) return;
@@ -110,7 +134,10 @@
         const symbol = typeof uiIcon === 'function' ? uiIcon(key) : '';
         const focus = sessionsApi.canFocus(s) ? ` role="button" tabindex="0" data-focus-session="${esc(s.id)}" title="${esc(sessionsApi.focusHelp(s))}"` : '';
         const title = (isOverflow ? `${orbitProviderName(s.provider)} · ` : '') + (s.machine || AieyesI18n.t("本机"));
-        return `<div class="live-row" data-phase="${esc(s.phase)}"${focus}><span class="phase-mark" data-phase="${esc(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${esc(title)}</strong><small class="session-detail" data-orbit-tick="${esc(s.id)}">${esc(sessionsApi.detailText(s))}</small>${sessionsApi.usageHTML(s)}</div><span>${esc(label)}</span>${sessionsApi.canFocus(s) ? `<span class="session-jump-mark" aria-hidden="true">${typeof uiIcon === 'function' ? uiIcon('expand') : ''}</span>` : ''}</div>`;
+        const row = `<div class="live-row" data-phase="${esc(s.phase)}"${focus}><span class="phase-mark" data-phase="${esc(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${esc(title)}</strong><small class="session-detail" data-orbit-tick="${esc(s.id)}">${esc(sessionsApi.detailText(s))}</small>${sessionsApi.usageHTML(s)}</div><span>${esc(label)}</span>${sessionsApi.canFocus(s) ? `<span class="session-jump-mark" aria-hidden="true">${typeof uiIcon === 'function' ? uiIcon('expand') : ''}</span>` : ''}</div>`;
+        // A running session that takes a follow-up or an interrupt gets its own button beside the row.
+        const follow = window.AieyesOrbitInteraction?.followUpHTML?.(s) || '';
+        return follow ? `<div class="orbit-row">${row}${follow}</div>` : row;
       }).join('');
     }
     document.querySelector('#orbit-count').textContent = active.length ? AieyesI18n.t("{0} 个进行中", active.length) : AieyesI18n.t("空闲");
@@ -126,6 +153,7 @@
         }
       }, 1000);
     }
+    reportOrbitLayout();
   }
 
   function failure(error) {
@@ -154,6 +182,10 @@
     if (!panelOpen) orbitAgent = null;
     document.body.dataset.view = panelOpen ? (orbitAgent ? 'orbit' : 'panel') : 'ball';
     if (info) window.AieyesPet?.update({ ...info, panelOpen, orbitAgent });
+    // The shell forgets the reported height and the passive state whenever the popover changes.
+    if (!panelOpen || orbitAgent !== wasOrbit) {orbitHeight = null;orbitFocusAsked = false;}
+    // A follow-up card and a picked request belong to the agent they were opened for.
+    if (panelOpen && wasOrbit && orbitAgent && orbitAgent !== wasOrbit) window.AieyesOrbitInteraction?.reset();
     renderOrbitPopover(info || next);
     const pin = document.querySelector('#panel-pin');
     if (pin) {
@@ -182,8 +214,9 @@
       window.AieyesMotion?.panel(true);
       requestAnimationFrame(() => {if (!orbitAgent && typeof drawTrend === 'function') drawTrend();invoke('desktop_panel_ready', { generation: window.AIEYES_SHELL_GENERATION ?? 0 }).catch(failure);});
       // The Linux panel window takes keyboard focus; park it on the panel itself so opening shows no
-      // focus ring or tooltip, and Tab starts at the first control.
-      if (info?.platform === 'linux' && !next?.orbitAuto && !info?.orbitAuto) requestAnimationFrame(() => {const target = orbitAgent ? document.querySelector('#orbit-popover') : panel;if (target) {target.tabIndex = -1;target.focus({ preventScroll: true });}});
+      // focus ring or tooltip, and Tab starts at the first control. Only a popover that opened by
+      // itself is left alone: orbitAuto says nothing about the full panel.
+      if (info?.platform === 'linux' && !(orbitAgent && (next?.orbitAuto || info?.orbitAuto))) requestAnimationFrame(() => {const target = orbitAgent ? document.querySelector('#orbit-popover') : panel;if (target) {target.tabIndex = -1;target.focus({ preventScroll: true });}});
       // Mouse-opened floating surfaces preserve the other application's keyboard focus.
       const refresh = !orbitAgent && window.AieyesApp?.refreshPanel;
       if (refresh) refresh().catch((error) => failure(error));
@@ -233,6 +266,8 @@
 
   document.addEventListener('keydown', (event) => {
     if (event.defaultPrevented || document.querySelector('#quota-dialog')?.open) return;
+    // Escape that cancels an IME candidate list belongs to the input method, not to the panel.
+    if (event.isComposing || event.keyCode === 229) return;
     if (event.key === 'Escape' && panelOpen) {
       event.preventDefault();
       const more = document.querySelector('#panel-more');
@@ -247,7 +282,16 @@
     if (menu && !menu.hidden && !wrap) closeMenu();
     const more = document.querySelector('#panel-more');
     if (more?.open && !more.contains(event.target)) more.open = false;
+    // An auto-opened Linux popover is shown without keyboard focus; the first press inside claims it.
+    if (info?.platform === 'linux' && panelOpen && orbitAgent && info?.orbitAuto && !orbitFocusAsked &&
+      event.target instanceof Element && event.target.closest('#orbit-popover')) {
+      orbitFocusAsked = true;
+      invoke('desktop_orbit_popover', { focus: true }).catch(() => {});
+    }
   });
+  window.addEventListener('aieyes:orbit-layout', reportOrbitLayout);
+  window.addEventListener('aieyes:orbit-followup', () => {if (panelOpen && orbitAgent && info) renderOrbitPopover(info);});
+  window.addEventListener('resize', reportOrbitLayout);
 
   bindRefreshMenu('panel-refresh', 'panel-menu');
   document.querySelector('#panel-pin')?.addEventListener('click', async () => {

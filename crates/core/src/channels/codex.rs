@@ -1,5 +1,16 @@
+//! Client of the Codex app-server control socket: attach to a loaded thread, read the request
+//! it replays, and answer exactly that request. `card` turns each request type into the shared
+//! interaction contract.
+mod card;
+
 use super::{Session, content, control::Outcome, socket};
+use crate::models::Source;
+use crate::session_interaction::contract::{Decision, FileChange};
 use anyhow::{Context, Result, ensure};
+pub(crate) use card::{
+    approval_card, approval_card_with, decision_reply, form_card, is_approval, is_form,
+    is_user_input, patch_changes,
+};
 use serde_json::{Value, json};
 use std::{
     collections::HashSet,
@@ -12,6 +23,8 @@ pub(crate) struct Client {
     socket: socket::Socket,
     sequence: u64,
     pending: Vec<Value>,
+    /// `fileChange` items announced on this connection, for the approval that follows them.
+    items: Vec<Value>,
 }
 impl Client {
     #[cfg(unix)]
@@ -21,6 +34,7 @@ impl Client {
             socket: socket::unix(&path)?,
             sequence: 0,
             pending: Vec::new(),
+            items: Vec::new(),
         };
         client.call("initialize",json!({"clientInfo":{"name":"aieyes","title":"Aieyes","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}))?;
         client.send(json!({"method":"initialized"}))?;
@@ -52,6 +66,12 @@ impl Client {
     fn capture(&mut self, value: &Value) {
         if value.get("id").is_some() && value["method"].is_string() && self.pending.len() < 32 {
             self.pending.push(value.clone());
+        }
+        if value["method"] == "item/started"
+            && value["params"]["item"]["type"] == "fileChange"
+            && self.items.len() < 32
+        {
+            self.items.push(value["params"].clone());
         }
         if value["method"] == "serverRequest/resolved" {
             self.pending
@@ -123,8 +143,24 @@ impl Client {
     pub fn pending(&mut self, target: &Session) -> Result<Option<Value>> {
         self.pending_matching(target, |_| true)
     }
+    /// The request behind a thread that reports `waitingOnApproval`: an approval, or an MCP
+    /// form (the server raises the same flag for both).
     pub(crate) fn pending_approval(&mut self, target: &Session) -> Result<Option<Value>> {
-        self.pending_matching(target, is_approval)
+        self.pending_matching(target, |r| is_approval(r) || is_form(r))
+    }
+    /// Files of a pending file-change request, if this connection saw the item being announced.
+    fn announced_changes(&self, request: &Value) -> Vec<FileChange> {
+        let p = &request["params"];
+        self.items
+            .iter()
+            .rev()
+            .find(|item| {
+                item["threadId"] == p["threadId"]
+                    && item["item"]["id"] == p["itemId"]
+                    && p["itemId"].is_string()
+            })
+            .map(|item| card::item_changes(&item["item"]))
+            .unwrap_or_default()
     }
     fn pending_matching(
         &mut self,
@@ -137,17 +173,22 @@ impl Client {
                 self.capture(&v);
             }
         }
-        Ok(self
-            .pending
-            .iter()
-            .rev()
-            .find(|r| {
-                matches_request(r)
-                    && r["params"]["threadId"].as_str() == Some(&target.session.native_session)
-                    && (target.session.turn_id.is_empty()
-                        || r["params"]["turnId"].as_str() == Some(&target.session.turn_id))
-            })
-            .cloned())
+        // Oldest first, the order the original window shows its own dialogs in.
+        let mut waiting = self.pending.iter().filter(|r| {
+            let turn = &r["params"]["turnId"];
+            matches_request(r)
+                && card::thread_id(r) == Some(target.session.native_session.as_str())
+                && (target.session.turn_id.is_empty()
+                    || turn.as_str() == Some(&target.session.turn_id)
+                    // MCP elicitations and legacy approvals may carry no turn; `verify` has
+                    // already tied the thread's latest turn to the target.
+                    || turn.is_null() && card::turn_optional(r))
+        });
+        let Some(mut first) = waiting.next().cloned() else {
+            return Ok(None);
+        };
+        first["params"]["pendingCount"] = json!(1 + waiting.count());
+        Ok(Some(first))
     }
     pub fn followup(&mut self, target: &Session, text: &str) -> Outcome {
         match self.verify(target) {
@@ -184,6 +225,23 @@ impl Client {
         };
         self.send_answer(target, request, result)
     }
+    /// Reply to an approval with a decision taken from `approval_card` for this same request.
+    /// The native payload is the one the card was built with; nothing is derived from its id.
+    pub(crate) fn answer_decision(
+        &mut self,
+        target: &Session,
+        request: &Value,
+        decision: &Decision,
+        reason: Option<&str>,
+    ) -> Outcome {
+        if !is_approval(request) {
+            return Outcome::blocked("不支持的审批操作");
+        }
+        match card::decision_reply(decision, reason) {
+            Ok(reply) => self.send_answer(target, request, reply),
+            Err(error) => Outcome::blocked(&error.to_string()),
+        }
+    }
     fn send_answer(&mut self, target: &Session, request: &Value, result: Value) -> Outcome {
         if let Err(error) = self.verify(target) {
             return Outcome::blocked(&error.to_string());
@@ -207,7 +265,7 @@ impl Client {
                 Ok(Some(v))
                     if v["method"] == "serverRequest/resolved"
                         && v["params"]["requestId"] == request["id"]
-                        && v["params"]["threadId"] == request["params"]["threadId"] =>
+                        && v["params"]["threadId"].as_str() == card::thread_id(request) =>
                 {
                     return Outcome::confirmed(
                         "原会话已接收回答",
@@ -259,11 +317,41 @@ impl Client {
     }
 }
 
-pub(crate) fn is_approval(request: &Value) -> bool {
-    matches!(
-        request["method"].as_str(),
-        Some("item/commandExecution/requestApproval" | "item/fileChange/requestApproval")
-    )
+/// The files of a pending file-change request, which the request itself does not carry: the
+/// item announced on this connection, else the patch of exactly that call in the rollout.
+pub(crate) fn file_changes(
+    client: &Client,
+    source: &Source,
+    target: &Session,
+    request: &Value,
+) -> Vec<FileChange> {
+    if request["method"] != card::FILE_CHANGE {
+        return Vec::new();
+    }
+    let announced = client.announced_changes(request);
+    if !announced.is_empty() {
+        return announced;
+    }
+    let Some(item) = request["params"]["itemId"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+    else {
+        return Vec::new();
+    };
+    let root = crate::store::expand(&source.path);
+    let root = if root.is_file() {
+        root.parent().unwrap_or(&root).to_path_buf()
+    } else {
+        root
+    };
+    std::iter::once(&target.path)
+        .chain(&target.log_paths)
+        .filter(|path| !path.is_empty())
+        .take(8)
+        .filter_map(|path| content::records(Path::new(path), &root, target).ok())
+        .find_map(|(records, _)| card::call_patch(&records, item))
+        .map(|patch| card::patch_changes(&patch))
+        .unwrap_or_default()
 }
 
 /// Check runtime status without resuming a thread or reading its turn contents.
@@ -297,8 +385,8 @@ pub(crate) fn async_request(target: &Session, excerpt: &content::Excerpt) -> Opt
     let raw = excerpt.async_request.as_ref()?;
     let call = raw["callId"].as_str().filter(|s| !s.is_empty())?;
     let questions = raw["questions"].as_array()?.iter().enumerate().map(|(i,q)| {
-        let options = q["options"].as_array().map(|opts| opts.iter().map(|o| json!({"label":o.as_str().or_else(||o["label"].as_str()).unwrap_or("")})).collect::<Vec<_>>()).unwrap_or_default();
-        json!({"id":(i+1).to_string(),"questionIndex":i,"question":q["question"].as_str().or_else(||q["title"].as_str()).unwrap_or(""),"options":options})
+        let options = q["options"].as_array().map(|opts| opts.iter().map(|o| json!({"label":o.as_str().or_else(||o["label"].as_str()).unwrap_or(""),"description":o["description"].as_str().unwrap_or("")})).collect::<Vec<_>>()).unwrap_or_default();
+        json!({"id":(i+1).to_string(),"questionIndex":i,"header":q["header"].as_str().unwrap_or(""),"question":q["question"].as_str().or_else(||q["title"].as_str()).unwrap_or(""),"options":options})
     }).collect::<Vec<_>>();
     if questions.is_empty() {
         return None;
@@ -360,39 +448,41 @@ pub(crate) fn structured_payload(
                     let id = q["id"].as_str().context("原会话问题缺少标识")?;
                     let raw = map.get(id).context("请回答所有问题后再提交")?;
                     let picked = if let Some(s) = raw.as_str() {
-                        s.trim().to_owned()
+                        vec![s.trim()]
                     } else if let Some(arr) = raw.as_array() {
                         arr.iter()
                             .filter_map(Value::as_str)
                             .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                            .collect()
                     } else {
-                        String::new()
+                        Vec::new()
                     };
+                    let picked = picked
+                        .into_iter()
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>();
                     ensure!(!picked.is_empty(), "问题回答不能为空");
-                    answers.insert(id.into(), json!({"answers":[picked]}));
+                    // The native answer is a list; the async reply carries one string per question.
+                    if request["method"] == "aieyes/asyncQuestion" {
+                        answers.insert(id.into(), json!({"answers":[picked.join(", ")]}));
+                    } else {
+                        answers.insert(id.into(), json!({"answers":picked}));
+                    }
                 }
                 return Ok(json!({"answers":answers}));
             }
             answer(request, text.unwrap_or(""))
         }
-        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
-            let decision = match action {
-                "approve" | "accept" => "accept",
+        _ if is_approval(request) => {
+            let id = match action {
+                "approve" | "accept" => "approve",
                 "decline" | "deny" => "decline",
                 "cancel" => "cancel",
                 _ => anyhow::bail!("不支持的审批操作"),
             };
-            if let Some(allowed) = p["availableDecisions"].as_array() {
-                ensure!(
-                    allowed.iter().any(|v| v.as_str() == Some(decision)),
-                    "原会话不允许此审批选项"
-                );
-            }
-            Ok(json!({"decision":decision}))
+            card::plain_reply(request, id)
         }
+        _ if is_form(request) => card::form_reply(request, action, answers_map, text),
         _ => anyhow::bail!("此类输入需要回到原窗口处理"),
     }
 }
@@ -411,8 +501,12 @@ pub(crate) fn fingerprint(request: &Value) -> String {
     let p = &request["params"];
     let params: serde_json::Map<String, Value> = [
         "threadId",
+        "conversationId",
         "turnId",
         "itemId",
+        "callId",
+        "approvalId",
+        "kind",
         "questions",
         "command",
         "reason",
@@ -424,6 +518,16 @@ pub(crate) fn fingerprint(request: &Value) -> String {
         "changes",
         "networkApprovalContext",
         "proposedExecpolicyAmendment",
+        "additionalPermissions",
+        "fileChanges",
+        "serverName",
+        "mode",
+        "message",
+        "requestedSchema",
+        "_meta",
+        "url",
+        "elicitationId",
+        "form",
     ]
     .into_iter()
     .map(|k| (k.to_owned(), p[k].clone()))
@@ -444,9 +548,15 @@ pub(crate) fn describe(request: &Value, language: &str) -> String {
             }
             text
         }
-        "item/commandExecution/requestApproval"
-        | "item/fileChange/requestApproval"
-        | super::opencode::PERMISSION => {
+        _ if is_approval(request) => match card::summary(request, language) {
+            Some((reason, body)) => format!(
+                "{reason}\n{}\n\n{}",
+                content::clip(&body, 6000),
+                tr("引用此消息回复 /approve 允许本次操作，/decline 拒绝。")
+            ),
+            None => tr("原会话正在等待输入。此类请求需要回到原窗口处理。"),
+        },
+        super::opencode::PERMISSION => {
             let operation = p["command"]
                 .as_str()
                 .map(str::to_owned)
@@ -506,20 +616,15 @@ pub(super) fn answer(request: &Value, text: &str) -> Result<Value> {
             }
             Ok(json!({"answers":answers}))
         }
-        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
-            let decision = match text.trim() {
-                "/approve" => "accept",
+        // The text channel takes the three plain decisions; scoped ones are card-only.
+        _ if is_approval(request) => {
+            let id = match text.trim() {
+                "/approve" => "approve",
                 "/decline" => "decline",
                 "/cancel-request" => "cancel",
                 _ => anyhow::bail!("此操作需要明确回复 /approve 或 /decline"),
             };
-            if let Some(allowed) = p["availableDecisions"].as_array() {
-                ensure!(
-                    allowed.iter().any(|v| v.as_str() == Some(decision)),
-                    "原会话不允许此审批选项"
-                );
-            }
-            Ok(json!({"decision":decision}))
+            card::plain_reply(request, id)
         }
         _ => anyhow::bail!("此类输入需要回到原窗口处理，指令已保留"),
     }

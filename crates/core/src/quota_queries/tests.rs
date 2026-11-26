@@ -166,11 +166,23 @@ fn process_worker() {
                     Box::new(move |row| {
                         if row["kind"] == "quotas.refresh" {
                             if row["row"]["error"].is_null() {
-                                let persisted = Store::open(&progress_root)
-                                    .unwrap()
-                                    .dashboard(&Filter::default())
-                                    .unwrap()
-                                    .quotas;
+                                // This callback runs with the engine's progress mutex
+                                // held, on the thread whose query-progress slot points
+                                // at that same mutex. A dashboard read slower than 100ms
+                                // reports progress through it and would self-deadlock,
+                                // so read from a thread that has no progress slot.
+                                let persisted = std::thread::scope(|scope| {
+                                    scope
+                                        .spawn(|| {
+                                            Store::open(&progress_root)
+                                                .unwrap()
+                                                .dashboard(&Filter::default())
+                                                .unwrap()
+                                                .quotas
+                                        })
+                                        .join()
+                                        .unwrap()
+                                });
                                 assert!(
                                     persisted.iter().any(|q| q.account_id
                                         == row["row"]["accountId"].as_str().unwrap())

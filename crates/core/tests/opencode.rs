@@ -150,7 +150,7 @@ fn native_session_status_distinguishes_tool_steps_from_finished_turns() {
         [json!({"type":"tool","tool":"question","state":{"status":"running"}}).to_string()],
     )
     .unwrap();
-    assert_eq!(opencode::sessions(&path).unwrap()[0].2, "PermissionRequest");
+    assert_eq!(opencode::sessions(&path).unwrap()[0].2, "Question");
     data["finish"] = json!("stop");
     db.execute("UPDATE message SET data=?1", [data.to_string()])
         .unwrap();

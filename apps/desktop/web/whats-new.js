@@ -7,19 +7,28 @@
   const DISMISSED = 'aieyes.whatsNew.dismissed';
   let info = null;
   const escape = (value) => AieyesUI.escapeHTML(value);
-  // The same structure as macOS ReleaseNotes: an English part, then a part after "## 中文";
-  // the first heading is the headline, list lines are items, other lines are intro or outro.
+  // The same structure as macOS ReleaseNotes: a heading that reads `中文` or `English` selects that
+  // language's part, in any order and any number of times. Lines before the first such heading
+  // belong to the language the file gives no heading (English when it names neither or both).
+  // In a part, the first other heading is the headline, list lines are items, other lines are
+  // intro or outro.
   function parse(markdown) {
-    const part = () => ({ headline: null, intro: [], items: [], outro: [] }),notes = { english: part(), chinese: part(), changelog: null };
-    let target = notes.english;
+    const part = () => ({ headline: null, intro: [], items: [], outro: [] }),lead = part(),named = {};
+    let target = lead,changelog = null;
     for (const raw of String(markdown ?? '').split(/\r?\n/)) {
       const line = raw.trim();if (!line) continue;
-      if (line === `## 中文`) {target = notes.chinese;continue;}
-      if (line.startsWith('#')) {const text = line.replace(/^#+/, '').trim();if (!target.headline && text) target.headline = text;}
+      if (line.startsWith('#')) {
+        const text = line.replace(/^#+/, '').trim(),language = text === `中文` ? 'chinese' : text.toLowerCase() === 'english' ? 'english' : null;
+        if (language) target = named[language] ??= part();
+        else if (!target.headline && text) target.headline = text;
+      }
       else if (line.startsWith('- ') || line.startsWith('* ')) target.items.push(line.slice(2));
-      else if (/^\[.*\]\([^)\s]+\)$/.test(line)) notes.changelog = line.slice(line.lastIndexOf('](') + 2, -1);
+      else if (/^\[.*\]\([^)\s]+\)$/.test(line)) changelog = line.slice(line.lastIndexOf('](') + 2, -1);
       else (target.items.length ? target.outro : target.intro).push(line);
     }
+    const unnamed = named.english && !named.chinese ? 'chinese' : 'english',rest = named[unnamed];
+    named[unnamed] = rest ? { headline: lead.headline ?? rest.headline, intro: [...lead.intro, ...rest.intro], items: [...lead.items, ...rest.items], outro: [...lead.outro, ...rest.outro] } : lead;
+    const notes = { english: named.english ?? part(), chinese: named.chinese ?? part(), changelog };
     return notes.english.items.length || notes.chinese.items.length ? notes : null;
   }
   const part = (notes, chinese) => {const first = chinese ? notes.chinese : notes.english,second = chinese ? notes.english : notes.chinese;return first.items.length ? first : second;};

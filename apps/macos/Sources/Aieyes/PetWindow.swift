@@ -272,6 +272,14 @@ private struct PetView: View {
         .frame(width: totalWidth, height: totalHeight)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Aieyes · " + L(state.label)).accessibilityHint(L("单击打开面板，拖动移动，右键菜单"))
+        // The badges are drawn, not hit-testable views: VoiceOver reads them as the pet's value
+        // and opens each one through a named action.
+        .accessibilityValue(agents.map(\.accessibilitySummary).joined(separator: "；"))
+        .accessibilityActions {
+            ForEach(agents) { agent in
+                Button(L("打开 {0} 的会话", agent.title)) { orbit.openAgent?(agent) }
+            }
+        }
     }
     private func celebrate(_ playing: Bool) { if playing && !reduceMotion { celebrations += 1 } }
 }
@@ -315,6 +323,7 @@ private final class PetHost: NSHostingView<PetView> {
     var open: ((NSView, Bool) -> Void)?
     var openOrbit: ((NSView, PetOrbitAgent, NSRect, NSRectEdge) -> Void)?
     var onDragStart: (() -> Void)?
+    var onDragEnd: (() -> Void)?
     var settings: (() -> Void)?
     var petSettings: (() -> Void)?
     weak var orbit: PetOrbitStore?
@@ -410,7 +419,10 @@ private final class PetHost: NSHostingView<PetView> {
     override func mouseUp(with event: NSEvent) {
         guard let window, let activePress = press else { return }
         press = nil
-        if dragged { UserDefaults.standard.set(NSStringFromPoint(PetWindowController.settle(window, preferredPoint: NSEvent.mouseLocation)), forKey: "aieyes.pet.position") }
+        if dragged {
+            UserDefaults.standard.set(NSStringFromPoint(PetWindowController.settle(window, preferredPoint: NSEvent.mouseLocation)), forKey: "aieyes.pet.position")
+            onDragEnd?()
+        }
         else if let hit = activePress.orbitHit { openOrbit?(self, hit.agent, hit.rect, hit.edge) }
         else { open?(self, true) }
     }
@@ -482,6 +494,7 @@ private final class PetHost: NSHostingView<PetView> {
         checkUpdates: @escaping () -> Void = {},
         openOrbit: ((NSView, PetOrbitAgent, NSRect, NSRectEdge) -> Void)? = nil,
         onDragStart: (() -> Void)? = nil,
+        onDragEnd: (() -> Void)? = nil,
         open: @escaping (NSView, Bool) -> Void
     ) {
         self.model = model
@@ -490,8 +503,12 @@ private final class PetHost: NSHostingView<PetView> {
         panel = PetPanel(contentRect: NSRect(x: 0,y: 0,width: 144,height: 168), styleMask: [.borderless,.nonactivatingPanel], backing: .buffered, defer: false)
         panel.title=L("Aieyes 宠物"); panel.isOpaque=false; panel.backgroundColor = .clear; panel.hasShadow=false
         panel.level = .floating; panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]; panel.hidesOnDeactivate=false
-        let host=PetHost(rootView: PetView(model:model, orbit: orbit)); host.sizingOptions=[]; host.open=open; host.openOrbit=openOrbit; host.onDragStart=onDragStart; host.orbit=orbit; panel.contentView=host
+        let host=PetHost(rootView: PetView(model:model, orbit: orbit)); host.sizingOptions=[]; host.open=open; host.openOrbit=openOrbit; host.onDragStart=onDragStart; host.onDragEnd=onDragEnd; host.orbit=orbit; panel.contentView=host
         host.update = checkUpdates
+        orbit.openAgent = { [weak host] agent in
+            guard let host, let hit = host.orbitAnchor(for: agent.provider) else { return }
+            host.openOrbit?(host, hit.agent, hit.rect, hit.edge)
+        }
         host.settings = { [weak model] in model?.openSettings(.init(category: "general")) }
         host.petSettings = { [weak model] in model?.openSettings(.init(category: "general", section: "desktop")) }
         host.setAccessibilityRole(.button); host.setAccessibilityLabel(L("Aieyes 宠物，单击打开面板"))

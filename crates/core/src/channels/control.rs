@@ -102,6 +102,52 @@ pub(crate) fn remote(
     allow_terminal: bool,
     prompt: Option<&str>,
 ) -> Result<Value> {
+    remote_request(
+        settings,
+        source,
+        target,
+        action,
+        text,
+        None,
+        allow_terminal,
+        prompt,
+    )
+}
+
+/// Send a reply to a remote session: `text`, or the native reply to the structured Codex
+/// request whose hash is `prompt`.
+pub(crate) fn remote_reply(
+    settings: &Settings,
+    source: &Source,
+    target: &Session,
+    text: &str,
+    native: Option<&Value>,
+    allow_terminal: bool,
+    prompt: Option<&str>,
+) -> Result<Value> {
+    remote_request(
+        settings,
+        source,
+        target,
+        "send",
+        text,
+        native,
+        allow_terminal,
+        prompt,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn remote_request(
+    settings: &Settings,
+    source: &Source,
+    target: &Session,
+    action: &str,
+    text: &str,
+    native: Option<&Value>,
+    allow_terminal: bool,
+    prompt: Option<&str>,
+) -> Result<Value> {
     let host = settings
         .hosts
         .iter()
@@ -110,7 +156,7 @@ pub(crate) fn remote(
     let loader = "import json,sys;p=json.load(sys.stdin);exec(compile(p['script'],'<aieyes-channel>','exec'),{'__name__':'__main__','REQUEST':p['request']})";
     let command =
         crate::ssh::command(host, &format!("exec python3 -c {}", process::quote(loader)))?;
-    let input = json!({"script":REMOTE,"request":{"action":action,"source":source,"target":target,"text":text,"allowTerminal":allow_terminal,"promptHash":prompt,"language":settings.appearance.language}});
+    let input = json!({"script":REMOTE,"request":{"action":action,"source":source,"target":target,"text":text,"reply":native,"allowTerminal":allow_terminal,"promptHash":prompt,"language":settings.appearance.language}});
     let bytes = process::run(
         command,
         serde_json::to_vec(&input)?,
@@ -383,8 +429,26 @@ fn execute(store: &Store, c: &Config, target: &Session, text: &str) -> Outcome {
     if target.session.subagent_count > 0 && target.session.phase == Phase::NeedsInput {
         return Outcome::blocked("等待输入可能来自子 Agent，请回到原窗口确认目标");
     }
-    if matches!(text.trim(), "/approve" | "/decline" | "/cancel-request") {
+    // Text followed by Enter must never land on a permission dialog or an MCP form.
+    if matches!(text.trim(), "/approve" | "/decline" | "/cancel-request")
+        || (target.session.phase == Phase::NeedsInput
+            && matches!(
+                target.session.input_kind.as_str(),
+                "approval" | "elicitation"
+            ))
+    {
         return Outcome::blocked("此终端没有可核验的审批接口，请在原窗口确认");
+    }
+    // Nor on an option menu: a question tool opens one whether or not its options were read,
+    // and a reader that found an open question or approval says so itself.
+    if target.session.phase == Phase::NeedsInput && {
+        let pending = super::readers::excerpt(&source, target);
+        target.session.input_kind == "question"
+            || pending.is_some_and(|e| {
+                e.structured_questions.is_some() || e.structured_approval.is_some()
+            })
+    } {
+        return Outcome::blocked("原会话正在等待选择或确认，终端输入无法可靠送达，请在原窗口处理");
     }
     if let Some(outcome) = tmux(target, text) {
         return outcome;
@@ -504,7 +568,7 @@ pub(super) fn process_event(store: &Store) -> Result<()> {
                 approval = value["approval"] == true;
                 option_request = value
                     .get("questionRequest")
-                    .filter(|v| v.is_object())
+                    .filter(|v| v.is_object() && !codex::is_form(v))
                     .cloned();
             }
         } else {
@@ -527,13 +591,9 @@ pub(super) fn process_event(store: &Store) -> Result<()> {
             {
                 question = Some(codex::describe(&request, &settings.appearance.language));
                 prompt_hash = Some(codex::fingerprint(&request));
-                approval = matches!(
-                    request["method"].as_str(),
-                    Some(
-                        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval"
-                    )
-                );
-                if !approval {
+                approval = codex::is_approval(&request);
+                // An MCP form has no option buttons; it is described and left to its window.
+                if !approval && !codex::is_form(&request) {
                     option_request = Some(request);
                 }
             } else if target.session.phase == Phase::NeedsInput

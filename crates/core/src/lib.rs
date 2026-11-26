@@ -200,7 +200,7 @@ impl Engine {
     ) -> Result<Value> {
         let progress = std::sync::Arc::new(std::sync::Mutex::new(progress));
         let _query_progress = operations::query_progress(progress.clone());
-        self.progress = Some(Box::new(move |value| progress.lock().unwrap()(value)));
+        self.progress = Some(Box::new(move |value| operations::deliver(&progress, value)));
         self.runtime_change = None;
         let changes = self.store.db.total_changes();
         let operation = params["operationId"].clone();

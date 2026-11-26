@@ -24,15 +24,15 @@ body[data-view=orbit] { display:block; user-select:text; width:100vw; min-width:
 .orbit-title-wrap strong { font-size:var(--font-card-title); line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .orbit-title-wrap small { font-size:var(--font-caption); color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .orbit-quota { text-align:right; font-size:var(--font-caption); font-variant-numeric:tabular-nums; color:var(--muted); flex-shrink:0; max-width:140px; line-height:1.35; }
-.orbit-body { flex:1; min-height:0; overflow:auto; padding:8px 12px; overscroll-behavior:contain; scrollbar-width:thin; }
+.orbit-body { flex:1; min-height:0; overflow-x:hidden; overflow-y:auto; padding:8px 12px; overscroll-behavior:contain; scrollbar-width:thin; }
 #orbit-session-list { display:flex; flex-direction:column; gap:6px; }
 .orbit-subhead { font-size:var(--font-caption); color:var(--muted); margin-top:4px; }
-#orbit-interaction { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
+#orbit-interaction { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; min-width:0; }
 .orbit-itabs { display:flex; gap:6px; overflow-x:auto; padding-bottom:2px; scrollbar-width:thin; }
 .orbit-itab { display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:var(--radius-pill); border:1px solid var(--border); background:var(--surface-soft); color:var(--ink); font-size:var(--font-caption); cursor:pointer; flex-shrink:0; }
 .orbit-itab[aria-selected=true] { border-color:color-mix(in srgb,var(--warn) 65%,transparent); background:color-mix(in srgb,var(--warn) 16%,transparent); font-weight:var(--weight-medium); }
 .orbit-idot { width:6px; height:6px; border-radius:var(--radius-pill); background:var(--warn); flex-shrink:0; }
-.orbit-icard { display:flex; flex-direction:column; gap:8px; padding:10px; border-radius:var(--radius-card); background:var(--surface-soft); border:1px solid color-mix(in srgb,var(--warn) 38%,var(--border)); }
+.orbit-icard { display:flex; flex-direction:column; gap:8px; min-width:0; padding:10px; border-radius:var(--radius-card); background:var(--surface-soft); border:1px solid color-mix(in srgb,var(--warn) 38%,var(--border)); }
 .orbit-icard-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .orbit-icard-meta { min-width:0; flex:1; display:flex; flex-direction:column; gap:1px; }
 .orbit-icard-meta strong { font-size:var(--font-entry); font-weight:var(--weight-medium); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -40,10 +40,14 @@ body[data-view=orbit] { display:block; user-select:text; width:100vw; min-width:
 .orbit-icard-tools { display:flex; align-items:center; gap:4px; flex-shrink:0; }
 .orbit-icon-btn { min-width:24px; min-height:24px; padding:0 6px; border-radius:var(--radius-control); border:1px solid var(--border); background:transparent; color:var(--muted); font-size:var(--font-caption); cursor:pointer; }
 .orbit-icon-btn:hover { color:var(--ink); background:var(--surface-sunken); }
-.orbit-iloading,.orbit-ireadonly-reason,.orbit-iadapter { font-size:var(--font-caption); color:var(--muted); line-height:1.4; }
+.orbit-iloading,.orbit-ireadonly-reason,.orbit-iadapter { font-size:var(--font-caption); color:var(--muted); line-height:1.4; min-width:0; overflow-wrap:anywhere; }
 .orbit-itool-row { display:flex; align-items:baseline; gap:6px; flex-wrap:wrap; }
-.orbit-itool-tag { display:inline-block; padding:1px 7px; border-radius:var(--radius-pill); background:color-mix(in srgb,var(--warn) 18%,transparent); color:var(--warn); font-size:var(--font-caption); font-weight:var(--weight-medium); }
-.orbit-ireason { font-size:var(--font-caption); color:var(--ink); line-height:1.35; }
+.orbit-itool-tag { display:inline-block; max-width:100%; overflow-wrap:anywhere; padding:1px 7px; border-radius:var(--radius-pill); background:color-mix(in srgb,var(--warn) 18%,transparent); color:var(--warn); font-size:var(--font-caption); font-weight:var(--weight-medium); }
+.orbit-ireason {
+  font-size:var(--font-caption); color:var(--ink); line-height:1.35; min-width:0; overflow-wrap:anywhere;
+  /* The full reason is in the title tooltip; three lines keep the command and the buttons in view. */
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; line-clamp:3; overflow:hidden;
+}
 .orbit-code {
   margin:0; padding:var(--space-control); border-radius:var(--radius-control);
   background:var(--surface-sunken); font-family:var(--font-code); font-size:var(--font-caption); line-height:1.4;
@@ -58,7 +62,7 @@ body[data-view=orbit] { display:block; user-select:text; width:100vw; min-width:
 .orbit-iprompt { font-size:var(--font-caption); line-height:1.45; max-height:124px; overflow:auto; white-space:pre-wrap; word-break:break-word; user-select:text; }
 .orbit-iapproval,.orbit-iquestions,.orbit-itext,.orbit-ireadonly { display:flex; flex-direction:column; gap:8px; }
 .orbit-qblock { display:flex; flex-direction:column; gap:6px; }
-.orbit-qtitle { font-size:var(--font-entry); font-weight:var(--weight-medium); line-height:1.35; }
+.orbit-qtitle { font-size:var(--font-entry); font-weight:var(--weight-medium); line-height:1.35; min-width:0; overflow-wrap:anywhere; }
 .orbit-qhint { font-size:var(--font-caption); color:var(--muted); font-weight:var(--weight-regular); margin-left:4px; }
 .orbit-opts { display:flex; flex-direction:column; gap:5px; }
 .orbit-opt-wrap { display:flex; flex-direction:column; gap:4px; }
@@ -66,14 +70,19 @@ body[data-view=orbit] { display:block; user-select:text; width:100vw; min-width:
 .orbit-opt[data-selected=true] { border-color:color-mix(in srgb,var(--accent) 60%,transparent); background:color-mix(in srgb,var(--accent) 14%,transparent); }
 .orbit-opt-mark { font-size:var(--font-caption); color:var(--accent); flex-shrink:0; line-height:1.35; }
 .orbit-opt-text { display:flex; flex-direction:column; gap:2px; min-width:0; flex:1; }
-.orbit-opt-text strong { font-size:var(--font-caption); font-weight:var(--weight-medium); }
-.orbit-opt-text small { font-size:var(--font-caption); color:var(--muted); line-height:1.3; }
+.orbit-opt-text strong { font-size:var(--font-caption); font-weight:var(--weight-medium); min-width:0; overflow-wrap:anywhere; }
+.orbit-opt-text small { font-size:var(--font-caption); color:var(--muted); line-height:1.3; min-width:0; overflow-wrap:anywhere; }
 .orbit-preview-toggle { align-self:flex-start; border:0; background:transparent; padding:0 4px; color:var(--muted); font-size:var(--font-caption); cursor:pointer; }
 .orbit-preview-toggle:hover { color:var(--ink); }
 .orbit-icustom-row,.orbit-idecline-row { display:flex; align-items:center; gap:6px; }
 .orbit-input,.orbit-textarea { width:100%; box-sizing:border-box; padding:5px 8px; border-radius:var(--radius-control); border:1px solid var(--control-stroke); background:var(--field-fill); color:var(--ink); font-family:var(--font-ui); font-size:var(--font-caption); line-height:1.4; }
+/* The field takes the free width so the button beside it keeps its label on one line. */
+.orbit-icustom-row .orbit-input,.orbit-idecline-row .orbit-input { flex:1; min-width:0; width:auto; }
+.orbit-icustom-row .orbit-btn,.orbit-idecline-row .orbit-btn { flex-shrink:0; white-space:nowrap; }
 .orbit-textarea { resize:vertical; min-height:52px; }
-.orbit-iactions { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.orbit-iactions { display:flex; align-items:center; gap:6px; flex-wrap:wrap; min-width:0; }
+/* Decision labels come from the agent: a long one wraps inside its button instead of widening the card. */
+.orbit-iactions .orbit-btn { max-width:100%; overflow-wrap:anywhere; }
 .orbit-ispacer { flex:1; min-width:4px; }
 .orbit-btn { min-height:var(--control-sm); padding:3px 10px; border-radius:var(--radius-control); border:1px solid var(--control-stroke); background:var(--control-fill); color:var(--ink); font-size:var(--font-caption); cursor:pointer; }
 .orbit-btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -81,10 +90,58 @@ body[data-view=orbit] { display:block; user-select:text; width:100vw; min-width:
 .orbit-btn.ghost { background:transparent; border-color:transparent; color:var(--muted); }
 .orbit-btn.ghost:hover { color:var(--ink); background:var(--surface-sunken); }
 .orbit-btn:disabled { opacity:.5; cursor:default; }
-.orbit-ifeedback { font-size:var(--font-caption); line-height:1.35; }
+.orbit-ifeedback { font-size:var(--font-caption); line-height:1.35; min-width:0; overflow-wrap:anywhere; }
 .orbit-ifeedback[data-tone=ok] { color:var(--ok); }
 .orbit-ifeedback[data-tone=warn] { color:var(--warn); }
 .orbit-ifeedback[data-tone=danger] { color:var(--danger); }
+/* Cards for approvals with a plan or file changes, forms, follow-ups and several pending requests. */
+.orbit-itab[data-waiting=false] .orbit-idot { background:var(--accent); }
+.orbit-ibadge { display:inline-block; flex-shrink:0; max-width:100%; overflow-wrap:anywhere; padding:0 6px; border-radius:var(--radius-pill); border:1px solid var(--border); color:var(--muted); font-size:var(--font-caption); line-height:1.5; }
+.orbit-ireadonly-note { display:flex; align-items:baseline; gap:6px; flex-wrap:wrap; min-width:0; }
+.orbit-ipending { display:flex; align-items:center; gap:6px; min-width:0; font-size:var(--font-caption); color:var(--muted); }
+.orbit-ipending-count { flex-shrink:0; font-variant-numeric:tabular-nums; }
+.orbit-ipending-title { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--ink); }
+.orbit-ititle { min-width:0; overflow-wrap:anywhere; font-size:var(--font-caption); font-weight:var(--weight-medium); }
+.orbit-icwd,.orbit-ipaths,.orbit-form-url { display:flex; flex-direction:column; gap:1px; min-width:0; font-size:var(--font-caption); line-height:1.4; overflow-wrap:anywhere; user-select:text; }
+.orbit-icwd small,.orbit-ipaths small,.orbit-form-url small,.orbit-iprompt-caption,.orbit-itrunc,.orbit-qdesc,.orbit-qhelp { font-size:var(--font-caption); color:var(--muted); line-height:1.4; min-width:0; overflow-wrap:anywhere; }
+.orbit-ipaths span,.orbit-form-url span { font-family:var(--font-code); }
+.orbit-icwd { color:var(--muted); }
+.orbit-plan { max-height:220px; overflow-x:hidden; overflow-y:auto; padding:var(--space-control); border-radius:var(--radius-control); background:var(--surface-sunken); font-size:var(--font-caption); line-height:1.45; overflow-wrap:anywhere; user-select:text; scrollbar-width:thin; }
+.orbit-plan p { margin:0 0 6px; }
+.orbit-plan ul,.orbit-plan ol { margin:0 0 6px; padding-left:18px; }
+.orbit-plan > :last-child { margin-bottom:0; }
+.orbit-plan-heading { margin:6px 0 4px; font-weight:var(--weight-medium); }
+.orbit-plan > .orbit-plan-heading:first-child { margin-top:0; }
+.orbit-plan code { font-family:var(--font-code); }
+.orbit-plan .orbit-code { margin-bottom:6px; background:color-mix(in srgb,var(--ink) 8%,transparent); }
+.orbit-plan:focus-visible,.orbit-iprompt:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.orbit-changes { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.orbit-change { min-width:0; }
+.orbit-change summary { cursor:pointer; font-size:var(--font-caption); line-height:1.5; overflow-wrap:anywhere; }
+.orbit-change summary:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.orbit-change-kind { margin-right:6px; padding:0 5px; border-radius:var(--radius-pill); border:1px solid var(--border); color:var(--muted); }
+.orbit-change-kind[data-kind=add] { color:var(--ok); border-color:color-mix(in srgb,var(--ok) 45%,var(--border)); }
+.orbit-change-kind[data-kind=delete] { color:var(--danger); border-color:color-mix(in srgb,var(--danger) 45%,var(--border)); }
+.orbit-change-path { font-family:var(--font-code); user-select:text; }
+.orbit-change .orbit-code { margin-top:4px; }
+.orbit-diff { max-height:168px; }
+.orbit-diff span { display:block; min-height:1.4em; }
+.orbit-diff [data-diff=add] { background:color-mix(in srgb,var(--ok) 14%,transparent); }
+.orbit-diff [data-diff=del] { background:color-mix(in srgb,var(--danger) 14%,transparent); }
+.orbit-diff [data-diff=hunk] { color:var(--muted); }
+/* A decision can carry a second line: the rule, host or prefix it would save. */
+.orbit-decision { display:inline-flex; flex-direction:column; align-items:flex-start; gap:1px; text-align:left; }
+.orbit-decision small { max-width:100%; font-size:var(--font-caption); font-family:var(--font-code); line-height:1.3; opacity:.85; white-space:pre-line; overflow-wrap:anywhere; }
+.orbit-btn[data-armed=true] { background:var(--danger); border-color:var(--danger); color:#fff; }
+.orbit-form-head { display:flex; flex-direction:column; align-items:flex-start; gap:3px; min-width:0; }
+.orbit-form-title { font-size:var(--font-entry); font-weight:var(--weight-medium); min-width:0; overflow-wrap:anywhere; }
+.orbit-form-desc { font-size:var(--font-caption); color:var(--muted); line-height:1.4; white-space:pre-wrap; min-width:0; overflow-wrap:anywhere; }
+.orbit-qheader { align-self:flex-start; max-width:100%; overflow-wrap:anywhere; font-size:var(--font-caption); font-weight:var(--weight-medium); color:var(--muted); }
+.orbit-qerror { font-size:var(--font-caption); color:var(--danger); line-height:1.4; }
+.orbit-row { display:flex; align-items:center; gap:6px; min-width:0; }
+.orbit-row > .live-row { flex:1; min-width:0; }
+.orbit-follow-btn { flex-shrink:0; white-space:nowrap; }
+.orbit-follow-btn[aria-pressed=true] { border-color:color-mix(in srgb,var(--accent) 60%,transparent); background:color-mix(in srgb,var(--accent) 14%,transparent); }
 .orbit-empty { padding:10px 2px; display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:var(--font-secondary); }
 .orbit-empty small { font-size:var(--font-caption); }
 .orbit-foot { display:flex; align-items:center; justify-content:space-between; gap:var(--space-control); padding:8px 12px; border-top:1px solid var(--border); flex-shrink:0; }

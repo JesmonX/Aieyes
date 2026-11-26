@@ -452,6 +452,7 @@ fn main() {
         desktop::desktop_panel_page,
         desktop::desktop_action,
         desktop::desktop_panel_ready,
+        desktop::desktop_orbit_popover,
         desktop::desktop_main_ready,
         desktop::desktop_detail
     ];

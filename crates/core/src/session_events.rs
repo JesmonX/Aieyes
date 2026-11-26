@@ -584,10 +584,15 @@ pub fn native(provider: &str, row: &Value) -> Option<Event> {
                 Some("interaction.request" | "interaction.resolved") => {
                     event.call = field(row, &["id", "interactionId"]);
                     event.tool = field(row, &["toolName"]);
-                    if row["type"] == "interaction.request" {
-                        "Elicitation"
-                    } else {
+                    if row["type"] == "interaction.resolved" {
                         "ElicitationResult"
+                    } else {
+                        // Kimi 2.4 says what it opened: a tool approval or a question menu.
+                        match row["kind"].as_str() {
+                            Some("approval") => "PermissionRequest",
+                            Some("question") => "Question",
+                            _ => "Elicitation",
+                        }
                     }
                 }
                 Some("turn.prompt") => "start",
@@ -646,6 +651,18 @@ pub fn native(provider: &str, row: &Value) -> Option<Event> {
                         row,
                         &["permission_id", "request_id", "tool_call_id", "call_id"],
                     );
+                    // Grok 1.0 names only the tool. A wait of its own keeps an automatically
+                    // allowed `ask_user_question` from closing the question it opens, and a
+                    // wait per tool keeps the automatic permission of one tool from closing
+                    // the dialog that is still open for another.
+                    if event.call.is_empty() {
+                        event.call = match row["tool_name"].as_str() {
+                            Some(tool) if !tool.is_empty() && tool.len() <= 128 => {
+                                format!("permission:{tool}")
+                            }
+                            _ => "permission".into(),
+                        };
+                    }
                     if row["type"] == "permission_requested" {
                         "PermissionRequest"
                     } else {
@@ -752,6 +769,15 @@ pub fn native(provider: &str, row: &Value) -> Option<Event> {
                 }
                 "tool.execution_start" => "tool",
                 "tool.execution_complete" => "output",
+                // A permission is keyed by its own identifier, as its completion is.
+                "permission.requested" | "permission.completed" => {
+                    event.call = format!("permission:{}", field(data, &["requestId"]));
+                    if row["type"] == "permission.requested" {
+                        "PermissionRequest"
+                    } else {
+                        "ElicitationResult"
+                    }
+                }
                 "abort" | "session.abort" | "assistant.abort" => "interrupted",
                 "session.error" => "failed",
                 _ => return None,
@@ -1055,6 +1081,8 @@ pub struct Activity {
     pub pid: u32,
     pub process_start: u64,
     waiting: HashSet<String>,
+    /// What each entry of `waiting` is waiting for; entries without a kind are questions.
+    waiting_kinds: HashMap<String, &'static str>,
     claude_approvals: HashMap<String, u64>,
     unbound_claude_approvals: HashMap<String, u64>,
     async_questions: HashSet<String>,
@@ -1086,6 +1114,30 @@ impl Activity {
         ids.dedup();
         ids.join(":")
     }
+    /// What the session is waiting for, most restrictive first: `approval`, `elicitation`,
+    /// `question`, `notification`, or empty when unknown. Metadata only, never prompt content.
+    pub fn input_kind(&self) -> &'static str {
+        let kinds = self
+            .waiting
+            .iter()
+            .map(|id| self.waiting_kinds.get(id).copied().unwrap_or("question"))
+            .chain(self.claude_approvals.keys().map(|_| "approval"))
+            .chain(
+                self.unbound_claude_approvals
+                    .values()
+                    .map(|at| if *at == 0 { "question" } else { "approval" }),
+            )
+            .collect::<HashSet<_>>();
+        ["approval", "elicitation", "question", "notification"]
+            .into_iter()
+            .find(|kind| kinds.contains(kind))
+            .unwrap_or("")
+    }
+    fn wait_for(&mut self, id: String, kind: &'static str) {
+        self.waiting_kinds.retain(|id, _| self.waiting.contains(id));
+        self.waiting_kinds.insert(id.clone(), kind);
+        self.waiting.insert(id);
+    }
     pub fn has_claude_approvals(&self) -> bool {
         self.claude_approvals
             .values()
@@ -1101,6 +1153,17 @@ impl Activity {
             self.phase = Some(self.tool_phase());
         }
     }
+    /// Drops approvals whose reply the interaction hook has already handed to the agent.
+    /// Claude can leave a wait open until the result arrives, which a long command or a
+    /// deny-and-interrupt can delay or omit. A later wait for the same call stays open.
+    pub fn settle_answered_approvals(&mut self, answered: &HashMap<String, u64>) {
+        self.claude_approvals.retain(|call, at| {
+            *at == 0 || answered.get(call).is_none_or(|delivered| *delivered <= *at)
+        });
+        if self.phase == Some(Phase::NeedsInput) && !self.has_waiting() {
+            self.phase = Some(self.tool_phase());
+        }
+    }
     fn has_waiting(&self) -> bool {
         !self.waiting.is_empty()
             || !self.claude_approvals.is_empty()
@@ -1108,6 +1171,7 @@ impl Activity {
     }
     fn clear_waiting(&mut self) {
         self.waiting.clear();
+        self.waiting_kinds.clear();
         self.claude_approvals.clear();
         self.unbound_claude_approvals.clear();
         self.async_questions.clear();
@@ -1285,9 +1349,17 @@ impl Activity {
                                 | "AskUserQuestion"
                                 | "ask_question"
                                 | "ask_user_question"
+                                | "ask_user"
                                 | "ask_permission"
                         ) {
-                            self.waiting.insert(e.call.clone());
+                            self.wait_for(
+                                e.call.clone(),
+                                if tool == "ask_permission" {
+                                    "approval"
+                                } else {
+                                    "question"
+                                },
+                            );
                             if tool == "request_user_input_async" {
                                 self.async_questions.insert(e.call.clone());
                             }
@@ -1308,13 +1380,20 @@ impl Activity {
                             self.unbound_claude_approvals
                                 .insert(e.tool, if question { 0 } else { e.at });
                         } else if question {
-                            self.waiting.insert(e.call);
+                            self.wait_for(e.call, "question");
                         } else {
                             self.claude_approvals.insert(e.call, e.at);
                         }
                     }
-                    "PermissionRequest" | "Elicitation" => {
-                        self.waiting.insert(e.call.clone());
+                    "PermissionRequest" | "Elicitation" | "Question" => {
+                        self.wait_for(
+                            e.call.clone(),
+                            match e.kind.as_str() {
+                                "Elicitation" => "elicitation",
+                                "Question" => "question",
+                                _ => "approval",
+                            },
+                        );
                         self.phase = Some(Phase::NeedsInput);
                     }
                     "Notification"
@@ -1323,7 +1402,14 @@ impl Activity {
                             "permission_prompt" | "elicitation_dialog" | "idle_prompt"
                         ) =>
                     {
-                        self.waiting.insert("notification".into());
+                        self.wait_for(
+                            "notification".into(),
+                            match e.notification.as_str() {
+                                "permission_prompt" => "approval",
+                                "elicitation_dialog" => "elicitation",
+                                _ => "notification",
+                            },
+                        );
                     }
                     "output" | "PostToolUse" | "PostToolUseFailure" | "PermissionDenied"
                     | "ElicitationResult" => {
@@ -1578,6 +1664,36 @@ mod tests {
         assert_ne!(a.phase, Some(Phase::Failed));
     }
     #[test]
+    fn input_kind_reports_the_most_restrictive_open_wait() {
+        let notice = |kind: &str, at: u64| Event {
+            notification: kind.into(),
+            ..event("Notification", "", at)
+        };
+        let mut a = Activity::default();
+        a.apply(event("start", "", 100));
+        assert_eq!(a.input_kind(), "");
+        a.apply(notice("idle_prompt", 101));
+        assert_eq!(a.input_kind(), "notification");
+        a.apply(event("Elicitation", "form", 102));
+        assert_eq!(a.input_kind(), "elicitation");
+        a.apply(event("PermissionRequest", "ask", 103));
+        assert_eq!(a.input_kind(), "approval");
+        // Settling the approval leaves the form as what the session waits for.
+        a.apply(event("PostToolUse", "ask", 104));
+        assert_eq!(a.input_kind(), "elicitation");
+        a.apply(event("ElicitationResult", "form", 105));
+        assert_ne!(a.input_kind(), "elicitation");
+
+        let mut b = Activity::default();
+        b.apply(event("start", "", 100));
+        b.apply(notice("permission_prompt", 101));
+        assert_eq!(b.input_kind(), "approval");
+        let mut c = Activity::default();
+        c.apply(event("start", "", 100));
+        c.apply(notice("elicitation_dialog", 101));
+        assert_eq!(c.input_kind(), "elicitation");
+    }
+    #[test]
     fn claude_unbound_approval_waits_until_matching_parallel_tools_settle() {
         let mut activity = Activity::default();
         let mut at = 100;
@@ -1653,6 +1769,153 @@ mod tests {
             Some(Phase::Tool)
         );
         assert_eq!(apply(result("write")), Some(Phase::Working));
+    }
+    /// Rows as written by Kimi Code 2.4.1, Grok CLI 1.0.92 and Copilot CLI 1.0.105.
+    #[test]
+    fn kimi_grok_and_copilot_prompts_report_their_kind_and_end_with_their_own_answer() {
+        use serde_json::json;
+        let mut kimi = Activity::default();
+        let mut at = 100;
+        let mut apply = |mut row: Value| {
+            at += 1;
+            row["time"] = json!(at);
+            kimi.apply(native("kimi", &row).unwrap());
+            (kimi.phase, kimi.input_kind())
+        };
+        apply(json!({"type":"turn.prompt","turnId":0,"input":[{"type":"text","text":"PRIVATE"}]}));
+        assert_eq!(
+            apply(
+                json!({"type":"interaction.request","id":"approval_1","kind":"approval","toolCallId":"c1","request":{"toolName":"Bash"}})
+            ),
+            (Some(Phase::NeedsInput), "approval")
+        );
+        assert_ne!(
+            apply(
+                json!({"type":"interaction.resolved","id":"approval_1","response":{"decision":"approved"}})
+            )
+            .0,
+            Some(Phase::NeedsInput)
+        );
+        assert_eq!(
+            apply(
+                json!({"type":"interaction.request","id":"question_1","kind":"question","toolCallId":"c2","request":{"questions":[]}})
+            ),
+            (Some(Phase::NeedsInput), "question")
+        );
+        // A row of an older Kimi without a kind keeps its previous meaning.
+        assert_eq!(
+            apply(json!({"type":"interaction.request","id":"old_1"})).1,
+            "elicitation"
+        );
+
+        let mut grok = Activity::default();
+        let mut apply = |row: Value| {
+            grok.apply(native("grok", &row).unwrap());
+            (grok.phase, grok.input_kind())
+        };
+        let ts = "2026-11-25T18:36:41.112Z";
+        apply(json!({"ts":ts,"type":"turn_started","session_id":"s","turn_number":0}));
+        apply(json!({"ts":ts,"type":"tool_started","tool_name":"ask_user_question"}));
+        apply(json!({"ts":ts,"type":"permission_requested","tool_name":"ask_user_question"}));
+        // The automatic permission of the question tool does not answer the question.
+        assert_eq!(
+            apply(
+                json!({"ts":ts,"type":"permission_resolved","tool_name":"ask_user_question","decision":"allow","wait_ms":0})
+            ),
+            (Some(Phase::NeedsInput), "question")
+        );
+        assert_ne!(
+            apply(
+                json!({"ts":ts,"type":"tool_completed","tool_name":"ask_user_question","outcome":"success","tool_call_id":"c1"})
+            )
+            .0,
+            Some(Phase::NeedsInput)
+        );
+        apply(json!({"ts":ts,"type":"tool_started","tool_name":"run_terminal_command"}));
+        assert_eq!(
+            apply(
+                json!({"ts":ts,"type":"permission_requested","tool_name":"run_terminal_command"})
+            ),
+            (Some(Phase::NeedsInput), "approval")
+        );
+        assert_eq!(
+            apply(
+                json!({"ts":ts,"type":"permission_resolved","tool_name":"run_terminal_command","decision":"allow"})
+            )
+            .0,
+            Some(Phase::Tool)
+        );
+        // Parallel calls: the automatic permission of one tool leaves the other's dialog open.
+        apply(json!({"ts":ts,"type":"tool_started","tool_name":"run_terminal_command"}));
+        apply(json!({"ts":ts,"type":"tool_started","tool_name":"list_dir"}));
+        apply(json!({"ts":ts,"type":"permission_requested","tool_name":"run_terminal_command"}));
+        apply(json!({"ts":ts,"type":"permission_requested","tool_name":"list_dir"}));
+        assert_eq!(
+            apply(
+                json!({"ts":ts,"type":"permission_resolved","tool_name":"list_dir","decision":"allow","wait_ms":0})
+            ),
+            (Some(Phase::NeedsInput), "approval")
+        );
+        assert_eq!(
+            apply(
+                json!({"ts":ts,"type":"tool_completed","tool_name":"list_dir","tool_call_id":"c2"})
+            ),
+            (Some(Phase::NeedsInput), "approval")
+        );
+        assert_ne!(
+            apply(
+                json!({"ts":ts,"type":"permission_resolved","tool_name":"run_terminal_command","decision":"allow"})
+            )
+            .0,
+            Some(Phase::NeedsInput)
+        );
+
+        let mut copilot = Activity::default();
+        let mut apply = |kind: &str, data: Value| {
+            copilot.apply(
+                native(
+                    "copilot",
+                    &json!({"type":kind,"data":data,"timestamp":"2026-11-25T18:56:26.573Z"}),
+                )
+                .unwrap(),
+            );
+            (copilot.phase, copilot.input_kind())
+        };
+        apply(
+            "user.message",
+            json!({"content":"PRIVATE","interactionId":"i1"}),
+        );
+        apply(
+            "tool.execution_start",
+            json!({"toolCallId":"c1","toolName":"bash"}),
+        );
+        assert_eq!(
+            apply(
+                "permission.requested",
+                json!({"requestId":"r1","permissionRequest":{"kind":"shell","toolCallId":"c1"}})
+            ),
+            (Some(Phase::NeedsInput), "approval")
+        );
+        assert_eq!(
+            apply(
+                "permission.completed",
+                json!({"requestId":"r1","toolCallId":"c1","result":{"kind":"approved"}})
+            )
+            .0,
+            Some(Phase::Tool)
+        );
+        apply("tool.execution_complete", json!({"toolCallId":"c1"}));
+        assert_eq!(
+            apply(
+                "tool.execution_start",
+                json!({"toolCallId":"c2","toolName":"ask_user"})
+            ),
+            (Some(Phase::NeedsInput), "question")
+        );
+        assert_ne!(
+            apply("tool.execution_complete", json!({"toolCallId":"c2"})).0,
+            Some(Phase::NeedsInput)
+        );
     }
     #[test]
     fn codebuddy_parent_chain_binds_legacy_prompts_without_finishing_a_new_turn() {

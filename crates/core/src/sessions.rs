@@ -104,6 +104,11 @@ pub struct LiveSession {
     /// Stable native question IDs; internal metadata, never question text.
     #[serde(skip)]
     pub input_request: String,
+    /// What the session is waiting for: `approval`, `elicitation`, `question`, `notification`,
+    /// or empty when unknown or not waiting. Metadata only; lets clients avoid offering free
+    /// text for a permission dialog.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub input_kind: String,
     /// Opaque state key identifying the current waiting-for-input prompt (never prompt content).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_state_key: Option<String>,
@@ -629,6 +634,8 @@ struct SourceBatch {
     // Candidates left unread by the limit.
     overflow: usize,
     claude_status: HashMap<u32, ClaudeStatus>,
+    #[serde(skip)]
+    delivered_approvals: HashMap<String, HashMap<String, u64>>,
 }
 /// Claude's live terminal state. Only a newer sample from the same process
 /// and root session can settle a hook request before the tool returns.
@@ -1063,6 +1070,13 @@ impl Reader {
             } else {
                 f.alive
             };
+            if f.hook
+                && source.provider == "claude"
+                && let Some(approvals) = batch.delivered_approvals.get(&cursor.activity.session)
+            {
+                cursor.activity.settle_answered_approvals(approvals);
+                phase = cursor.activity.phase.unwrap_or(phase);
+            }
             if f.hook && source.provider == "claude" && cursor.activity.has_claude_approvals() {
                 let pid = cursor.activity.pid;
                 let status = if source.host_id.is_none() && alive == Some(true) {
@@ -1131,6 +1145,11 @@ impl Reader {
                 background: cursor.activity.background_active(),
                 event_at: cursor.activity.at,
                 input_request: cursor.activity.input_request(),
+                input_kind: if phase == Phase::NeedsInput {
+                    cursor.activity.input_kind().into()
+                } else {
+                    String::new()
+                },
                 parent_id: if cursor.activity.parent_session.is_empty() {
                     String::new()
                 } else {
@@ -1216,7 +1235,12 @@ impl Reader {
         });
         out
     }
-    fn local(&mut self, sources: &[Source], now: u64) -> Snapshot {
+    fn local(
+        &mut self,
+        sources: &[Source],
+        now: u64,
+        db: Option<&rusqlite::Connection>,
+    ) -> Snapshot {
         self.processes.clear();
         self.process_snapshot.refresh(sources);
         let keys: HashSet<_> = sources
@@ -1251,7 +1275,15 @@ impl Reader {
             } else {
                 None
             };
-            let batch = self.collect_local(source, now);
+            let mut batch = self.collect_local(source, now);
+            if source.provider == "claude"
+                && batch.files.iter().any(|file| file.hook)
+                && let Some(db) = db
+            {
+                batch.delivered_approvals =
+                    crate::channels::claude::delivered_approvals(db, &source.id)
+                        .unwrap_or_default();
+            }
             retained.extend(batch.files.iter().map(|f| PathBuf::from(&f.key)));
             let snapshot = self.consume(source, batch, now, now, "本机", hook);
             out.sessions.extend(snapshot.sessions);
@@ -2620,6 +2652,7 @@ impl CodexApprovalProbe {
             if self.waiting.contains(&turn) {
                 session.phase = Phase::NeedsInput;
                 session.input_request = crate::session_interaction::CODEX_APPROVAL_INPUT.into();
+                session.input_kind = "approval".into();
             }
             let root = expand(&normalized_source(source).path);
             threads
@@ -2666,9 +2699,13 @@ impl SessionMonitor {
         now: SystemTime,
         store: &crate::store::Store,
     ) -> Snapshot {
-        let mut snapshot = self.read(settings, now);
+        let mut snapshot = self.read_snapshot(settings, now, Some(&store.db));
         self.enrich_opencode_pending(&mut snapshot, settings);
         self.codex_approvals.update(&mut snapshot, settings);
+        crate::session_interaction::promote_hook_requests(
+            &mut snapshot.sessions,
+            &crate::session_interaction::pending_hook_requests(&store.db),
+        );
         self.enrich_input_state_keys(&mut snapshot);
         self.usage.enrich(&mut snapshot, store, settings);
         snapshot
@@ -2723,6 +2760,12 @@ impl SessionMonitor {
             if let Some((kind, item_id)) = hit {
                 session.phase = Phase::NeedsInput;
                 session.input_request = format!("opencode:{kind}:{item_id}");
+                session.input_kind = if kind == "permission" {
+                    "approval"
+                } else {
+                    "question"
+                }
+                .into();
             }
         }
         self.opencode_probes.retain(|id, _| active_ids.contains(id));
@@ -2741,6 +2784,14 @@ impl SessionMonitor {
         self.local.internal = keys;
     }
     pub fn read(&mut self, settings: &Settings, now: SystemTime) -> Snapshot {
+        self.read_snapshot(settings, now, None)
+    }
+    fn read_snapshot(
+        &mut self,
+        settings: &Settings,
+        now: SystemTime,
+        db: Option<&rusqlite::Connection>,
+    ) -> Snapshot {
         let now = seconds(now);
         let mut seen = HashSet::new();
         let sources: Vec<_> = settings
@@ -2773,7 +2824,7 @@ impl SessionMonitor {
             .filter(|s| s.host_id.is_none())
             .cloned()
             .collect();
-        let mut snapshot = self.local.local(&local, now);
+        let mut snapshot = self.local.local(&local, now, db);
         let hosts: HashSet<_> = sources.iter().filter_map(|s| s.host_id.clone()).collect();
         self.remote.retain(|id, _| hosts.contains(id));
         for id in hosts {
@@ -3430,7 +3481,7 @@ mod adapter_tests {
             ),
         );
         let poll = |reader: &mut Reader| {
-            let mut snapshot = reader.local(std::slice::from_ref(&source), now);
+            let mut snapshot = reader.local(std::slice::from_ref(&source), now, None);
             snapshot.finish();
             assert!(!snapshot.unavailable);
             snapshot
@@ -3915,10 +3966,10 @@ mod adapter_tests {
         let source = source(temp.path(), "antigravity");
         let mut reader = Reader::default();
         let at = seconds(SystemTime::now());
-        let first = reader.local(std::slice::from_ref(&source), at);
+        let first = reader.local(std::slice::from_ref(&source), at, None);
         assert_eq!(first.sessions.len(), 1);
         fs::write(path, b"invalid sqlite").unwrap();
-        let next = reader.local(&[source], at + 1);
+        let next = reader.local(&[source], at + 1, None);
         assert_eq!(next.sessions.len(), 1);
         assert_eq!(next.sessions[0].id, first.sessions[0].id);
         assert!(next.sources[0].error.is_some());

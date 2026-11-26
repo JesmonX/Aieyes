@@ -105,10 +105,11 @@ pub fn forward(invoke: tauri::ipc::Invoke) -> Option<tauri::ipc::Invoke> {
     if !child() {
         return Some(invoke);
     }
-    // File pickers belong to the requesting X11 window. Renderer readiness is local.
+    // File pickers belong to the requesting X11 window. Renderer readiness and the popover's
+    // own size and focus are local.
     if matches!(
         invoke.message.command(),
-        "desktop_panel_ready" | "select_local_path" | "check_local_path"
+        "desktop_panel_ready" | "desktop_orbit_popover" | "select_local_path" | "check_local_path"
     ) {
         return Some(invoke);
     }

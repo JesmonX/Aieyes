@@ -161,3 +161,43 @@ AIEYES_CORE_PATH="$PWD/target/debug/aieyes-core" .build/verify-sessions
 | 原生流程与构建 | `verify-sessions` 的真实核心生命周期、子 Agent 聚合、独立轮询/暂停恢复通过；Tauri（本机 `native-tray`）类型检查、macOS 构建及本地调试包签名校验通过。包内保留自动化 entitlement 与中英文权限说明；产物为 `dist/Aieyes.app` |
 
 本次没有新增 tmux/screen 内部面板寻址、IDE 聊天面板寻址，或远程机器的本地窗口跳转。权限拒绝、窗口不明确与仅发出请求分别显示对应的回退结果。
+
+## 2026-11-26 OpenCode 会话交互：真实服务核对
+
+用隔离的 HOME / XDG 目录启动 OpenCode 2.1.0（`OPENCODE_PASSWORD=… opencode serve --port …`，未用 `--service`），模型接本地兼容端点。核心代码经两个默认忽略的测试连到该服务：
+
+```sh
+AIEYES_OPENCODE_LIVE_URL=http://127.0.0.1:<port> \
+  cargo test -p aieyes-core --lib live_scan -- --ignored --nocapture
+AIEYES_OPENCODE_LIVE='http://127.0.0.1:<port>|<password>|<sessionId>|needsInput' \
+AIEYES_OPENCODE_LIVE_REPLY='{"action":"approveAlways"}' \
+  cargo test -p aieyes-core --lib live_server_card -- --ignored --nocapture
+```
+
+第二个变量的阶段取 `needsInput`、`tool` 或 `complete`；不设 `AIEYES_OPENCODE_LIVE_REPLY` 时只打印卡片，不提交。
+
+| 项 | 结果 |
+| --- | --- |
+| 发现手动启动的服务 | `ps` + `lsof` 找到该监听地址 |
+| 命令审批 + 始终允许 | 卡片为 Shell / `mkdir -p livedir`，始终允许的说明为 `mkdir *`；提交后 `confirmed`，目录已创建 |
+| 执行中排队指令 | `followUp.mode` 为 `queue`，提交后 `confirmed`，回执 `delivery: "queue"` |
+| 中断 | 执行中返回 `confirmed`；空闲时再次中断返回 `blocked`（没有正在执行的任务） |
+| 结束后的后续指令 | `mode` 为 `newTurn`，提交后 `confirmed` |
+
+拒绝说明、文件差异、表单填写与取消、并行请求和 400 / 401 的响应只用 curl 对同一服务核对过，核心代码对这些路径的测试使用据此保存的样本和模拟服务。界面已接入这些字段（自动化覆盖见下节），未做弹窗实机验收。
+
+## 2026-11-26 Windows / Linux 交互弹窗：新卡片字段
+
+自动化覆盖（Chromium 与 WebKit，模拟核心返回）：`node scripts/test-orbit-interaction-ui.cjs [webkit]`，包含扩展审批决定、计划、文件差异、MCP 表单、多请求切换、后续指令与中断、只读卡片和各回执状态。弹窗尺寸逻辑由 `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` 中的 `orbit_popover_widens_for_a_card_on_a_running_session` 覆盖。
+
+以下需要在 Windows 和 Linux 实机上确认，本次未执行：
+
+| 场景 | 预期 |
+| --- | --- |
+| Claude 计划确认 | 卡片显示计划全文，可滚动；「继续修改计划」展开反馈输入行 |
+| Codex 文件修改审批 | 首个文件展开显示差异，其余折叠，键盘 Enter 可展开 |
+| MCP 表单含密码字段 | 输入被遮盖；切换标签或状态刷新后内容保留；提交后清除 |
+| OpenCode 两个并行权限请求 | 显示「第 1 个请求，共 2 个」，切换后批准的是所选请求 |
+| 进行中的 OpenCode 会话 | 列表行出现「指令」按钮；发送后提示已排队；「中断本轮」需两次确认 |
+| 仅有进行中会话时打开后续指令卡片 | 弹窗变宽并随卡片调整高度，关闭卡片后恢复列表尺寸 |
+| 远程只读审批 | 无跳转按钮，说明需回到对应主机的原终端 |

@@ -39,24 +39,36 @@ macOS 的原生终端输入还需要开启**允许按终端适配输入**，并�
 
 | 会话与环境 | 当前能力 |
 | --- | --- |
-| Codex / ChatGPT Work，已有兼容的 app-server 控制接口 | 验证原 thread、工作目录和最新 turn 后，回答可重放的结构化问题或单次审批，或在同一 thread 开启下一轮 |
+| Codex / ChatGPT Work，已有兼容的 app-server 控制接口 | 验证原 thread、工作目录和最新 turn 后，回答可重放的结构化问题或单次审批，或在同一 thread 开启下一轮。命令、文件修改、追加权限、MCP 工具调用和旧协议审批都可引用通知回复 `/approve`（仅本次；权限请求为本轮）或 `/decline`，原请求可中断时还可回复 `/cancel-request`；本会话允许、始终允许等范围更大的决定只在桌宠卡片中提供。MCP 表单、发往运行中终端的输入确认需在桌宠卡片或原窗口处理 |
 | Codex，原生 socket 不可用，但已有 CLI 支持 `queue --thread … --message … --resume` | 核对当前原生记录后排队到同一 thread。只回执“已提交”，不能把 CLI 成功退出视为已执行；等待提问时不使用此回退 |
 | 本机 Claude CLI、Qoder CLI、Qoder CN CLI 的 `AskUserQuestion` | 配对后为启用的本机 CLI 来源安装独立的提问 hook；单选、多选题均生成按钮，选项预览以代码块显示，答案通过原 CLI 的 `PermissionRequest.updatedInput` 返回，不依赖终端自动化授权 |
 | 本机 OpenCode，会话由其后台服务托管 | 通过服务的本机回环接口读取待回答的表单和权限请求：表单生成单选、多选按钮，也可回复编号或文本，答案提交到原表单；权限请求需引用通知后回复 `/approve`（仅本次允许）或 `/decline`；本轮结束后可在同一会话下达下一步指令，最终回复也从该服务读取 |
-| 本机 Kiro CLI、DeepSeek Harness、Antigravity CLI、Qoder 桌面版 | 通知中显示待确认的工具审批或提问及其选项，以及本轮最终回复；这些 Agent 没有可核验的回答接口，回复仍经下面的 tmux 或 macOS 终端适配提交，否则保留指令 |
+| Kiro CLI、DeepSeek Harness、Antigravity CLI、Qoder 桌面版（本机）；Kimi、Grok、Copilot CLI、CodeBuddy、WorkBuddy（本机和 SSH） | 通知中显示待确认的工具审批（工具、命令或文件、说明）或提问及其选项，以及本轮最终回复；这些 Agent 没有可核验的回答接口。审批或选项题未处理时任何文本都不会输入到终端，需回原窗口处理；本轮结束后的指令仍经下面的 tmux 或 macOS 终端适配提交，否则保留指令 |
 | 本机或 SSH Linux 的 tmux 会话 | 开启终端输入后，核对 PID、启动时间、TTY、父进程、唯一 pane 和已支持 Agent 的前台命令；提交文本并等待会话记录确认 |
 | macOS 原生前端中的 Ghostty、iTerm2、Terminal | 开启并授权终端输入后，按 TTY 唯一定位原标签页或分屏，再检查桌面解锁状态、原进程及前台进程组；通过应用自己的 Apple Events 输入 |
 | 其他 App、IDE、终端或 Agent | 发送可读取的问题、完成通知和最终回复；没有可靠控制接口时保留指令，说明不能提交的原因 |
 
-Codex 原生控制入口为该来源目录下的 `app-server-control/app-server-control.sock`。不会连接其他来源的 home，也不会新启动 app-server 替代原应用。较旧版本、Windows 上没有此 Unix socket 的安装、未加载的提问、未向新客户端重放的问题，会按实际能力保留指令或退到已有 CLI 队列。
+Codex 原生控制入口为该来源目录下的 `app-server-control/app-server-control.sock`。不会连接其他来源的 home，也不会新启动 app-server 替代原应用。较旧版本、Windows 上没有此 Unix socket 的安装、未加载的提问、未向新客户端重放的问题，会按实际能力保留指令或退到已有 CLI 队列。同一 thread 有多个待处理请求时按到达顺序处理最早的一个。SSH 上的 Codex 由远程脚本读取原始请求；桌宠卡片的回答由后台生成原生回复，脚本核对请求指纹和回复形状后原样发送，细节见 [session-interaction.md](session-interaction.md)。
 
-Claude 提问 hook 仅匹配 `AskUserQuestion`，保留已有 hooks 和权限配置，并在来源的 `.aieyes` 目录保存原设置备份。安装前已弹出的问题需要重新发起；如果当前 CLI 未加载新 hooks，退出并恢复原会话后再提问。只有渠道开启、已配对、来源启用且后台在线时才接收答案；逐次核对原进程、问题及工具调用 ID。关闭渠道或来源后不再回答问题，原 CLI 界面仍可操作。每次 hook 最长等待 24 小时；SSH Claude 的提问 hook 暂未接入。Qoder CLI 与 Qoder CN CLI 使用相同的工具、记录格式和 hook 约定，按同样规则安装在各自的配置目录；同一目录被多个来源引用时只安装一次。Qoder 桌面版来源不是 CLI 配置目录，不安装 hook。
+Claude 提问 hook 默认仅匹配 `AskUserQuestion`，并同时安装 `Elicitation` hook，用于在桌宠弹窗中填写、拒绝或取消 MCP 表单（仅表单模式的平铺字段，URL 模式留在终端）。在桌宠设置中开启工具授权弹窗后 `PermissionRequest` 匹配器改为 `*`，所有工具的权限请求（包括计划确认和 MCP 工具）都会先交给桌宠弹窗：可允许本次、采用 CLI 建议的始终允许 / 本会话允许 / 自动接受编辑、拒绝并附说明、拒绝并中断本轮，或交还终端；计划确认显示计划全文，批准后 CLI 退出计划模式并切到 `default`（后续操作逐项确认）或自动接受编辑，不会回到进入计划之前的 auto / bypassPermissions 等模式；弹窗的任何决定都不会把会话切到跳过权限检查的模式。以上流程在 Claude Code 2.1.332 的真实会话中验证过（见 session-interaction.md 的实测记录）。工具授权在终端里的对话框同时有效，在终端处理后 hook 自行退出。带 `mcp__` 前缀的工具由 CLI 自行决定是否采用 hook 的允许，因此这类允许只回报为「已提交」而不是「已确认」；除计划确认和提问外，需要用户在终端交互的内置工具不能从桌宠批准。同一开关也为本机 CodeBuddy 和 ZCode 安装 `PermissionRequest` hook，这两个 CLI 只支持允许和拒绝，hook 运行期间不显示自己的对话框，因此每次最多等待 120 秒后交还终端；ZCode 仅在其配置已开启 hooks 时安装。沙箱网络确认、工作区信任等提示不经过 hook，仍需在原窗口处理；无人值守运行（`-p`）不接管。契约和限制见 [session-interaction.md](session-interaction.md)。飞书渠道仍只回答 `AskUserQuestion`。hook 保留已有 hooks 和权限配置，并在来源的 `.aieyes` 目录保存原设置备份。安装前已弹出的问题需要重新发起；如果当前 CLI 未加载新 hooks，退出并恢复原会话后再提问。只有渠道开启、已配对、来源启用且后台在线时才接收答案；逐次核对原进程、问题及工具调用 ID。关闭渠道或来源后不再回答问题，原 CLI 界面仍可操作。提问每次最长等待 24 小时，工具授权最长 30 分钟；MCP 表单在 hook 运行期间终端不显示自己的表单，因此每次最多等待 120 秒，超时后交还终端由 CLI 显示原表单；安装 hook 时保留设置文件原有的访问权限；SSH Claude 的提问 hook 暂未接入。Qoder CLI 与 Qoder CN CLI 使用相同的工具、记录格式和 hook 约定，按同样规则安装在各自的配置目录；同一目录被多个来源引用时只安装一次。Qoder 桌面版来源不是 CLI 配置目录，不安装 hook。
 
-OpenCode 的服务地址和口令取自该安装的 `state/opencode/service.json`。只连接本机回环地址，口令不会发往其他主机，也不写入 Aieyes 的数据或日志。回答前重新读取待处理请求并与通知时的问题比对，问题已变化、已被回答或服务拒绝时保留指令。服务不校验表单是否填完，Aieyes 要求每个可见字段都有答案；带显示条件的字段和外部链接字段需回原窗口处理。执行中的权限请求只存在于服务内存，后台每 5 秒查询一次并且每个请求只通知一次。以 `--standalone` 运行的 OpenCode 不由后台服务托管，按终端会话处理。
+OpenCode 的服务地址和口令取自该安装的 `state/opencode/service.json`；没有以 `--service` 启动的 `opencode serve` 也会被发现（当前用户名下监听本机回环地址的进程），口令取 Aieyes 自身环境变量 `OPENCODE_PASSWORD`，随机口令的服务无法连接。只连接本机回环地址，口令不会发往其他主机，也不写入 Aieyes 的数据或日志。回答前重新读取待处理请求并与通知时的问题比对，问题已变化、已被回答或服务拒绝时保留指令，服务给出的拒绝原因会写进回执。同一会话有多个请求时按创建顺序处理最早的一条。多个本机服务都能看到同一会话时，选用列出该请求的服务，其次是有待处理请求的服务，再其次是 `/api/session/active` 报告正在运行该会话的服务。飞书里要求每个可见字段都有答案，权限请求只有本次允许和拒绝；始终允许、拒绝说明、文件差异、取消表单、执行中排队指令和中断在桌面弹窗提供，见 [session-interaction.md](session-interaction.md)。带显示条件的字段和外部链接字段需回原窗口处理。执行中的权限请求只存在于服务内存，后台每 5 秒查询一次并且每个请求只通知一次。以 `--standalone` 运行的 OpenCode 不由后台服务托管，按终端会话处理。
 
 Kiro 读取会话目录中的 `messages.jsonl`，DeepSeek Harness 读取压缩的会话日志，Antigravity 读取 `brain` 下的步骤记录，Qoder 桌面版只读打开其 `main.sqlite`。DeepSeek Harness 的 `ask_user_question` 和审批记录现在会把会话标记为等待输入，否则不会产生通知。
 
-tmux 和 macOS 终端适配只在本轮结束或等待输入时提交。原 Agent 退出、PID 被复用、前台变成 shell、出现多个匹配分屏、桌面自动化缺少授权等情况会保留指令。SSH 上的图形化 App 自动化和非 Linux 远程终端控制不在第一版范围内。终端审批没有原生请求标识时，需要回原窗口处理。
+其余 Agent 的读取方式和已核对的版本如下。读取只取会话自己的记录，记录写明属于其他会话时不采用；同一工具有多个未完成调用而记录无法指明正在询问哪一个时，只显示工具名，不显示命令。
+
+| Agent | 读取的记录 | 审批 | 提问 | 回答 |
+| --- | --- | --- | --- | --- |
+| Kimi Code 2.4.1 | `sessions/<工作区>/session_<id>/agents/<agent>/wire.jsonl` 的 `interaction.request` / `interaction.resolved` | 工具、动作说明、命令或文件路径、写入内容或修改前后、工作目录 | 题目、选项及说明、多选标记 | 无接口（`kimi acp` 只能新建会话），只读 |
+| Grok CLI 1.0.62 / 1.0.92 | `events.jsonl` 的 `permission_requested`，对应调用取自同目录 `updates.jsonl` | 工具、说明、命令 | `ask_user_question` 的题目、选项、`multi_select` | Hook 只能拒绝或改为询问，不能批准，只读 |
+| Copilot CLI 1.0.105 | `session-state/<id>/events.jsonl` 的 `permission.requested` / `permission.completed` 和 `ask_user` 调用 | 类别、意图、完整命令 | 全部字段都是枚举时显示为选项题，否则只显示提示语 | 无接口，只读 |
+| CodeBuddy Code 2.187.0、WorkBuddy | `projects/<项目>/<会话>.jsonl` 中未得到结果的 `function_call` | 仅当会话正在等待授权且只有一个未完成调用时显示工具和命令 | `AskUserQuestion` 的题目、选项、多选标记 | CodeBuddy 的审批可经 `PermissionRequest` hook 在弹窗决定，其余只读 |
+| Cursor CLI、ZCode 的提问、其他 Agent | 无可读记录或未核对格式 | 只知道正在等待授权 | 只知道正在等待选择 | 只读，回原窗口处理 |
+
+Kimi、Grok、Copilot 的会话此前只在部分情况下被标记为等待输入：现在 Kimi 按 `interaction.request` 的 `kind` 区分授权和提问，Grok 的提问不再被它自动通过的权限记录提前结束，Copilot 的授权请求和 `ask_user` 都会标记为等待输入，WorkBuddy 的 `waiting_question` 记为提问。Gemini CLI、Cline、Kilo 未安装，Cursor CLI、Kiro CLI、Antigravity 需要厂商账号，本次未做实机核对；Pi 没有权限提示。
+
+tmux 和 macOS 终端适配只在本轮结束或等待输入时提交。原 Agent 退出、PID 被复用、前台变成 shell、出现多个匹配分屏、桌面自动化缺少授权等情况会保留指令。SSH 上的图形化 App 自动化和非 Linux 远程终端控制不在第一版范围内。终端审批没有原生请求标识时，需要回原窗口处理。会话正在等待权限确认或 MCP 表单时，任何文本都不会输入到终端；会话在等待提问工具的回答，或记录中读到未处理的选项题、审批时（本机和 SSH 相同）同样保留指令。
 
 问题和最终回复从原会话的受限尾部记录读取，不发送执行过程、工具结果或 reasoning。父、子会话会按来源和原生 ID 分开核对；不读取未完成写入的 JSONL 行，也不把上一轮或子 Agent 的回复当作当前结果。只有元数据、加密记录、没有最终文本或超出读取窗口时，会明确提示内容暂不可读取。
 
@@ -86,6 +98,6 @@ Aieyes 退出、电脑休眠或 SSH 不可达时，控制能力会暂停。**已
 
 离线测试覆盖配对与鉴权、重复事件、引用路由、旧轮次拒绝、密钥隔离、崩溃恢复、分片与 ACK、同 UUID 发送重试、原生协议模拟、SSH 适配和两端设置页，以及 OpenCode 服务模拟、Qoder CLI hook 和各 Agent 记录读取。macOS 通过安装的 Ghostty、Terminal 字典编译自动化脚本；测试不向真实会话输入。
 
-真实飞书账号、企业权限与发布流程、实际 app-server 对未决请求的重放、Qoder CLI 对提问 hook 的实际加载、OpenCode 的真实权限请求与后续指令，以及真实终端提交仍需按 [手动验证](manual-verification.md)完成验收。第一版没有将这些模拟测试描述为真实私聊已接通。
+真实飞书账号、企业权限与发布流程、实际 app-server 对未决请求的重放、Qoder CLI 对提问 hook 的实际加载、飞书路径上 OpenCode 的真实权限请求与后续指令（弹窗路径已用 OpenCode 2.1.0 的真实服务核对过审批、排队指令和中断），以及真实终端提交仍需按 [手动验证](manual-verification.md)完成验收。第一版没有将这些模拟测试描述为真实私聊已接通。
 
 实现依据：[飞书事件订阅](https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-)、[飞书官方长连接 SDK 协议](https://github.com/larksuite/oapi-sdk-go/tree/v3_main/ws)、[OpenAI app-server](https://learn.chatgpt.com/docs/app-server.md)、[Codex developer commands](https://learn.chatgpt.com/docs/developer-commands.md)、[Claude Code hooks](https://code.claude.com/docs/en/hooks)。

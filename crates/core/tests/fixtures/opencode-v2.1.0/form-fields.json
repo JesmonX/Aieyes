@@ -1,0 +1,84 @@
+{
+  "data": [
+    {
+      "id": "frm_213b5fb81001m3qWHdVLE04dS9",
+      "sessionID": "ses_dec4df878ffe9FgvEm07re0zcf",
+      "title": "Deploy settings",
+      "fields": [
+        {
+          "key": "env",
+          "title": "Environment",
+          "description": "Where should this be deployed?",
+          "required": true,
+          "type": "string",
+          "default": "staging",
+          "options": [
+            {
+              "value": "staging",
+              "label": "Staging",
+              "description": "Safe"
+            },
+            {
+              "value": "production",
+              "label": "Production"
+            }
+          ]
+        },
+        {
+          "key": "note",
+          "title": "Note",
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 10,
+          "pattern": "^[a-z]+$",
+          "placeholder": "lowercase"
+        },
+        {
+          "key": "replicas",
+          "title": "Replicas",
+          "description": "How many replicas?",
+          "required": true,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5,
+          "default": 2
+        },
+        {
+          "key": "ratio",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        {
+          "key": "confirm",
+          "title": "Confirm",
+          "description": "Proceed now?",
+          "required": true,
+          "type": "boolean",
+          "default": false
+        },
+        {
+          "key": "regions",
+          "title": "Regions",
+          "type": "multiselect",
+          "options": [
+            {
+              "value": "us",
+              "label": "US"
+            },
+            {
+              "value": "eu",
+              "label": "EU"
+            },
+            {
+              "value": "ap",
+              "label": "AP"
+            }
+          ],
+          "minItems": 1,
+          "maxItems": 2
+        }
+      ]
+    }
+  ]
+}

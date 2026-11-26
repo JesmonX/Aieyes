@@ -1,0 +1,66 @@
+{
+  "data": [
+    {
+      "id": "frm_213b700bb001BxQGhiv6V84cTy",
+      "sessionID": "ses_dec4df878ffe9FgvEm07re0zcf",
+      "title": "Questions",
+      "metadata": {
+        "kind": "question",
+        "tool": {
+          "messageID": "msg_213b6f90a001KV0oAcUGEFcjnd",
+          "id": "chatcmpl-tool-bb03f2ed457e42bd"
+        }
+      },
+      "fields": [
+        {
+          "key": "q0",
+          "title": "Color",
+          "description": "Which color do you prefer?",
+          "type": "string",
+          "options": [
+            {
+              "value": "Red",
+              "label": "Red",
+              "description": "Vibrant red"
+            },
+            {
+              "value": "Green",
+              "label": "Green",
+              "description": "Fresh green"
+            },
+            {
+              "value": "Blue",
+              "label": "Blue",
+              "description": "Calm blue"
+            }
+          ],
+          "custom": true
+        },
+        {
+          "key": "q1",
+          "title": "Toppings",
+          "description": "Which toppings do you want?",
+          "type": "multiselect",
+          "options": [
+            {
+              "value": "Cheese",
+              "label": "Cheese",
+              "description": "Melted cheese"
+            },
+            {
+              "value": "Mushroom",
+              "label": "Mushroom",
+              "description": "Sliced mushrooms"
+            },
+            {
+              "value": "Olive",
+              "label": "Olive",
+              "description": "Green or black olives"
+            }
+          ],
+          "custom": true
+        }
+      ]
+    }
+  ]
+}

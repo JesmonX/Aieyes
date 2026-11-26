@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Release notes bundled with this build: `docs/release-notes/v<version>.md`, copied by the
-/// build script. The file holds an English part followed by a Chinese part.
+/// build script. The file holds an English part and a Chinese part, in either order.
 struct ReleaseNotes: Equatable {
     struct Part: Equatable {
         var headline: String?
@@ -17,26 +17,43 @@ struct ReleaseNotes: Equatable {
         return first.items.isEmpty ? second : first
     }
 
+    /// A heading that reads `中文` or `English` selects that language's part, in any order and any
+    /// number of times. Lines before the first such heading belong to the language the file gives
+    /// no heading (English when it names neither or both).
     init?(markdown: String) {
-        var target = \ReleaseNotes.english
+        var lead = Part(), named: [Bool: Part] = [:]  // keyed by "is Chinese"
+        var target: Bool?
+        func edit(_ change: (inout Part) -> Void) {
+            if let target { change(&named[target, default: Part()]) } else { change(&lead) }
+        }
         for raw in markdown.components(separatedBy: .newlines) {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.isEmpty { continue }
-            // The marker heading is file structure, not interface copy.
-            if line == #"## 中文"# { target = \ReleaseNotes.chinese; continue }
             if line.hasPrefix("#") {
                 let text = line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces)
-                if self[keyPath: target].headline == nil, !text.isEmpty { self[keyPath: target].headline = text }
+                // The marker headings are file structure, not interface copy.
+                if text == #"中文"# || text.lowercased() == "english" {
+                    target = text == #"中文"#
+                    edit { _ in }
+                } else if !text.isEmpty {
+                    edit { if $0.headline == nil { $0.headline = text } }
+                }
             } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
-                self[keyPath: target].items.append(String(line.dropFirst(2)))
+                edit { $0.items.append(String(line.dropFirst(2))) }
             } else if line.hasPrefix("["), line.hasSuffix(")"), let open = line.range(of: "](", options: .backwards) {
                 changelog = URL(string: String(line[open.upperBound...].dropLast()))
-            } else if self[keyPath: target].items.isEmpty {
-                self[keyPath: target].intro.append(line)
             } else {
-                self[keyPath: target].outro.append(line)
+                edit { if $0.items.isEmpty { $0.intro.append(line) } else { $0.outro.append(line) } }
             }
         }
+        let unnamed = named[false] != nil && named[true] == nil
+        if let rest = named[unnamed] {
+            named[unnamed] = Part(headline: lead.headline ?? rest.headline, intro: lead.intro + rest.intro, items: lead.items + rest.items, outro: lead.outro + rest.outro)
+        } else {
+            named[unnamed] = lead
+        }
+        english = named[false] ?? Part()
+        chinese = named[true] ?? Part()
         guard !english.items.isEmpty || !chinese.items.isEmpty else { return nil }
     }
 

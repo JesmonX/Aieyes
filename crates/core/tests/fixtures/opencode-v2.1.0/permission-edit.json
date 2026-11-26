@@ -1,0 +1,31 @@
+{
+  "data": [
+    {
+      "id": "per_213b4cf76001B93qRzq0S6iUGz",
+      "sessionID": "ses_dec4df878ffe9FgvEm07re0zcf",
+      "action": "edit",
+      "resources": [
+        "a.txt"
+      ],
+      "save": [
+        "*"
+      ],
+      "metadata": {
+        "files": [
+          {
+            "file": "a.txt",
+            "patch": "Index: a.txt\n===================================================================\n--- a.txt\n+++ a.txt\n@@ -1,1 +1,1 @@\n-hello\n+goodbye\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1
+          }
+        ]
+      },
+      "source": {
+        "type": "tool",
+        "messageID": "msg_213b4c74e001Gnx12GGGRSDg9g",
+        "id": "chatcmpl-tool-bc61d0c1a760bf68"
+      }
+    }
+  ]
+}

@@ -645,7 +645,7 @@ struct AccountFlowResult {
             guard !stopped, !installingUpdate, !Task.isCancelled else { return }
             sessionSounds.consume(result, preferences: settings.sessionSounds)
             sessions = result.sessions; sessionSources = result.sources ?? []; sessionsUnavailable = result.unavailable; petState = result.pet ?? .unknown; coreSessionSummary = result.summary
-
+            if !live.loaded { live.loaded = true }
         } catch {
             guard !stopped, !installingUpdate, !Task.isCancelled else { return }
             sessionsUnavailable = true; petState = .unknown; coreSessionSummary = nil

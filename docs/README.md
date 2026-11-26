@@ -36,6 +36,7 @@
 - [Headless 与内部会话排除规则](headless-rules.md)
 - [会话提示音](session-sounds.md)
 - [飞书个人会话控制](chat-channels.md)：问题与最终回复、原会话续聊、能力分级与待处理指令
+- [桌宠会话交互契约](session-interaction.md)：弹窗卡片的字段、审批决定、表单、后续指令与终端输入限制
 
 ## 界面与平台
 

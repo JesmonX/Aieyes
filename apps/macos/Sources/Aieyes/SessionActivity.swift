@@ -24,10 +24,12 @@ struct LiveSession: Identifiable, Decodable, Equatable {
     var pid: Int32? = nil, processStart: Double? = nil
     var nativeSession: String? = nil, client: String? = nil, subagentCount: Int? = nil
     var inputStateKey: String? = nil
+    /// What a waiting session waits for: `approval`, `elicitation`, `question`, `notification`; nil when unknown.
+    var inputKind: String? = nil
     init(id: String, source: String, phase: SessionPhase, updatedAt: Date) {
         self.id = id; self.source = source; self.phase = phase; self.updatedAt = updatedAt
     }
-    enum CodingKeys: String, CodingKey { case id, source, phase, updatedAt, provider, machine, machineId, sourceId, turnId, workspace, turnStartedAt, turnEndedAt, usage, pid, processStart, nativeSession, client, subagentCount, inputStateKey }
+    enum CodingKeys: String, CodingKey { case id, source, phase, updatedAt, provider, machine, machineId, sourceId, turnId, workspace, turnStartedAt, turnEndedAt, usage, pid, processStart, nativeSession, client, subagentCount, inputStateKey, inputKind }
     init(from decoder: Decoder) throws {
         let row = try decoder.container(keyedBy: CodingKeys.self)
         id = try row.decode(String.self, forKey: .id)
@@ -50,6 +52,7 @@ struct LiveSession: Identifiable, Decodable, Equatable {
         client = try row.decodeIfPresent(String.self, forKey: .client)
         subagentCount = try row.decodeIfPresent(Int.self, forKey: .subagentCount)
         inputStateKey = try row.decodeIfPresent(String.self, forKey: .inputStateKey)
+        inputKind = (try? row.decodeIfPresent(String.self, forKey: .inputKind)).flatMap { $0.isEmpty ? nil : $0 }
     }
     var focusable: Bool { machineId == "local" && ((pid ?? 0) > 0 || threadURL != nil) }
     var threadURL: URL? {
@@ -462,6 +465,8 @@ struct PetLibrary: Decodable { var pets: [ImportedPet]; var selectedLibraryId: S
 // High-frequency lifecycle updates only invalidate the views that display them.
 @MainActor final class LiveSessionState: ObservableObject {
     @Published var sessions: [LiveSession] = []
+    /// True once core has returned a session list; until then `sessions` is only the empty placeholder.
+    @Published var loaded = false
     @Published var sources: [SessionSourceHealth] = []
     @Published var unavailable = false
     @Published var petVisible = true

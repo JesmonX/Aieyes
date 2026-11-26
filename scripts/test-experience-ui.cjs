@@ -375,6 +375,31 @@ const {fixture} = require('./workspace-ui-fixture.cjs');
       assert.equal(sandbox.AieyesWhatsNew.parse('# Only a title\nSome text'), null, 'notes without items show nothing');
       const english = sandbox.AieyesWhatsNew.parse('# T\n- a\n## 中文\n说明');
       assert.equal(sandbox.AieyesWhatsNew.part(english, true), english.english, 'a part without items falls back to the other');
+      // Each language heading selects its own part, in any order and any number of times.
+      {
+        const parse = (text) => JSON.parse(JSON.stringify(sandbox.AieyesWhatsNew.parse(text)));
+        const part = (headline, intro, items, outro) => ({headline, intro, items, outro});
+        const forward = parse('## English\nIntro\n- a\n- b\nAfter\n## 中文\n说明\n- 甲\n[x](https://example.com/c)');
+        const reversed = parse('## 中文\n说明\n- 甲\n## English\nIntro\n- a\n- b\nAfter\n[x](https://example.com/c)');
+        assert.deepEqual(forward, {english: part(null, ['Intro'], ['a', 'b'], ['After']), chinese: part(null, ['说明'], ['甲'], []), changelog: 'https://example.com/c'});
+        assert.deepEqual(reversed, forward, 'Chinese before English parses like English before Chinese');
+        assert.deepEqual(parse('# 中文\n- 甲\n### english\n## Title\n- a\n## 中文\n## 标题\n- 乙\n## English\n- b'),
+          {english: part('Title', [], ['a', 'b'], []), chinese: part('标题', [], ['甲', '乙'], []), changelog: null}, 'a repeated heading continues its part; level and case do not matter');
+        assert.deepEqual(parse('## Title\nIntro\n- a\n## 中文\n- 甲').english, part('Title', ['Intro'], ['a'], []), 'lines before any language heading are English');
+        assert.deepEqual(parse('## 标题\n- 甲\n## English\n- a'), {english: part(null, [], ['a'], []), chinese: part('标题', [], ['甲'], []), changelog: null}, 'when only English has a heading, the lines before it are Chinese');
+        assert.deepEqual(parse('# Release\nFor all\n## 中文\n- 甲\n## English\n- a').english, part('Release', ['For all'], ['a'], []), 'with both headings, lines before them stay with English');
+        // Every notes file in the repository: a language the file gives a heading has content
+        // (v0.1.54 to v0.1.56 write English as one paragraph), and neither part mistakes a
+        // language heading for its headline.
+        const directory = path.resolve(__dirname, '../docs/release-notes');
+        for (const file of fs.readdirSync(directory).filter(name => name.endsWith('.md'))) {
+          const text = fs.readFileSync(path.join(directory, file), 'utf8'),parsed = sandbox.AieyesWhatsNew.parse(text);
+          assert(parsed, `${file} has items`);
+          if (/^#+\s*中文\s*$/m.test(text)) assert(parsed.chinese.items.length + parsed.chinese.intro.length > 0, `${file}: the Chinese part has content`);
+          if (/^#+\s*english\s*$/im.test(text)) assert(parsed.english.items.length + parsed.english.intro.length > 0, `${file}: the English part has content`);
+          for (const p of [parsed.english, parsed.chinese]) assert(!/^(english|中文)$/i.test(p.headline ?? ''), `${file}: a language heading is not a headline`);
+        }
+      }
       const context = await browser.newContext({viewport: {width: 1120, height: 800}, reducedMotion: 'reduce'}),page = await context.newPage(),errors = [];
       page.on('pageerror', error => errors.push(String(error)));
       await page.addInitScript(fixture, {platform: 'windows'});
