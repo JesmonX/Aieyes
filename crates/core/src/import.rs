@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::{
     fs::File,
-    io::{BufRead, BufReader, Read, Seek, SeekFrom},
+    io::{BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
 
@@ -541,33 +541,45 @@ fn scan_file(
     let mut retry: Option<(u64, ParseState)> = None;
     while !eof {
         crate::operations::check()?;
-        // Read a bounded batch before taking SQLite's writer lock.
-        let mut rows = Vec::new();
+        // Read and parse a bounded batch before taking SQLite's writer lock.
+        let mut rows: Vec<(u64, std::result::Result<Value, ()>)> = Vec::new();
         let mut bytes = 0u64;
         while rows.len() < 256 && bytes < 1024 * 1024 {
-            let mut line = Vec::new();
-            let read = (&mut reader)
-                .take(16 * 1024 * 1024 + 1)
-                .read_until(b'\n', &mut line);
-            let n = match read {
-                Ok(n) if n <= 16 * 1024 * 1024 => n,
-                Ok(_) => {
+            match crate::jsonl::read_line(
+                &mut reader,
+                crate::jsonl::Mode::History,
+                &source.provider,
+                None,
+                None,
+            ) {
+                Ok(crate::jsonl::LineRecord::Eof | crate::jsonl::LineRecord::Incomplete { .. }) => {
+                    eof = true;
+                    break;
+                }
+                Ok(crate::jsonl::LineRecord::Oversized) => {
                     read_error = Some("记录行超过 16 MiB，已保留失败位置供重试".into());
                     eof = true;
                     break;
+                }
+                Ok(crate::jsonl::LineRecord::Complete {
+                    bytes: n,
+                    parsed: Err(crate::jsonl::LineError::MetadataTooLarge),
+                }) => {
+                    let _ = n;
+                    read_error = Some("记录行超过 16 MiB，已保留失败位置供重试".into());
+                    eof = true;
+                    break;
+                }
+                Ok(crate::jsonl::LineRecord::Complete { bytes: n, parsed }) => {
+                    bytes += n;
+                    rows.push((n, parsed.map_err(|_| ())));
                 }
                 Err(error) => {
                     read_error = Some(error.to_string());
                     eof = true;
                     break;
                 }
-            };
-            if n == 0 || line.last() != Some(&b'\n') {
-                eof = true;
-                break;
             }
-            bytes += n as u64;
-            rows.push(line);
         }
         if rows.is_empty() {
             break;
@@ -583,11 +595,11 @@ fn scan_file(
         let current = current_settings(store, settings, source)?;
         let settings = &current;
         let mut row_offset = pos;
-        for line in rows {
+        for (line_len, parsed_row) in rows {
             let start = row_offset;
-            row_offset += line.len() as u64;
+            row_offset += line_len;
             let before = state.clone();
-            match serde_json::from_slice::<Value>(&line) {
+            match parsed_row {
                 Ok(v) => {
                     if source.provider == "kimi" {
                         state.inherited_usage = row_offset <= state.inherited_prefix_end;

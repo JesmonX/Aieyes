@@ -673,6 +673,70 @@ class IncrementalHistory(unittest.TestCase):
             self.assertTrue(failed[-1]['partial'])
             self.assertEqual(cursors(failed), {})
 
+    def test_oversized_jsonl_lines_stream_project_without_blocking(self):
+        import hashlib, subprocess
+        with tempfile.TemporaryDirectory() as root:
+            home = pathlib.Path(root)
+            parent_id = '01a1013b-940b-7973-ad67-eb128b853dfc'
+            child_id = '01a1b4bc-9a01-70f0-8d48-09df07abec6f'
+            big_row = '{"timestamp":"2026-11-07T14:40:22Z","type":"response_item","payload":{"type":"function_call_output","output":"' + ('A' * (17 * 1024 * 1024)) + '"}}\n'
+            parent = (
+                json.dumps(dict(type='session_meta', payload=dict(id=parent_id, originator='codex_work_desktop'))) + '\n'
+                + big_row
+                + json.dumps(dict(type='event_msg', timestamp=1800000000, payload=dict(type='token_count', info=dict(total_token_usage=dict(input_tokens=900, output_tokens=100))))) + '\n'
+            ).encode('utf-8')
+            expected_proof = hashlib.sha256(parent).hexdigest()
+            (home / f'rollout-2026-11-07T14-40-21-{parent_id}.jsonl').write_bytes(parent)
+            child = (
+                json.dumps(dict(type='session_meta', payload=dict(id=parent_id, history_base=dict(thread_id=parent_id, end_byte_offset=len(parent))))) + '\n'
+                + json.dumps(dict(type='event_msg', timestamp=1800000010, payload=dict(type='token_count', info=dict(total_token_usage=dict(input_tokens=1200, output_tokens=200))))) + '\n'
+            ).encode('utf-8')
+            (home / f'rollout-2026-11-07T14-45-00-{parent_id}_{child_id}.jsonl').write_bytes(child)
+            frames = collect(home, 'codex')
+            self.assertFalse(frames[-1]['partial'])
+            self.assertEqual(frames[-1]['issues'], [])
+            self.assertEqual(frames[-1]['forkHistoryIssues'], [])
+            inherited = next(e['inheritedHistory'] for e in events(frames) if e.get('inheritedHistory'))
+            self.assertEqual(inherited['proof'], expected_proof)
+            self.assertEqual(inherited['tokens']['input'], 900)
+            self.assertNotIn('AAAA', json.dumps(frames))
+            self.assertEqual(collect(home, 'codex', cursors(frames))[-1]['readBytes'], 0)
+
+            # Compressed .jsonl.zst parent with >16 MiB line via Node codexPrefix.
+            zst_home = home / 'zst'
+            zst_home.mkdir()
+            packed = subprocess.run(
+                ['node', '-e', "const z=require('node:zlib');process.stdout.write(z.zstdCompressSync(require('node:fs').readFileSync(0),{params:{[z.constants.ZSTD_c_checksumFlag]:1}}));"],
+                input=parent, capture_output=True, check=True,
+            ).stdout
+            (zst_home / f'rollout-2026-11-07T14-40-21-{parent_id}.jsonl.zst').write_bytes(packed)
+            (zst_home / f'rollout-2026-11-07T14-45-00-{parent_id}_{child_id}.jsonl').write_bytes(child)
+            zst_frames = collect(zst_home, 'codex')
+            self.assertFalse(zst_frames[-1]['partial'])
+            self.assertEqual(zst_frames[-1]['forkHistoryIssues'], [])
+            zst_inherited = next(e['inheritedHistory'] for e in events(zst_frames) if e.get('inheritedHistory'))
+            self.assertEqual(zst_inherited['proof'], expected_proof)
+            self.assertEqual(zst_inherited['tokens']['input'], 900)
+
+        # Claude >16 MiB assistant content before trailing usage.
+        with tempfile.TemporaryDirectory() as root:
+            claude_dir = pathlib.Path(root) / 'projects/p'
+            claude_dir.mkdir(parents=True)
+            big_claude = (
+                '{"type":"assistant","uuid":"u1","sessionId":"s1","requestId":"r1","timestamp":"2026-11-07T14:40:21Z",'
+                '"message":{"id":"m1","model":"claude-sonnet-4-6","content":[{"type":"tool_use","id":"t1","name":"Write","input":{"content":"'
+                + ('C' * (17 * 1024 * 1024))
+                + '"}}],"usage":{"input_tokens":1000,"output_tokens":2000}}}\n'
+            )
+            (claude_dir / 's1.jsonl').write_text(big_claude, encoding='utf-8')
+            frames = collect(root, 'claude')
+            self.assertFalse(frames[-1]['partial'])
+            self.assertEqual(frames[-1]['issues'], [])
+            rows = events(frames)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]['message']['usage']['output_tokens'], 2000)
+            self.assertNotIn('CCCC', json.dumps(frames))
+
 
 if __name__ == '__main__':
     unittest.main()

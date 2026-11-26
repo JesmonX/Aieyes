@@ -29,6 +29,7 @@ pub mod host_history;
 mod host_monitor;
 mod host_sampling;
 pub mod import;
+pub(crate) mod jsonl;
 mod kimi_work;
 pub mod localization;
 pub mod metrics;

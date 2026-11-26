@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs::File,
-    io::{BufRead, BufReader, Read},
+    io::{BufReader, Read},
     path::{Path, PathBuf},
 };
 
@@ -215,13 +215,20 @@ impl Resolver {
         let canonical = filename_ids(&path);
         let ids = canonical.clone().or_else(|| {
             let (mut reader, _) = reader(&path).ok()?;
-            let mut line = Vec::new();
-            reader
-                .by_ref()
-                .take(1024 * 1024)
-                .read_until(b'\n', &mut line)
-                .ok()?;
-            let value: Value = serde_json::from_slice(&line).ok()?;
+            let value = match crate::jsonl::read_line(
+                &mut reader,
+                crate::jsonl::Mode::History,
+                "codex",
+                None,
+                None,
+            )
+            .ok()?
+            {
+                crate::jsonl::LineRecord::Complete {
+                    parsed: Ok(value), ..
+                } => value,
+                _ => return None,
+            };
             let payload = &value["payload"];
             let id = payload["id"].as_str().or(payload["session_id"].as_str())?;
             (value["type"] == "session_meta").then(|| (id.into(), id.into()))
@@ -342,36 +349,41 @@ impl Resolver {
         let mut digest = Sha256::new();
         while offset < limit {
             crate::operations::check()?;
-            let mut line = Vec::new();
-            let n = reader
-                .by_ref()
-                .take((limit - offset).min(16 * 1024 * 1024) + 1)
-                .read_until(b'\n', &mut line)
-                .map_err(|_| {
-                    failure(
-                        if compressed {
-                            "invalidCompressedHistory"
-                        } else {
-                            "readError"
-                        },
-                        "无法读取完整继承历史",
-                    )
-                })?;
-            ensure!(
-                n > 0
-                    && n <= 16 * 1024 * 1024
-                    && offset + n as u64 <= limit
-                    && line.last() == Some(&b'\n'),
-                HistoryError(
-                    "boundaryInvalid",
-                    "继承历史字节边界超出文件或未落在完整记录上"
+            let record = crate::jsonl::read_line(
+                &mut reader,
+                crate::jsonl::Mode::History,
+                "codex",
+                Some(limit - offset),
+                Some(&mut digest),
+            )
+            .map_err(|_| {
+                failure(
+                    if compressed {
+                        "invalidCompressedHistory"
+                    } else {
+                        "readError"
+                    },
+                    "无法读取完整继承历史",
                 )
-            );
+            })?;
+            let (n, row) = match record {
+                crate::jsonl::LineRecord::Complete { bytes, parsed } => {
+                    let row =
+                        parsed.map_err(|_| failure("invalidRecord", "继承历史包含损坏记录"))?;
+                    (bytes, row)
+                }
+                crate::jsonl::LineRecord::Oversized => {
+                    return Err(failure("invalidRecord", "继承历史包含损坏记录"));
+                }
+                crate::jsonl::LineRecord::Eof | crate::jsonl::LineRecord::Incomplete { .. } => {
+                    return Err(failure(
+                        "boundaryInvalid",
+                        "继承历史字节边界超出文件或未落在完整记录上",
+                    ));
+                }
+            };
             let first = offset == 0;
-            offset += n as u64;
-            digest.update(&line);
-            let row: Value = serde_json::from_slice(&line)
-                .map_err(|_| failure("invalidRecord", "继承历史包含损坏记录"))?;
+            offset += n;
             let payload = &row["payload"];
             if first {
                 ensure!(

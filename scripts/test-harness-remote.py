@@ -144,4 +144,19 @@ class HarnessProjection(unittest.TestCase):
             with path.open('ab') as stream:stream.write(b'BROKEN_PRIVATE')
             failed=s.collect(source,{str(path):file});self.assertTrue(failed['error']);self.assertNotIn('PRIVATE',json.dumps(failed));self.assertEqual(failed['files'][0]['signature'],file['signature']);self.assertFalse(failed['files'][0]['reset'])
 
+    def test_oversized_harness_record_projects_without_content_leak(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory)
+            plain=root/'session.v4.jsonl';packed=root/'session.v4.jsonl.zstd'
+            header=json.dumps(dict(type='session',version=4,id='big-h'))+'\n'
+            big=('{"type":"assistant/message","seq":2,"time":1792296856613,"data":{"turn":1,"step":1,"message":{"content":"'
+                 +('H'*(9*1024*1024))+'","source":{"model":"deepseek-r1"}},"usage":{"inputTokens":500,"outputTokens":250}}}\n')
+            data=(header+big).encode('utf-8')
+            plain.write_bytes(data);packed.write_bytes(compressed(data))
+            for path in (plain,packed):
+                rows=list(h.project(path,'history'))
+                self.assertEqual(len(rows),2)
+                self.assertEqual(rows[1]['data']['usage']['inputTokens'],500)
+                self.assertNotIn('HHHH',json.dumps(rows))
+
 if __name__=='__main__':unittest.main()

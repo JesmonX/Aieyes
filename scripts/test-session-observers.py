@@ -245,6 +245,33 @@ class ObserverTests(unittest.TestCase):
             with path.open('a') as f:f.write('x'*(16*1024*1024+1))
             with self.assertRaisesRegex(ValueError,'16 MiB'):m.read_file(path,'pi',False,complete)
 
+    def test_oversized_valid_codex_and_claude_records_survive_cold_tail_and_incremental(self):
+        with tempfile.TemporaryDirectory() as directory:
+            codex_path=pathlib.Path(directory)/'codex.jsonl'
+            header=json.dumps(dict(type='session_meta',payload=dict(id='c-big',source='cli')))+'\n'
+            start=json.dumps(dict(type='event_msg',timestamp='2026-11-07T14:40:20Z',payload=dict(type='task_started',turn_id='t1')))+'\n'
+            big_call='{"timestamp":"2026-11-07T14:40:21Z","type":"response_item","payload":{"type":"function_call","call_id":"call1","name":"exec","arguments":"'+('A'*(17*1024*1024))+'"}}'+ '\n'
+            codex_path.write_text(header+start+big_call,encoding='utf-8')
+            first=m.read_file(codex_path,'codex',False,{})
+            self.assertEqual(first['offset'],first['size'])
+            self.assertEqual([e['kind'] for e in first['events']],['identity','tool'])
+            self.assertEqual(first['events'][-1]['call'],'call1')
+            self.assertNotIn('AAAA',json.dumps(first))
+            with codex_path.open('a',encoding='utf-8') as f:
+                f.write('{"timestamp":"2026-11-07T14:40:22Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call1","output":"'+('O'*(17*1024*1024))+'"}}'+ '\n')
+            second=m.read_file(codex_path,'codex',False,first)
+            self.assertEqual([e['kind'] for e in second['events']],['output'])
+            self.assertEqual(second['events'][0]['call'],'call1')
+            self.assertNotIn('OOOO',json.dumps(second))
+
+            claude_path=pathlib.Path(directory)/'claude.jsonl'
+            big_tool='{"type":"assistant","sessionId":"cl-big","timestamp":"2026-11-07T14:40:21Z","message":{"content":[{"type":"tool_use","id":"tu1","name":"Write","input":{"content":"'+('W'*(17*1024*1024))+'"}}]}}'+ '\n'
+            claude_path.write_text(big_tool,encoding='utf-8')
+            res=m.read_file(claude_path,'claude',False,{})
+            self.assertEqual(res['offset'],res['size'])
+            self.assertEqual([(e['kind'],e['tool'],e['call']) for e in res['events']],[('tool','Write','tu1')])
+            self.assertNotIn('WWWW',json.dumps(res))
+
     @unittest.skipIf(os.name=='nt','SSH observer installs on POSIX machines; local Windows uses Rust')
     def test_codebuddy_observer_install_preserves_custom_hooks_and_disabling(self):
         with tempfile.TemporaryDirectory() as directory:

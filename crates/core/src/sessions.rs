@@ -1782,7 +1782,7 @@ impl Reader {
 /// Usage and live sessions resolve the same immutable history base. Build its
 /// index only for a cold fork whose own metadata has no display identity.
 fn inherit_codex_originators(source: &Source, files: &mut [FileBatch]) {
-    use std::io::{BufRead, BufReader, Read};
+    use std::io::BufReader;
     let mut history = None;
     for file in files.iter_mut().filter(|file| {
         file.reset && !file.hook && !file.events.iter().any(|event| !event.originator.is_empty())
@@ -1792,19 +1792,18 @@ fn inherit_codex_originators(source: &Source, files: &mut [FileBatch]) {
         };
         let mut reader = BufReader::new(input);
         for _ in 0..2 {
-            let mut bytes = Vec::new();
-            if reader
-                .by_ref()
-                .take(65537)
-                .read_until(b'\n', &mut bytes)
-                .is_err()
-                || bytes.len() > 65536
-                || bytes.last() != Some(&b'\n')
-            {
-                break;
-            }
-            let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
-                continue;
+            let value = match crate::jsonl::read_line(
+                &mut reader,
+                crate::jsonl::Mode::Session,
+                "codex",
+                None,
+                None,
+            ) {
+                Ok(crate::jsonl::LineRecord::Complete {
+                    parsed: Ok(value), ..
+                }) => value,
+                Ok(crate::jsonl::LineRecord::Complete { parsed: Err(_), .. }) => continue,
+                _ => break,
             };
             if value["type"] != "session_meta" {
                 continue;
@@ -1902,6 +1901,7 @@ fn read_dsh_session(path: &Path, previous: Option<&Cursor>) -> anyhow::Result<Fi
         offset,
         state.checkpoint.version,
         state.checkpoint.seed,
+        crate::jsonl::Mode::Session,
         |row| {
             if row["type"] == "session" {
                 header = session_events::native("deepseek-harness", &row);
@@ -2004,8 +2004,7 @@ fn read_file(
     hook: bool,
     cursor: Option<&Cursor>,
 ) -> std::io::Result<FileBatch> {
-    use std::io::{BufRead, BufReader};
-    const MAX_RECORD: u64 = 16 * 1024 * 1024;
+    use std::io::BufReader;
     const BATCH: u64 = 512 * 1024;
     let meta = fs::metadata(path)?;
     let modified = seconds(meta.modified()?);
@@ -2074,7 +2073,7 @@ fn read_file(
                 break;
             }
             offset = start;
-            if target - offset > MAX_RECORD {
+            if target - offset > crate::jsonl::HARD_LINE_LIMIT {
                 return Err(std::io::Error::other("会话记录超过 16 MiB，保留位置供重试"));
             }
             if offset == 0 {
@@ -2110,68 +2109,98 @@ fn read_file(
     if reset && !hook && matches!(provider, "codex" | "claude" | "pi" | "omp") {
         reader.seek(SeekFrom::Start(0))?;
         for _ in 0..2 {
-            let mut line = Vec::new();
-            let n = reader
-                .by_ref()
-                .take(MAX_RECORD + 1)
-                .read_until(b'\n', &mut line)?;
-            _read_bytes += n as u64;
-            if n as u64 > MAX_RECORD {
-                return Err(std::io::Error::other("会话记录超过 16 MiB，保留位置供重试"));
-            }
-            if line.last() != Some(&b'\n') {
-                break;
-            }
-            if let Ok(v) = serde_json::from_slice::<Value>(&line) {
-                let rows = if provider == "codex" {
-                    session_events::codex(&v).into_iter().collect()
-                } else if provider == "claude" {
-                    session_events::claude(&v)
-                } else {
-                    session_events::pi(&v)
-                };
-                events.extend(rows.into_iter().filter(|e| {
-                    e.kind == "identity" && (!e.session.is_empty() || !e.session_source.is_empty())
-                }));
+            match crate::jsonl::read_line(
+                &mut reader,
+                crate::jsonl::Mode::Session,
+                provider,
+                None,
+                None,
+            )? {
+                crate::jsonl::LineRecord::Eof => break,
+                crate::jsonl::LineRecord::Incomplete { bytes } => {
+                    _read_bytes += bytes;
+                    break;
+                }
+                crate::jsonl::LineRecord::Oversized => {
+                    return Err(std::io::Error::other("会话记录超过 16 MiB，保留位置供重试"));
+                }
+                crate::jsonl::LineRecord::Complete {
+                    bytes,
+                    parsed: Err(crate::jsonl::LineError::MetadataTooLarge),
+                } => {
+                    _read_bytes += bytes;
+                    return Err(std::io::Error::other("会话记录超过 16 MiB，保留位置供重试"));
+                }
+                crate::jsonl::LineRecord::Complete { bytes, parsed } => {
+                    _read_bytes += bytes;
+                    if let Ok(v) = parsed {
+                        let rows = if provider == "codex" {
+                            session_events::codex(&v).into_iter().collect()
+                        } else if provider == "claude" {
+                            session_events::claude(&v)
+                        } else {
+                            session_events::pi(&v)
+                        };
+                        events.extend(rows.into_iter().filter(|e| {
+                            e.kind == "identity"
+                                && (!e.session.is_empty() || !e.session_source.is_empty())
+                        }));
+                    }
+                }
             }
         }
     }
     reader.seek(SeekFrom::Start(offset))?;
     let start = offset;
+    let mode_provider = if hook { "hook" } else { provider };
     loop {
-        let mut line = Vec::new();
-        let n = reader
-            .by_ref()
-            .take(MAX_RECORD + 1)
-            .read_until(b'\n', &mut line)?;
-        _read_bytes += n as u64;
-        if n as u64 > MAX_RECORD {
-            return Err(std::io::Error::other("会话记录超过 16 MiB，保留位置供重试"));
-        }
-        if n == 0 || line.last() != Some(&b'\n') {
-            break;
-        }
-        offset += n as u64;
-        if let Ok(value) = serde_json::from_slice::<Value>(&line) {
-            if hook {
-                if let Ok(event) = serde_json::from_value(value) {
-                    events.push(event);
-                }
-            } else if matches!(provider, "kimi" | "codebuddy" | "grok" | "copilot") {
-                if provider == "kimi" && value["type"] == "forked" {
-                    events.retain(|e| e.kind == "identity" && !e.parent_session.is_empty());
-                }
-                events.extend(session_events::native(provider, &value));
-            } else if matches!(provider, "pi" | "omp") {
-                events.extend(session_events::pi(&value));
-            } else if provider == "codex" {
-                events.extend(session_events::codex(&value));
-            } else {
-                events.extend(session_events::claude(&value));
+        match crate::jsonl::read_line(
+            &mut reader,
+            crate::jsonl::Mode::Session,
+            mode_provider,
+            None,
+            None,
+        )? {
+            crate::jsonl::LineRecord::Eof => break,
+            crate::jsonl::LineRecord::Incomplete { bytes } => {
+                _read_bytes += bytes;
+                break;
             }
-        }
-        if offset - start >= BATCH {
-            break;
+            crate::jsonl::LineRecord::Oversized => {
+                return Err(std::io::Error::other("会话记录超过 16 MiB，保留位置供重试"));
+            }
+            crate::jsonl::LineRecord::Complete {
+                bytes,
+                parsed: Err(crate::jsonl::LineError::MetadataTooLarge),
+            } => {
+                _read_bytes += bytes;
+                return Err(std::io::Error::other("会话记录超过 16 MiB，保留位置供重试"));
+            }
+            crate::jsonl::LineRecord::Complete { bytes, parsed } => {
+                _read_bytes += bytes;
+                offset += bytes;
+                if let Ok(value) = parsed {
+                    if hook {
+                        if let Ok(event) = serde_json::from_value(value) {
+                            events.push(event);
+                        }
+                    } else if matches!(provider, "kimi" | "codebuddy" | "grok" | "copilot") {
+                        if provider == "kimi" && value["type"] == "forked" {
+                            events.retain(|e| e.kind == "identity" && !e.parent_session.is_empty());
+                        }
+                        events.extend(session_events::native(provider, &value));
+                    } else if matches!(provider, "pi" | "omp") {
+                        events.extend(session_events::pi(&value));
+                    } else if provider == "codex" {
+                        events.extend(session_events::codex(&value));
+                    } else {
+                        events.extend(session_events::claude(&value));
+                    }
+                }
+                if offset - start >= BATCH {
+                    break;
+                }
+            }
         }
     }
     let anchor = crate::native_agents::region_digest(

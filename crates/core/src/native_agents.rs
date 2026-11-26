@@ -110,7 +110,16 @@ pub fn is_dsh_log(path: &Path) -> bool {
 /// a torn frame is an error and can be retried on the next scan.
 pub fn read_dsh(path: &Path, mut consume: impl FnMut(Value) -> Result<()>) -> Result<()> {
     let file = std::fs::File::open(path)?;
-    read_dsh_from(path, file, 0, 4, 0, &mut consume).map(|_| ())
+    read_dsh_from(
+        path,
+        file,
+        0,
+        4,
+        0,
+        crate::jsonl::Mode::History,
+        &mut consume,
+    )
+    .map(|_| ())
 }
 
 pub(crate) fn read_dsh_from(
@@ -119,6 +128,7 @@ pub(crate) fn read_dsh_from(
     offset: u64,
     mut version: u64,
     mut legacy_seed: u64,
+    mode: crate::jsonl::Mode,
     mut consume: impl FnMut(Value) -> Result<()>,
 ) -> Result<(u64, u64, u64)> {
     let compressed = path.extension().is_some_and(|e| e == "zstd");
@@ -132,22 +142,29 @@ pub(crate) fn read_dsh_from(
     let mut complete = 0;
     loop {
         crate::operations::check()?;
-        let mut line = Vec::new();
-        let n = reader
-            .by_ref()
-            .take(8 * 1024 * 1024 + 1)
-            .read_until(b'\n', &mut line)?;
-        if n == 0 {
-            break;
-        }
-        ensure!(n <= 8 * 1024 * 1024, "Harness 单条记录过大");
-        // An actively appended plaintext tail is not a completed record.
-        if line.last() != Some(&b'\n') {
-            ensure!(!compressed, "Harness 压缩流末尾记录尚未完成");
-            break;
-        }
-        complete += n as u64;
-        let mut row: Value = serde_json::from_slice(&line).context("Harness 记录格式无效")?;
+        let (n, mut row) =
+            match crate::jsonl::read_line(&mut reader, mode, "deepseek-harness", None, None)? {
+                crate::jsonl::LineRecord::Eof => break,
+                crate::jsonl::LineRecord::Incomplete { .. } => {
+                    // An actively appended plaintext tail is not a completed record.
+                    ensure!(!compressed, "Harness 压缩流末尾记录尚未完成");
+                    break;
+                }
+                crate::jsonl::LineRecord::Oversized => {
+                    anyhow::bail!("Harness 单条记录过大");
+                }
+                crate::jsonl::LineRecord::Complete {
+                    parsed: Err(crate::jsonl::LineError::MetadataTooLarge),
+                    ..
+                } => {
+                    anyhow::bail!("Harness 单条记录过大");
+                }
+                crate::jsonl::LineRecord::Complete { bytes, parsed } => {
+                    let row = parsed.map_err(|_| anyhow::anyhow!("Harness 记录格式无效"))?;
+                    (bytes, row)
+                }
+            };
+        complete += n;
         ensure!(row.is_object(), "Harness 记录应为对象");
         if first {
             version = row["version"].as_u64().context("Harness 会话版本无效")?;
@@ -296,6 +313,7 @@ fn scan_dsh_file(
         offset,
         checkpoint.version,
         checkpoint.seed,
+        crate::jsonl::Mode::History,
         |row| {
             let projection = match row["type"].as_str() {
                 Some("session") => {
@@ -527,20 +545,24 @@ pub fn kimi_fork_offset(path: &Path) -> Result<u64> {
     let mut cut = 0;
     loop {
         crate::operations::check()?;
-        let mut line = Vec::new();
-        let n = reader
-            .by_ref()
-            .take(8 * 1024 * 1024 + 1)
-            .read_until(b'\n', &mut line)?;
-        if n == 0 {
-            break;
-        }
-        ensure!(n <= 8 * 1024 * 1024, "Kimi 单条记录过大");
-        offset += n as u64;
-        if line.last() == Some(&b'\n')
-            && serde_json::from_slice::<Value>(&line).is_ok_and(|v| v["type"] == "forked")
+        match crate::jsonl::read_line(&mut reader, crate::jsonl::Mode::History, "kimi", None, None)?
         {
-            cut = offset;
+            crate::jsonl::LineRecord::Eof | crate::jsonl::LineRecord::Incomplete { .. } => break,
+            crate::jsonl::LineRecord::Oversized => {
+                return Err(std::io::Error::other("Kimi 单条记录过大").into());
+            }
+            crate::jsonl::LineRecord::Complete {
+                parsed: Err(crate::jsonl::LineError::MetadataTooLarge),
+                ..
+            } => {
+                return Err(std::io::Error::other("Kimi 单条记录过大").into());
+            }
+            crate::jsonl::LineRecord::Complete { bytes, parsed } => {
+                offset += bytes;
+                if parsed.is_ok_and(|v| v["type"] == "forked") {
+                    cut = offset;
+                }
+            }
         }
     }
     Ok(cut)

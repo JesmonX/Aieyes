@@ -1,4 +1,5 @@
 """Aieyes lifecycle observer/SSH collector. Standard library only; never emits conversation content."""
+import codecs
 import hashlib
 import json
 import os
@@ -6,6 +7,449 @@ import pathlib
 import re
 import sys
 import time
+
+_FAST_LINE_LIMIT = 2 * 1024 * 1024
+_MAX_RAW_UNTERMINATED = 16 * 1024 * 1024
+_HARD_LINE_LIMIT = 512 * 1024 * 1024
+_MAX_PRUNED_BYTES = 1024 * 1024
+_MAX_KEPT_STRING = 16 * 1024
+_MAX_KEY_BYTES = 512
+_MAX_DEPTH = 128
+_MAX_SKIP_DEPTH = 4096
+_MAX_KEPT_ARRAY = 4096
+_WS_RE = re.compile(r'[ \t\r\n]*')
+_STR_SPECIAL_RE = re.compile(r'["\\\x00-\x1f]')
+_HEX4_RE = re.compile(r'[0-9a-fA-F]{4}')
+
+
+class _PruneErr(Exception):
+    def __init__(self, kind):
+        self.kind = kind
+
+
+def _session_action(provider, path, key):
+    if provider == 'hook':
+        return 'keep' if path == () and (key in EVENT_KEYS or key == 'workspace') else 'skip'
+    if provider == 'codex':
+        if path == ():
+            return 'filter' if key == 'payload' else 'keep' if key in ('type', 'timestamp') else 'skip'
+        if path == ('payload',):
+            if key in ('source', 'content'): return 'filter'
+            if key in ('type', 'id', 'session_id', 'originator', 'model_provider', 'turn_id',
+                       'internal_chat_message_metadata_passthrough', 'call_id', 'name', 'role',
+                       'output', 'history_base'):
+                return 'keep'
+            return 'skip'
+        if path == ('payload', 'source'): return 'filter' if key == 'subagent' else 'skip'
+        if path == ('payload', 'source', 'subagent'): return 'filter' if key == 'thread_spawn' else 'skip'
+        if path == ('payload', 'source', 'subagent', 'thread_spawn'): return 'keep' if key == 'parent_thread_id' else 'skip'
+        if path == ('payload', 'content', '*'): return 'keep' if key == 'text' else 'skip'
+        return 'skip'
+    if provider in ('pi', 'omp'):
+        if path == ():
+            if key in ('data', 'message'): return 'filter'
+            if key in ('type', 'timestamp', 'id', 'parentId', 'parentSessionId', 'parent_session_id',
+                       'parentSession', 'customType'):
+                return 'keep'
+            return 'skip'
+        if path == ('data',):
+            return 'filter' if key == 'pendingToolCalls' else 'keep' if key in ('toolCallId', 'toolName', 'kind') else 'skip'
+        if path == ('message',):
+            return 'filter' if key == 'content' else 'keep' if key in ('role', 'stopReason', 'toolCallId', 'toolName') else 'skip'
+        if path == ('message', 'content', '*'): return 'keep' if key in ('type', 'id', 'name') else 'skip'
+        return 'skip'
+    if provider == 'kimi':
+        if path == ():
+            if key in ('event', 'message'): return 'filter'
+            if key in ('type', 'time', 'timestamp', 'turnId', 'id', 'interactionId', 'toolName',
+                       'kind', 'reason', 'parentSessionId', 'parent_session_id'):
+                return 'keep'
+            return 'skip'
+        if path == ('event',):
+            return 'keep' if key in ('type', 'toolCallId', 'tool_call_id', 'callId', 'call_id', 'id', 'name', 'tool_name', 'toolName') else 'skip'
+        if path == ('message',): return 'keep' if key == 'type' else 'skip'
+        return 'skip'
+    if provider == 'grok':
+        if path == () and key in ('type', 'ts', 'session_id', 'turn_number', 'phase', 'outcome',
+                                  'permission_id', 'request_id', 'tool_call_id', 'call_id', 'id',
+                                  'tool_name', 'name', 'parentSessionId', 'parent_session_id'):
+            return 'keep'
+        return 'skip'
+    if provider == 'codebuddy':
+        if path == ():
+            if key == 'providerData': return 'filter'
+            if key in ('type', 'role', 'status', 'timestamp', 'sessionId', 'id', 'parentId',
+                       'isSidechain', 'agentId', 'callId', 'call_id', 'toolCallId', 'tool_call_id',
+                       'name', 'tool_name', 'toolName', 'parentSessionId', 'parent_session_id'):
+                return 'keep'
+            return 'skip'
+        if path == ('providerData',):
+            if key == 'error': return 'filter'
+            if key in ('conversationRequestId', 'skipRun', 'messageId', 'rawUsage', 'usage'): return 'keep'
+            return 'skip'
+        if path == ('providerData', 'error'): return 'keep' if key in ('message', 'isRetryable') else 'skip'
+        return 'skip'
+    if provider == 'copilot':
+        if path == ():
+            return 'filter' if key == 'data' else 'keep' if key in ('type', 'timestamp', 'parentSessionId', 'parent_session_id') else 'skip'
+        if path == ('data',):
+            if key == 'toolRequests': return 'filter'
+            if key in ('interactionId', 'sessionId', 'requestId', 'toolCallId', 'tool_call_id',
+                       'callId', 'call_id', 'id', 'toolName', 'tool_name', 'name', 'content'):
+                return 'keep'
+            return 'skip'
+        return 'skip'
+    if provider == 'deepseek-harness':
+        if path == ():
+            if key == 'data': return 'filter'
+            if key in ('type', 'version', 'id', 'seedLength', 'isSeeded', 'seq', 'time',
+                       'parentSessionId', 'parent_session_id', '_aieyesInherited'):
+                return 'keep'
+            return 'skip'
+        if path == ('data',):
+            if key in ('reason', 'message'): return 'filter'
+            if key in ('turn', 'id', 'callId', 'call_id', 'toolCallId', 'tool_call_id', 'name', 'tool_name', 'toolName'):
+                return 'keep'
+            return 'skip'
+        if path == ('data', 'reason'): return 'keep' if key == 'kind' else 'skip'
+        if path == ('data', 'message'):
+            return 'keep' if key in ('toolCallId', 'tool_call_id', 'callId', 'call_id', 'id', 'name', 'tool_name', 'toolName') else 'skip'
+        return 'skip'
+    # claude / qoder / default
+    if path == ():
+        if key == 'message': return 'filter'
+        if key in ('type', 'timestamp', 'sessionId', 'entrypoint', 'parentSessionId', 'parent_session_id',
+                   'isSidechain', 'agentId', 'isMeta', 'isApiErrorMessage', 'uuid', 'parentUuid', 'subtype'):
+            return 'keep'
+        return 'skip'
+    if path == ('message',): return 'filter' if key == 'content' else 'keep' if key == 'stop_reason' else 'skip'
+    if path == ('message', 'content', '*'): return 'keep' if key in ('type', 'name', 'id', 'tool_use_id', 'text') else 'skip'
+    return 'skip'
+
+
+class _LineTextStream:
+    def __init__(self, prefix, stream, cap):
+        self.stream = stream
+        self.cap = cap
+        self.bytes_read = len(prefix)
+        self.saw_newline = prefix.endswith(b'\n')
+        self.eof = False
+        self.hit_limit = False
+        self._dec = codecs.getincrementaldecoder('utf-8')(errors='strict')
+        self.buf = ''
+        self.pos = 0
+        self._pending_prefix = prefix
+
+    def _decode(self, chunk, final=False):
+        try: text = self._dec.decode(chunk, final=final)
+        except UnicodeDecodeError: raise _PruneErr('syntax') from None
+        if text:
+            self.buf = self.buf[self.pos:] + text; self.pos = 0
+
+    def ensure(self, n=1):
+        if self._pending_prefix is not None:
+            chunk = self._pending_prefix; self._pending_prefix = None
+            self._decode(chunk, final=self.saw_newline)
+        while len(self.buf) - self.pos < n:
+            if self.saw_newline or self.eof or self.hit_limit: return False
+            remaining = self.cap - self.bytes_read
+            if remaining <= 0:
+                self.hit_limit = True; return False
+            chunk = self.stream.readline(min(65536, remaining))
+            if not chunk:
+                self.eof = True; self._decode(b'', final=True)
+                return len(self.buf) - self.pos >= n
+            self.bytes_read += len(chunk)
+            if chunk.endswith(b'\n'): self.saw_newline = True
+            self._decode(chunk, final=self.saw_newline)
+        return True
+
+    def drain(self):
+        while not self.saw_newline and not self.eof and not self.hit_limit:
+            remaining = self.cap - self.bytes_read
+            if remaining <= 0:
+                self.hit_limit = True; break
+            chunk = self.stream.readline(min(65536, remaining))
+            if not chunk:
+                self.eof = True; break
+            self.bytes_read += len(chunk)
+            if chunk.endswith(b'\n'): self.saw_newline = True
+
+
+class _JsonPruner:
+    def __init__(self, action_fn):
+        self.action_fn = action_fn
+        self.out = []; self.out_bytes = 0; self.path = []; self.root_is_object = False
+
+    def _emit(self, text):
+        size = len(text.encode('utf-8'))
+        if self.out_bytes + size > _MAX_PRUNED_BYTES: raise _PruneErr('meta')
+        self.out.append(text); self.out_bytes += size
+
+    def _skip_ws(self, s):
+        while True:
+            if s.pos < len(s.buf):
+                m = _WS_RE.match(s.buf, s.pos); s.pos = m.end()
+                if s.pos < len(s.buf): return s.buf[s.pos]
+            if not s.ensure(1): return None
+
+    def _need(self, s, n=1):
+        if not s.ensure(n): raise _PruneErr('limit' if s.hit_limit else 'eof')
+
+    def _read_string(self, s, keep_limit=None, key_mode=False):
+        self._need(s, 1)
+        if s.buf[s.pos] != '"': raise _PruneErr('syntax')
+        s.pos += 1
+        key_parts = ['"'] if key_mode else None; key_len = 1; too_long = False; kept = 0
+        if keep_limit is not None: self._emit('"')
+        while True:
+            if s.pos >= len(s.buf): self._need(s, 1)
+            m = _STR_SPECIAL_RE.search(s.buf, s.pos)
+            end = len(s.buf) if m is None else m.start()
+            if end > s.pos:
+                seg = s.buf[s.pos:end]; s.pos = end
+                if key_mode:
+                    if not too_long:
+                        seg_bytes = len(seg.encode('utf-8'))
+                        if key_len + seg_bytes <= _MAX_KEY_BYTES + 1:
+                            key_parts.append(seg); key_len += seg_bytes
+                        else: too_long = True; key_parts = None
+                elif keep_limit is not None and kept < keep_limit:
+                    take = seg[:keep_limit - kept]; self._emit(take); kept += len(take)
+            if m is None: continue
+            ch = s.buf[s.pos]; s.pos += 1
+            if ch == '"':
+                if key_mode:
+                    if too_long: return None
+                    key_parts.append('"'); return ''.join(key_parts)
+                if keep_limit is not None: self._emit('"')
+                return None
+            if ch != '\\': raise _PruneErr('syntax')
+            self._need(s, 1)
+            esc = s.buf[s.pos]; s.pos += 1
+            if esc in '"\\/bfnrt': unit = '\\' + esc
+            elif esc == 'u':
+                self._need(s, 4); hx = s.buf[s.pos:s.pos + 4]
+                if not _HEX4_RE.fullmatch(hx): raise _PruneErr('syntax')
+                s.pos += 4; code = int(hx, 16)
+                if 0xDC00 <= code <= 0xDFFF: raise _PruneErr('syntax')
+                if 0xD800 <= code <= 0xDBFF:
+                    self._need(s, 6)
+                    if s.buf[s.pos:s.pos + 2] != '\\u': raise _PruneErr('syntax')
+                    hx2 = s.buf[s.pos + 2:s.pos + 6]
+                    if not _HEX4_RE.fullmatch(hx2): raise _PruneErr('syntax')
+                    if not (0xDC00 <= int(hx2, 16) <= 0xDFFF): raise _PruneErr('syntax')
+                    s.pos += 6; unit = '\\u' + hx + '\\u' + hx2
+                else: unit = '\\u' + hx
+            else: raise _PruneErr('syntax')
+            if key_mode:
+                if not too_long:
+                    if key_len + len(unit) <= _MAX_KEY_BYTES + 1:
+                        key_parts.append(unit); key_len += len(unit)
+                    else: too_long = True; key_parts = None
+            elif keep_limit is not None and kept + len(unit) <= keep_limit:
+                self._emit(unit); kept += len(unit)
+
+    def _read_number(self, s, emit):
+        parts = [] if emit else None; count = 0
+        def add(ch):
+            nonlocal count
+            if emit:
+                if count >= 128: raise _PruneErr('meta')
+                parts.append(ch); count += 1
+        self._need(s, 1)
+        if s.buf[s.pos] == '-': add('-'); s.pos += 1
+        self._need(s, 1); ch = s.buf[s.pos]
+        if ch == '0': add('0'); s.pos += 1
+        elif '1' <= ch <= '9':
+            add(ch); s.pos += 1
+            while s.ensure(1) and '0' <= s.buf[s.pos] <= '9': add(s.buf[s.pos]); s.pos += 1
+        else: raise _PruneErr('syntax')
+        if s.ensure(1) and s.buf[s.pos] == '.':
+            add('.'); s.pos += 1; self._need(s, 1)
+            if not ('0' <= s.buf[s.pos] <= '9'): raise _PruneErr('syntax')
+            while s.ensure(1) and '0' <= s.buf[s.pos] <= '9': add(s.buf[s.pos]); s.pos += 1
+        if s.ensure(1) and s.buf[s.pos] in 'eE':
+            add(s.buf[s.pos]); s.pos += 1
+            if s.ensure(1) and s.buf[s.pos] in '+-': add(s.buf[s.pos]); s.pos += 1
+            self._need(s, 1)
+            if not ('0' <= s.buf[s.pos] <= '9'): raise _PruneErr('syntax')
+            while s.ensure(1) and '0' <= s.buf[s.pos] <= '9': add(s.buf[s.pos]); s.pos += 1
+        if s.ensure(1) and s.buf[s.pos] not in ' \t\r\n,}]': raise _PruneErr('syntax')
+        if emit: self._emit(''.join(parts))
+
+    def _read_literal(self, s, word, emit):
+        self._need(s, len(word))
+        if s.buf[s.pos:s.pos + len(word)] != word: raise _PruneErr('syntax')
+        s.pos += len(word)
+        if emit: self._emit(word)
+
+    def _skip_value(self, s):
+        stack = []
+        while True:
+            ch = self._skip_ws(s)
+            if ch is None: raise _PruneErr('limit' if s.hit_limit else 'eof')
+            if ch == '{':
+                s.pos += 1
+                if len(stack) >= _MAX_SKIP_DEPTH: raise _PruneErr('depth')
+                stack.append(['{', True])
+            elif ch == '[':
+                s.pos += 1
+                if len(stack) >= _MAX_SKIP_DEPTH: raise _PruneErr('depth')
+                stack.append(['[', True])
+            elif ch == '"': self._read_string(s, None)
+            elif ch == '-' or '0' <= ch <= '9': self._read_number(s, False)
+            elif ch == 't': self._read_literal(s, 'true', False)
+            elif ch == 'f': self._read_literal(s, 'false', False)
+            elif ch == 'n': self._read_literal(s, 'null', False)
+            else: raise _PruneErr('syntax')
+            while True:
+                if not stack: return
+                top = stack[-1]; closing = '}' if top[0] == '{' else ']'
+                nxt = self._skip_ws(s)
+                if nxt is None: raise _PruneErr('limit' if s.hit_limit else 'eof')
+                if nxt == closing: s.pos += 1; stack.pop(); continue
+                if not top[1]:
+                    if nxt != ',': raise _PruneErr('syntax')
+                    s.pos += 1; after = self._skip_ws(s)
+                    if after is None: raise _PruneErr('limit' if s.hit_limit else 'eof')
+                    if after == closing: raise _PruneErr('syntax')
+                top[1] = False
+                if top[0] == '{':
+                    if self._skip_ws(s) != '"': raise _PruneErr('syntax')
+                    self._read_string(s, None)
+                    if self._skip_ws(s) != ':': raise _PruneErr('syntax')
+                    s.pos += 1
+                break
+
+    def _parse_value(self, s, root_action):
+        stack = []; next_action = root_action; next_pushed = False
+        while True:
+            ch = self._skip_ws(s)
+            if ch is None: raise _PruneErr('limit' if s.hit_limit else 'eof')
+            if ch == '{':
+                s.pos += 1
+                if len(stack) >= _MAX_DEPTH: raise _PruneErr('depth')
+                self._emit('{'); stack.append(['{', next_action, False, next_pushed, True])
+            elif ch == '[':
+                s.pos += 1
+                if len(stack) >= _MAX_DEPTH: raise _PruneErr('depth')
+                self._emit('['); stack.append(['[', next_action, 0, next_pushed, True])
+            elif ch == '"':
+                self._read_string(s, _MAX_KEPT_STRING)
+                if next_pushed: self.path.pop()
+            elif ch == '-' or '0' <= ch <= '9':
+                self._read_number(s, True)
+                if next_pushed: self.path.pop()
+            elif ch == 't':
+                self._read_literal(s, 'true', True)
+                if next_pushed: self.path.pop()
+            elif ch == 'f':
+                self._read_literal(s, 'false', True)
+                if next_pushed: self.path.pop()
+            elif ch == 'n':
+                self._read_literal(s, 'null', True)
+                if next_pushed: self.path.pop()
+            else: raise _PruneErr('syntax')
+            while True:
+                if not stack: return
+                top = stack[-1]
+                if top[0] == '{':
+                    nxt = self._skip_ws(s)
+                    if nxt is None: raise _PruneErr('limit' if s.hit_limit else 'eof')
+                    if nxt == '}':
+                        s.pos += 1; self._emit('}'); stack.pop()
+                        if top[3]: self.path.pop()
+                        continue
+                    if not top[4]:
+                        if nxt != ',': raise _PruneErr('syntax')
+                        s.pos += 1; after = self._skip_ws(s)
+                        if after is None: raise _PruneErr('limit' if s.hit_limit else 'eof')
+                        if after != '"': raise _PruneErr('syntax')
+                    elif nxt != '"': raise _PruneErr('syntax')
+                    top[4] = False
+                    raw_key = self._read_string(s, key_mode=True)
+                    colon = self._skip_ws(s)
+                    if colon is None: raise _PruneErr('limit' if s.hit_limit else 'eof')
+                    if colon != ':': raise _PruneErr('syntax')
+                    s.pos += 1
+                    decoded = None
+                    if top[1] == 'keep': act = 'keep' if raw_key is not None else 'skip'
+                    elif raw_key is not None:
+                        try: decoded = json.loads(raw_key)
+                        except ValueError: raise _PruneErr('syntax') from None
+                        act = self.action_fn(tuple(self.path), decoded)
+                    else: act = 'skip'
+                    if act == 'skip':
+                        self._skip_value(s); continue
+                    if top[2]: self._emit(',')
+                    top[2] = True; self._emit(raw_key); self._emit(':')
+                    if act == 'filter' and decoded is not None:
+                        self.path.append(decoded); next_pushed = True
+                    else: next_pushed = False
+                    next_action = act; break
+                else:
+                    nxt = self._skip_ws(s)
+                    if nxt is None: raise _PruneErr('limit' if s.hit_limit else 'eof')
+                    if nxt == ']':
+                        s.pos += 1; self._emit(']'); stack.pop()
+                        if top[3]: self.path.pop()
+                        continue
+                    if not top[4]:
+                        if nxt != ',': raise _PruneErr('syntax')
+                        s.pos += 1; after = self._skip_ws(s)
+                        if after is None: raise _PruneErr('limit' if s.hit_limit else 'eof')
+                        if after == ']': raise _PruneErr('syntax')
+                    top[4] = False
+                    if top[2] >= _MAX_KEPT_ARRAY:
+                        self._skip_value(s); continue
+                    if top[2] > 0: self._emit(',')
+                    top[2] += 1
+                    if top[1] == 'filter':
+                        self.path.append('*'); next_pushed = True; next_action = 'filter'
+                    else: next_pushed = False; next_action = 'keep'
+                    break
+
+    def parse_line(self, s):
+        first = self._skip_ws(s)
+        if first is None: raise _PruneErr('limit' if s.hit_limit else 'eof')
+        if first == '{':
+            self.root_is_object = True; self._parse_value(s, 'filter')
+        else: self._skip_value(s)
+        if self._skip_ws(s) is not None: raise _PruneErr('syntax')
+        if s.hit_limit: raise _PruneErr('limit')
+
+
+def _read_jsonl_line(stream, provider, fast_limit=_FAST_LINE_LIMIT,
+                     max_unterminated=_MAX_RAW_UNTERMINATED, hard_limit=_HARD_LINE_LIMIT):
+    probe_take = min(fast_limit, hard_limit) + 1 if fast_limit < hard_limit else hard_limit
+    raw = stream.readline(probe_take)
+    if not raw: return ('eof', 0, None)
+    ended = raw.endswith(b'\n')
+    if ended and len(raw) <= fast_limit:
+        try: return ('ok', len(raw), json.loads(raw))
+        except (ValueError, UnicodeDecodeError): return ('invalid', len(raw), None)
+    if not ended and len(raw) < probe_take:
+        return ('incomplete', len(raw), None)
+    s = _LineTextStream(raw, stream, hard_limit)
+    pruner = _JsonPruner(lambda path, key: _session_action(provider, path, key))
+    err = None
+    try: pruner.parse_line(s)
+    except _PruneErr as problem: err = problem.kind
+    s.drain()
+    consumed = s.bytes_read
+    if s.hit_limit: return ('oversized', consumed, None)
+    if not s.saw_newline:
+        valid_in_flight = err in (None, 'eof') and pruner.root_is_object
+        if consumed > max_unterminated and not valid_in_flight:
+            return ('oversized', consumed, None)
+        return ('incomplete', consumed, None)
+    if err is None:
+        if not pruner.root_is_object: return ('ok', consumed, None)
+        try: return ('ok', consumed, json.loads(''.join(pruner.out)))
+        except ValueError: return ('invalid', consumed, None)
+    if err in ('meta', 'limit'): return ('oversized', consumed, None)
+    return ('invalid', consumed, None)
 
 MARKER = '--aieyes-session-hook'
 CLAUDE = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'SubagentStart', 'SubagentStop', 'Stop', 'StopFailure', 'SessionEnd', 'Elicitation', 'ElicitationResult']
@@ -68,10 +512,9 @@ def inherit_codex_originators(source, result):
         try:
             with open(row['key'], 'rb') as stream:
                 for _ in range(2):
-                    line = stream.readline(65537)
-                    if len(line) > 65536 or not line.endswith(b'\n'): break
-                    try: value = json.loads(line)
-                    except ValueError: continue
+                    status, _, value = _read_jsonl_line(stream, 'codex')
+                    if status == 'invalid': continue
+                    if status != 'ok' or not isinstance(value, dict): break
                     if value.get('type') != 'session_meta': continue
                     payload = value.get('payload') or {}
                     if payload.get('originator') or not isinstance(payload.get('history_base'), dict): break
@@ -530,7 +973,6 @@ def kimi_parent(path):
     return ''
 
 def read_file(path, provider, hook, cursor):
-    limit=16*1024*1024
     stat=path.stat();size=stat.st_size;modified=int(stat.st_mtime)
     identity='%s:%s'%(stat.st_dev,stat.st_ino)
     signature='%s:%s'%(stat.st_mtime_ns,stat.st_ctime_ns)
@@ -556,25 +998,27 @@ def read_file(path, provider, hook, cursor):
                     index=chunk.rfind(b'\n')
                     if index>=0:offset=start+index+1;break
                     offset=start
-                    if target-offset>limit:raise ValueError('Session record exceeds 16 MiB; retry position retained')
+                    if target-offset>_HARD_LINE_LIMIT:raise ValueError('Session record exceeds 16 MiB; retry position retained')
                 f.seek(0)
                 for _ in range(2 if provider in ('codex','claude','pi','omp') and not hook else 1):
-                    line=f.readline(limit+1)
-                    if len(line)>limit:raise ValueError('Session record exceeds 16 MiB; retry position retained')
-                    if not line.endswith(b'\n'):break
-                    try:rows.extend(e for e in metadata(json.loads(line),provider,hook) if e.get('kind')=='identity' and (e.get('session') or e.get('sessionSource')))
-                    except (ValueError,TypeError):pass
+                    status, _, value = _read_jsonl_line(f, 'hook' if hook else provider)
+                    if status in ('eof', 'incomplete'): break
+                    if status == 'oversized': raise ValueError('Session record exceeds 16 MiB; retry position retained')
+                    if status == 'ok' and isinstance(value, dict):
+                        try:rows.extend(e for e in metadata(value,provider,hook) if e.get('kind')=='identity' and (e.get('session') or e.get('sessionSource')))
+                        except (ValueError,TypeError):pass
             f.seek(offset);start=offset
+            mode_provider = 'hook' if hook else provider
             while True:
-                line=f.readline(limit+1)
-                if len(line)>limit:raise ValueError('Session record exceeds 16 MiB; retry position retained')
-                if not line.endswith(b'\n'):break
-                offset+=len(line)
-                try:
-                    value=json.loads(line)
-                    if provider=='kimi' and value.get('type')=='forked':rows=[r for r in rows if r.get('kind')=='identity' and r.get('parentSession')]
-                    rows.extend(metadata(value,provider,hook))
-                except (ValueError,TypeError,AttributeError):pass
+                status, consumed, value = _read_jsonl_line(f, mode_provider)
+                if status in ('eof', 'incomplete'): break
+                if status == 'oversized': raise ValueError('Session record exceeds 16 MiB; retry position retained')
+                offset+=consumed
+                if status == 'ok' and isinstance(value, dict):
+                    try:
+                        if provider=='kimi' and value.get('type')=='forked':rows=[r for r in rows if r.get('kind')=='identity' and r.get('parentSession')]
+                        rows.extend(metadata(value,provider,hook))
+                    except (ValueError,TypeError,AttributeError):pass
                 if offset-start>=524288:break
             f.seek(max(0,offset-128));anchor=hashlib.sha256(f.read(min(offset,128))).hexdigest()
     pid=cursor.get('pid',0);start=cursor.get('processStart',0)
