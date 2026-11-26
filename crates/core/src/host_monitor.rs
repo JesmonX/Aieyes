@@ -500,7 +500,10 @@ mod tests {
         }
     }
 
-    fn wait_snapshot(rx: &mpsc::Receiver<Value>, predicate: impl Fn(&Value) -> bool) -> Value {
+    fn wait_snapshot(
+        rx: &mpsc::Receiver<Value>,
+        mut predicate: impl FnMut(&Value) -> bool,
+    ) -> Value {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             let value = rx
@@ -736,57 +739,64 @@ mod tests {
 
     #[test]
     fn slow_peer_does_not_block_repeated_fast_samples_or_configuration() {
-        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let (a, p) = (active.clone(), peak.clone());
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = Mutex::new(release_rx);
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let slow_finished = Arc::new(AtomicBool::new(false));
+        let (a, p, finished) = (active.clone(), peak.clone(), slow_finished.clone());
         let mut monitor = HostMonitor::new(Arc::new(move |host, _| {
-            let n = a.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-            p.fetch_max(n, std::sync::atomic::Ordering::SeqCst);
-            let started = Instant::now();
-            while started.elapsed() < Duration::from_millis(if host.id == "slow" { 400 } else { 5 })
-            {
-                if let Err(error) = operations::check() {
-                    a.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                    return Err(error);
-                }
-                thread::sleep(Duration::from_millis(2));
+            let n = a.fetch_add(1, Ordering::SeqCst) + 1;
+            p.fetch_max(n, Ordering::SeqCst);
+            if host.id == "slow" {
+                let _ = started_tx.send(());
+                // Keep the sampler busy even across cancellation until the test releases it.
+                // A timeout still lets the coordinator shut down after a failed assertion.
+                let _ = release_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10));
+                finished.store(true, Ordering::Release);
             }
-            a.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            a.fetch_sub(1, Ordering::SeqCst);
             Ok(json!({"timestamp":crate::models::now(),"memory":{"total":1024,"available":512}}))
         }));
         let (tx, rx) = mpsc::channel();
         monitor.set_sink(Arc::new(move |v| {
             let _ = tx.send(v);
         }));
-        let hosts = ["fast", "slow"]
-            .map(|id| Host {
-                id: id.into(),
-                enabled: true,
-                ..Default::default()
-            })
-            .to_vec();
+        let hosts = vec![host("fast"), host("slow")];
         monitor.configure(hosts.clone(), Duration::from_millis(20), false);
-        let until = Instant::now() + Duration::from_millis(350);
+        started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("slow sample did not start");
+        let slow_pending = |snapshot: &Value| {
+            snapshot["inFlight"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|id| id == "slow")
+        };
         let mut versions = std::collections::HashSet::new();
-        while Instant::now() < until {
-            if let Ok(v) = rx.recv_timeout(Duration::from_millis(30)) {
-                for row in v["rows"].as_array().unwrap() {
-                    if row["id"] == "fast" && row["sampleVersion"].is_number() {
-                        versions.insert(row["sampleVersion"].as_u64().unwrap());
-                    }
-                }
+        wait_snapshot(&rx, |snapshot| {
+            if slow_pending(snapshot)
+                && let Some(version) = snapshot["rows"][0]["sampleVersion"].as_u64()
+            {
+                versions.insert(version);
             }
-        }
+            versions.len() >= 3
+        });
+        let paused = monitor.configure(hosts, Duration::from_millis(20), true);
+        let finished_before_release = slow_finished.load(Ordering::Acquire);
+        release_tx.send(()).unwrap();
+        assert_eq!(paused["paused"], true);
         assert!(
-            versions.len() >= 3,
-            "Fast host must continue while slow host is still sampling: {versions:?}"
+            slow_pending(&paused) && !finished_before_release,
+            "Configuration must return while the slow sample is still running"
         );
-        let started = Instant::now();
-        monitor.configure(hosts, Duration::from_millis(20), true);
-        assert!(started.elapsed() < Duration::from_millis(50));
-        assert!(
-            peak.load(std::sync::atomic::Ordering::SeqCst) <= crate::host_sampling::CONCURRENCY
-        );
-        drop(monitor);
+        assert!(peak.load(Ordering::SeqCst) <= crate::host_sampling::CONCURRENCY);
     }
 }

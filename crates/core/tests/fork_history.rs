@@ -341,6 +341,13 @@ fn compare_remote_baseline(source: &Source, metadata: &str) {
     let native = resolver.metadata(&meta).unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     // Exercise the real SSH loader shape: the helpers are bundled, without __file__.
+    // Concurrent Python/Node fixtures can exhaust the decoder deadline on Windows CI.
+    #[cfg(windows)]
+    static SSH_FIXTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[cfg(windows)]
+    let _ssh_fixture = SSH_FIXTURE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let python = if cfg!(windows) { "python" } else { "python3" };
     let output = std::process::Command::new(python).args(["-c", r#"
 import pathlib,json,sys
