@@ -24,12 +24,13 @@ struct LiveSession: Identifiable, Decodable, Equatable {
     var pid: Int32? = nil, processStart: Double? = nil
     var nativeSession: String? = nil, client: String? = nil, subagentCount: Int? = nil
     var inputStateKey: String? = nil
+    var quotaAccountKey: String? = nil
     /// What a waiting session waits for: `approval`, `elicitation`, `question`, `notification`; nil when unknown.
     var inputKind: String? = nil
     init(id: String, source: String, phase: SessionPhase, updatedAt: Date) {
         self.id = id; self.source = source; self.phase = phase; self.updatedAt = updatedAt
     }
-    enum CodingKeys: String, CodingKey { case id, source, phase, updatedAt, provider, machine, machineId, sourceId, turnId, workspace, turnStartedAt, turnEndedAt, usage, pid, processStart, nativeSession, client, subagentCount, inputStateKey, inputKind }
+    enum CodingKeys: String, CodingKey { case id, source, phase, updatedAt, provider, machine, machineId, sourceId, turnId, workspace, turnStartedAt, turnEndedAt, usage, pid, processStart, nativeSession, client, subagentCount, inputStateKey, inputKind, quotaAccountKey }
     init(from decoder: Decoder) throws {
         let row = try decoder.container(keyedBy: CodingKeys.self)
         id = try row.decode(String.self, forKey: .id)
@@ -52,6 +53,7 @@ struct LiveSession: Identifiable, Decodable, Equatable {
         client = try row.decodeIfPresent(String.self, forKey: .client)
         subagentCount = try row.decodeIfPresent(Int.self, forKey: .subagentCount)
         inputStateKey = try row.decodeIfPresent(String.self, forKey: .inputStateKey)
+        quotaAccountKey = try row.decodeIfPresent(String.self, forKey: .quotaAccountKey)
         inputKind = (try? row.decodeIfPresent(String.self, forKey: .inputKind)).flatMap { $0.isEmpty ? nil : $0 }
     }
     var focusable: Bool { machineId == "local" && ((pid ?? 0) > 0 || threadURL != nil) }

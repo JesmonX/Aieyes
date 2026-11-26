@@ -20,6 +20,22 @@ function fixture(){
     if(method==='hello')return {version:'test'};if(method==='settings.get')return structuredClone(settings);
     if(method==='dashboard'||method==='dashboard.summary')return {generatedAt:now,summary,quotas:[...rows].sort((a,b)=>f.order.indexOf(AieyesUI.canonicalProvider(a.provider)+':'+a.accountId)-f.order.indexOf(AieyesUI.canonicalProvider(b.provider)+':'+b.accountId)),quotaOrder:f.order,quotaEstimates:f.records,automaticEstimateSummaries:f.rolling,modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:settings.sources.map(s=>({...s,autoValuationStatus:s.autoValuation?.enabled?(f.automaticStatus??{state:'collecting',note:'等待有效样本',accountKey:'codex:c'}):null})),pricingGaps:[]};
     if(method==='autoEstimates.configure'){if(f.failAutomatic)throw new Error('模拟自动估值保存失败');const src=settings.sources.find(s=>s.id===params.sourceId);if(params.enabled&&!params.confirmed)throw new Error('请同意');src.autoValuation=params.enabled?{enabled:true,consentVersion:1}:null;return {settings:structuredClone(settings)};}
+    if(method==='estimates.history' && params.accountKey==='codex:c')return [
+      {samplingMode:'automatic',period:'fiveHour',plan:'pro',group:'',points:[
+        {day:'2026-11-01',value:20,sampleCount:2},{day:'2026-11-02',value:23,sampleCount:1},{day:'2026-11-04',value:25,sampleCount:2},
+      ]},
+      {samplingMode:'manual',period:'weekly',plan:'pro',group:'',points:[{day:'2026-11-03',value:42,sampleCount:1}]},
+      ...(params.includeRolling ? [{samplingMode:'rolling',period:'fiveHour',plan:'pro',group:'',points:[
+        {day:'2026-11-01',value:20,sampleCount:2},{day:'2026-11-02',value:21,sampleCount:3},
+        {day:'2026-11-03',value:21,sampleCount:3},{day:'2026-11-04',value:22,sampleCount:5},
+      ]}, {
+        samplingMode:'rolling',period:'weekly',plan:'pro',group:'',points:[{day:'2026-11-04',value:72,sampleCount:4}],
+      }, {
+        samplingMode:'rolling',period:'weeklyRatio',plan:'pro',group:'',points:[
+          {day:'2026-11-01',value:80,sampleCount:2},{day:'2026-11-04',value:88,sampleCount:5},
+        ],
+      }] : []),
+    ];
     if(method==='sources.scan')return [];if(method==='quotas.refresh')return rows;
     if(method==='quotas.order.set'){if(f.fail)throw new Error('保存失败，请重试');f.order=params.keys;return f.order;}
     if(method.startsWith('quotaEstimates.')){
@@ -218,6 +234,34 @@ function fixture(){
      await loadDashboard();await openQuotaEstimate('codex:c');
    });
    const rollingResult=page.locator('#quota-dialog .estimate-result');
+   const chart=page.locator('[data-history-chart="rolling"]');
+   await chart.getByRole('img',{name:'滚动估值历史'}).waitFor();
+   assert.equal(await page.locator('.estimate-history svg').count(),1);
+   assert.equal(await page.locator('[data-history-chart="daily"]').count(),0);
+   const historyRequest=await page.evaluate(()=>quotaFixture.calls.findLast(call=>call.method==='estimates.history').params);
+   assert.deepEqual(historyRequest,{accountKey:'codex:c',includeRolling:true,includeDaily:false});
+   assert.deepEqual(await chart.locator('select option').allTextContents(),['5h · pro','7d 直接估值 · pro','7d 容量推算 · pro']);
+   assert.match(await chart.locator('output').textContent(),/2026-11-04.*22\.00.*5 个样本/);
+   await chart.locator('input[type=range]').press('ArrowLeft');
+   assert.match(await chart.locator('output').textContent(),/2026-11-03.*21\.00.*3 个样本/);
+   assert.equal(await chart.locator('.estimate-history-gap').count(),0,'The rolling window still has samples on a day with no new observations');
+   await chart.locator('select').selectOption('2');
+   assert.match(await chart.locator('output').textContent(),/2026-11-04.*88\.00/);
+   const observedLine = await chart.locator('.estimate-history-line').getAttribute('d');
+   assert.match(observedLine,/^M[^ML]+ M[^ML]+$/,'A gap has no underlying solid line');
+   const gap = chart.locator('.estimate-history-gap');
+   const [, start, end] = observedLine.split('M');
+   assert.equal(await gap.getAttribute('d'),`M${start.trim()} L${end.trim()}`,'The gap bridges its adjacent observations');
+   assert.equal(await gap.evaluate(el=>getComputedStyle(el).strokeDasharray),'4px, 3px');
+   assert.match(await chart.textContent(),/虚线跨过没有估值的日期/);
+   await chart.locator('input[type=range]').press('Home');
+   assert.match(await chart.locator('output').textContent(),/2026-11-01.*80\.00/);
+   await chart.locator('select').selectOption('1');
+   assert.match(await chart.locator('output').textContent(),/2026-11-04.*72\.00/);
+   assert.equal(await gap.count(),0,'A single observation has no connecting line');
+   assert.doesNotMatch(await chart.textContent(),/虚线跨过没有估值的日期/);
+   assert(await chart.evaluate(el=>el.scrollWidth<=el.clientWidth),'The rolling chart fits the floating panel');
+   await chart.locator('select').selectOption('0');
    assert.match(await rollingResult.textContent(),/滚动估值 · 等待完整目录用量/);
    assert.match(await rollingResult.textContent(),/样本截止：/);
    assert.match(await rollingResult.textContent(),/当前参与来源：个人订阅/);

@@ -71,6 +71,7 @@ pub fn home_path(path: &str) -> String {
     }
     path.into()
 }
+pub(crate) use local::session_subscription;
 pub fn backend(
     source: &Source,
     settings: &Settings,

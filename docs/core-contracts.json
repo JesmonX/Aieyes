@@ -914,6 +914,14 @@
       "updateBehavior": "cancel"
     },
     {
+      "name": "estimates.history",
+      "lane": "dashboard",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
       "name": "buddyAuth.cancel",
       "lane": "accounts",
       "invalidates": [],

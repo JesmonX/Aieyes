@@ -45,6 +45,122 @@ window.AieyesAutomatic = (() => {
   return { html, open, refresh, summary, intro };
 })();
 
+const estimateHistorySelection = new Map();
+async function loadEstimateHistory(slot, accountKey, credits, group) {
+  const dialog = slot.closest('dialog');
+  const active = () => slot.isConnected && dialog.open;
+  const selectionKey = JSON.stringify([accountKey, credits, group]);
+  const request = crypto.randomUUID();
+  slot.dataset.historyRequest = request;
+  const state = slot.querySelector('[data-history-state]');
+  const rollingChart = slot.querySelector('[data-history-chart="rolling"]');
+  state.textContent = AieyesI18n.t("正在读取估值历史…");
+  rollingChart.replaceChildren();
+  try {
+    const rows = await api('estimates.history', { accountKey, includeRolling: true, includeDaily: false });
+    if (!active() || slot.dataset.historyRequest !== request) return;
+    const aliases = {
+      'gemini models': 'gemini', 'gemini 4 argon': 'gemini-4-argon',
+      'claude and gpt models': 'claude-gpt', 'claudes & gpts': 'claude-gpt',
+    };
+    const normalizedGroup = aliases[group.toLowerCase()] ?? group.toLowerCase();
+    const series = (Array.isArray(rows) ? rows : []).filter((row) =>
+      row.samplingMode === 'rolling' && (row.period === 'credits') === credits && row.points?.length
+      && (!normalizedGroup || row.group === normalizedGroup));
+    state.textContent = series.length ? '' : AieyesI18n.t("暂无可绘制的估值历史");
+    if (series.length) renderEstimateHistory(rollingChart, series, selectionKey);
+  } catch (error) {
+    if (!active() || slot.dataset.historyRequest !== request) return;
+    state.textContent = AieyesI18n.t("估值记录读取失败");
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = AieyesI18n.t("重试读取");
+    retry.onclick = () => loadEstimateHistory(slot, accountKey, credits, group);
+    state.append(' ', retry);
+  }
+}
+
+function renderEstimateHistory(container, series, selectionKey) {
+  const identity = (row) => JSON.stringify([row.samplingMode, row.period, row.group, row.plan]);
+  const chooseLabel = (row) => [
+    { fiveHour: '5h', weekly: AieyesI18n.t("7d 直接估值"), weeklyRatio: AieyesI18n.t("7d 容量推算"), credits: '1000 credits' }[row.period],
+    row.group, row.plan,
+  ].filter(Boolean).join(' · ');
+  const saved = estimateHistorySelection.get(selectionKey);
+  const picked = series.findIndex(row => identity(row) === saved?.series);
+  const newest = series.reduce((best, row, i) => row.points.at(-1).day > series[best].points.at(-1).day ? i : best, 0);
+  container.innerHTML = `
+    <select aria-label="${escapeHTML(AieyesI18n.t("估值序列"))}" ${series.length === 1 ? 'disabled' : ''}>
+      ${series.map((row, i) => option(i, chooseLabel(row), picked < 0 ? newest : picked)).join('')}
+    </select>
+    <div data-history-plot></div>`;
+  const select = container.querySelector('select');
+  const plot = container.querySelector('[data-history-plot]');
+  const draw = () => {
+    const row = series[Number(select.value)];
+    const points = row.points;
+    const dayNumber = (p) => Date.parse(p.day + 'T00:00:00Z') / 86400000;
+    const dates = points.map(dayNumber);
+    const span = dates.at(-1) - dates[0];
+    const max = points.reduce((value, p) => Math.max(value, p.value), 0) || 1;
+    const x = (i) => span ? 8 + (dates[i] - dates[0]) / span * 464 : 240;
+    const y = (i) => 116 - points[i].value / max * 108;
+    const indices = points.map((_, i) => i);
+    const positions = indices.map(i => `${x(i)} ${y(i)}`);
+    const solid = [`M${positions[0]}`];
+    const gaps = [];
+    for (let i = 1; i < points.length; i++) {
+      if (dates[i] === dates[i - 1] + 1) {
+        solid.push(`L${positions[i]}`);
+      } else {
+        solid.push(`M${positions[i]}`);
+        gaps.push(`M${positions[i - 1]} L${positions[i]}`);
+      }
+    }
+    plot.innerHTML = `
+      <div class="estimate-history-graph">
+        <div class="estimate-history-scale"><span>${escapeHTML(money(max))}</span><span>$0</span></div>
+        <svg viewBox="0 0 480 124" preserveAspectRatio="none" role="img" aria-label="${escapeHTML(AieyesI18n.t("滚动估值历史"))}">
+          <path class="estimate-history-grid" d="M0 8H480 M0 62H480 M0 116H480"/>
+          ${gaps.length ? `<path class="estimate-history-gap" d="${gaps.join(' ')}"/>` : ''}
+          <path class="estimate-history-line" d="${solid.join(' ')}"/>
+          <path data-history-guide class="estimate-history-guide"/>
+          <circle data-history-dot class="estimate-history-point" r="4"/>
+        </svg>
+        <div class="estimate-history-axis muted"><span>${points[0].day}</span>${span ? `<span>${points.at(-1).day}</span>` : ''}</div>
+      </div>
+      ${points.length > 1 ? `<input aria-label="${escapeHTML(AieyesI18n.t("所选日期"))}" type="range" min="0" max="${points.length - 1}" step="1">` : ''}
+      <output data-history-reading></output>
+      ${gaps.length ? `<p class="tiny muted">${AieyesI18n.t("虚线跨过没有估值的日期。")}</p>` : ''}
+      <p class="tiny muted">${AieyesI18n.t("每天使用截至当日的近 90 天有效自动样本，样本权重每 7 天减半。")}</p>
+      ${row.period === 'weeklyRatio' ? `<p class="tiny muted">${AieyesI18n.t("7d 容量推算取当日 5h 滚动估值乘以同套餐的容量倍率。")}</p>` : ''}`;
+    const svg = plot.querySelector('svg');
+    const guide = plot.querySelector('[data-history-guide]');
+    const dot = plot.querySelector('[data-history-dot]');
+    const slider = plot.querySelector('input');
+    const reading = plot.querySelector('output');
+    const show = (i) => {
+      const p = points[i];
+      guide.setAttribute('d', `M${x(i)} 8V116`);
+      dot.setAttribute('cx', x(i));dot.setAttribute('cy', y(i));
+      reading.textContent = `${p.day} · ${money(p.value)} USD · ${AieyesI18n.t("{0} 个样本", p.sampleCount)}`;
+      if (slider) {slider.value = i;slider.setAttribute('aria-valuetext', reading.textContent);}
+      estimateHistorySelection.set(selectionKey, { series: identity(row), day: p.day });
+    };
+    if (slider) slider.oninput = () => show(Number(slider.value));
+    svg.onpointermove = (event) => {
+      const box = svg.getBoundingClientRect();
+      const at = 480 * (event.clientX - box.left) / box.width;
+      show(indices.reduce((best, i) => Math.abs(x(i) - at) < Math.abs(x(best) - at) ? i : best, 0));
+    };
+    const previous = estimateHistorySelection.get(selectionKey);
+    const index = previous?.series === identity(row) ? points.findIndex(p => p.day === previous.day) : -1;
+    show(index < 0 ? points.length - 1 : index);
+  };
+  select.onchange = draw;
+  draw();
+}
+
 const manualSamplingExpanded = new Map();
 // Management always uses the unfiltered snapshot. Collapsed manual rows are not mounted.
 async function openProviderEstimates(provider) {

@@ -1,4 +1,20 @@
 @layer components {
+.estimate-history, .estimate-history [data-history-chart], .estimate-history [data-history-plot] { display:grid; gap:8px; min-width:0; }
+.estimate-history { padding:12px; border:1px solid var(--border); border-radius:var(--radius-control); }
+.estimate-history :is(h3, p) { margin:0; }
+.estimate-history :is([data-history-chart], [data-history-state]):empty { display:none; }
+.estimate-history select { width:100%; min-width:0; }
+.estimate-history-graph { display:grid; grid-template-columns:auto minmax(0,1fr); gap:8px; }
+.estimate-history-graph svg { display:block; width:100%; height:124px; color:var(--accent); }
+.estimate-history-scale { display:flex; flex-direction:column; justify-content:space-between; padding-block:2px; color:var(--muted); }
+.estimate-history-axis { display:flex; grid-column:2; justify-content:space-between; gap:8px; }
+.estimate-history :is(output, .estimate-history-axis, .estimate-history-scale) { font-size:var(--font-secondary); font-variant-numeric:tabular-nums; }
+.estimate-history-grid, .estimate-history-guide, .estimate-history-line, .estimate-history-gap { fill:none; vector-effect:non-scaling-stroke; }
+.estimate-history-grid { stroke:var(--border); }
+.estimate-history-guide { stroke:currentColor; stroke-dasharray:3 3; }
+.estimate-history-line, .estimate-history-gap { stroke:currentColor; stroke-width:2; }
+.estimate-history-gap { stroke-dasharray:4 3; }
+.estimate-history-point { fill:currentColor; }
 :where(#titlebar, aside, main > header, button, summary, label, legend, .section-head, .segmented, [role=menu]) { -webkit-user-select: none; user-select: none; }
 .donut > svg { width:var(--model-chart-size); height:var(--model-chart-size); fill:none; stroke:none; }
 .chart-row { display:grid; grid-template-columns:minmax(450px,1.2fr) minmax(350px,1fr); gap:var(--space-layout); }

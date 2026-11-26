@@ -1647,8 +1647,8 @@ impl Store {
             now(),
         ))
     }
-    /// Settings and ordered quota snapshots for pet orbit rings (independent of menu ring setting).
-    pub fn pet_orbit_context(&self) -> Result<(Settings, Vec<QuotaSnapshot>)> {
+    /// Quota snapshots for pet orbit rings (independent of menu ring setting).
+    pub fn pet_orbit_quotas(&self) -> Result<Vec<QuotaSnapshot>> {
         let settings = self.settings()?;
         let mut dashboard = Dashboard::default();
         let filter = Filter {
@@ -1656,7 +1656,7 @@ impl Store {
             ..Default::default()
         };
         self.fill_dashboard_status(&mut dashboard, &filter, &settings, false)?;
-        Ok((settings, dashboard.quotas))
+        Ok(dashboard.quotas)
     }
     fn fill_dashboard_status(
         &self,

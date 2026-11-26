@@ -1,6 +1,6 @@
 //! Shared pet projection using the public Codex 8 x 9 animation layout.
 use crate::contracts::{PET_FRAME_DURATIONS, PROVIDERS};
-use crate::models::{QuotaSnapshot, Settings};
+use crate::models::{QuotaSnapshot, Settings, Source};
 use crate::quota_ring::{self, FIVE_HOURS, Ring, WEEK};
 use crate::sessions::{Phase, Snapshot};
 use serde::{Deserialize, Serialize};
@@ -236,57 +236,146 @@ pub fn format_quota_summary(ring: &Ring, now: i64) -> String {
     }
 }
 
-fn match_quota(
-    agent_id: &str,
-    source_ids: &[&str],
+pub(crate) fn assign_quota_accounts(
+    snapshot: &mut Snapshot,
     settings: &Settings,
-    quotas: &[QuotaSnapshot],
-    now: i64,
-) -> Option<PetOrbitQuota> {
-    let mut candidate_accounts = Vec::<&str>::new();
-    for source_id in source_ids {
-        if let Some(source) = settings.sources.iter().find(|s| s.id == *source_id)
-            && !source.account_id.is_empty()
-            && !candidate_accounts.contains(&source.account_id.as_str())
-        {
-            candidate_accounts.push(source.account_id.as_str());
-        }
+    store: &crate::store::Store,
+) {
+    let mut resolved = BTreeMap::new();
+    for session in snapshot.sessions.iter_mut().filter(|s| s.phase.active()) {
+        session.quota_account_key = None;
+        let Some(source) = settings.sources.iter().find(|s| {
+            s.id == session.source_id
+                && s.host_id.as_deref().unwrap_or("local") == session.machine_id
+                && agent_provider(&s.provider) == agent_provider(&session.provider)
+                && settings.source_enabled(s)
+        }) else {
+            continue;
+        };
+        let model_provider = (!session.codex_model_provider.is_empty())
+            .then_some(session.codex_model_provider.as_str());
+        let subscription = if source.provider == "codex" {
+            store
+                .turn_uses_codex_subscription(&source.id, &session.native_session, &session.turn_id)
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        session.quota_account_key = resolved
+            .entry((source.id.as_str(), model_provider, subscription))
+            .or_insert_with(|| {
+                source_quota_account(source, settings, store, model_provider, subscription)
+            })
+            .clone();
     }
-    let build = |quota: &QuotaSnapshot| -> Option<PetOrbitQuota> {
-        let ring = quota_ring::ring(quota);
-        if ring == Ring::Empty {
+}
+
+fn source_quota_account(
+    source: &Source,
+    settings: &Settings,
+    store: &crate::store::Store,
+    model_provider: Option<&str>,
+    subscription: Option<bool>,
+) -> Option<String> {
+    if subscription == Some(false) {
+        return None;
+    }
+    let machine = source.host_id.as_deref().unwrap_or("local");
+    let observed = settings.native_connections.iter().filter(|row| {
+        row.provider == source.provider
+            && row.machine_id == machine
+            && row.source_id.as_deref() == Some(&source.id)
+            && row.status == "observed"
+            && (source.provider != "codex"
+                || row.config_path.replace('\\', "/")
+                    == format!(
+                        "{}/auth.json",
+                        row.root.replace('\\', "/").trim_end_matches('/')
+                    ))
+            && crate::account_scan::available(settings, row)
+    });
+    if source.provider == "claude"
+        && observed
+            .clone()
+            .any(|row| row.kind == "api" && row.selector == "/env")
+    {
+        return None;
+    }
+    let mut observed = observed.filter(|row| row.kind == "login").peekable();
+    let key_for_identity = |identity: &str| {
+        if identity.is_empty() {
             return None;
         }
-        Some(PetOrbitQuota {
-            account_name: quota.name.clone(),
-            provider: quota.provider.clone(),
-            summary: format_quota_summary(&ring, now),
-            ring,
-        })
-    };
-    for account_id in candidate_accounts {
-        if let Some(quota) = quotas
+        let mut keys = settings
+            .accounts
             .iter()
-            .find(|q| agent_provider(&q.provider) == agent_id && q.account_id == account_id)
-            && let Some(item) = build(quota)
-        {
-            return Some(item);
+            .filter(|a| {
+                a.provider == source.provider && a.identity_key.as_deref() == Some(identity)
+            })
+            .map(crate::accounts::key);
+        let key = keys.next()?;
+        keys.next().is_none().then_some(key)
+    };
+    if source.provider == "codex" {
+        if source.host_id.is_none() {
+            let path = if source.path.trim().is_empty() {
+                crate::contracts::provider("codex").unwrap().default_path
+            } else {
+                &source.path
+            };
+            let root = crate::store::expand(&crate::codex_auth::home_path(path));
+            if source.codex_home_id.is_some()
+                || ["auth.json", "config.toml"]
+                    .iter()
+                    .any(|file| root.join(file).symlink_metadata().is_ok())
+            {
+                // The installed route can change without changing the source or saved profiles.
+                let root = dunce::canonicalize(root).ok()?;
+                return key_for_identity(
+                    &crate::codex_auth::session_subscription(
+                        &root,
+                        model_provider,
+                        subscription == Some(true),
+                    )
+                    .ok()??,
+                );
+            }
+        } else {
+            if subscription != Some(true)
+                && model_provider.is_some_and(|p| p.starts_with("aieyes_api_"))
+            {
+                return None;
+            }
+            if let Ok(Some((identity, stamp))) = store.observed_codex_identity(settings, source)
+                && (!identity.is_empty() || subscription != Some(true))
+                && observed.clone().all(|row| row.checked_at <= stamp)
+            {
+                return key_for_identity(&identity);
+            }
         }
     }
-    quotas
+    if observed.peek().is_some() {
+        // Multiple observed logins for this source are ambiguous without a route selector.
+        let account = observed.next()?.account_key.as_ref()?;
+        return observed
+            .all(|row| row.account_key.as_ref() == Some(account))
+            .then(|| account.clone());
+    }
+    if source.codex_home_id.is_some() {
+        return None;
+    }
+    settings
+        .accounts
         .iter()
-        .filter(|q| {
-            agent_provider(&q.provider) == agent_id
-                && !(settings.hide_free_quota_cards && q.free_plan)
-        })
-        .find_map(build)
+        .find(|a| a.provider == source.provider && a.id == source.account_id)
+        .map(crate::accounts::key)
 }
 
 /// Group running sessions (`phase.active()`) by normalized agent, attach matched quota rings,
 /// keep deterministic order, and fold beyond [`ORBIT_MAX_SLOTS`] into an overflow badge.
 pub fn project_orbit(
     snapshot: &Snapshot,
-    settings: &Settings,
     quotas: &[QuotaSnapshot],
     now: i64,
 ) -> Vec<PetOrbitAgent> {
@@ -296,7 +385,7 @@ pub fn project_orbit(
         all_same_raw: bool,
         phase: Phase,
         active_count: usize,
-        source_ids: Vec<&'a str>,
+        quota_session: Option<&'a crate::sessions::LiveSession>,
     }
     let mut grouped = BTreeMap::<String, Bucket<'_>>::new();
     for session in snapshot.sessions.iter().filter(|s| s.phase.active()) {
@@ -307,7 +396,7 @@ pub fn project_orbit(
             all_same_raw: true,
             phase: session.phase,
             active_count: 0,
-            source_ids: Vec::new(),
+            quota_session: None,
         });
         entry.active_count += 1;
         if session.phase.priority() < entry.phase.priority() {
@@ -316,9 +405,22 @@ pub fn project_orbit(
         if entry.display_provider != session.provider {
             entry.all_same_raw = false;
         }
-        if !session.source_id.is_empty() && !entry.source_ids.contains(&session.source_id.as_str())
+        let rank = |s: &crate::sessions::LiveSession| {
+            (
+                s.phase.priority(),
+                std::cmp::Reverse(s.turn_started_at),
+                std::cmp::Reverse(s.updated_at),
+            )
+        };
+        if session.quota_account_key.is_some()
+            && entry.quota_session.is_none_or(|prior| {
+                rank(session)
+                    .cmp(&rank(prior))
+                    .then_with(|| session.id.cmp(&prior.id))
+                    .is_lt()
+            })
         {
-            entry.source_ids.push(session.source_id.as_str());
+            entry.quota_session = Some(session);
         }
     }
     let mut items: Vec<PetOrbitAgent> = grouped
@@ -329,7 +431,23 @@ pub fn project_orbit(
             } else {
                 bucket.agent_id.clone()
             };
-            let quota = match_quota(&bucket.agent_id, &bucket.source_ids, settings, quotas, now);
+            let quota = bucket
+                .quota_session
+                .and_then(|s| s.quota_account_key.as_deref())
+                .and_then(|key| {
+                    quotas.iter().find(|q| {
+                        key.split_once(':') == Some((q.provider.as_str(), q.account_id.as_str()))
+                    })
+                })
+                .and_then(|q| {
+                    let ring = quota_ring::ring(q);
+                    (ring != Ring::Empty).then(|| PetOrbitQuota {
+                        account_name: q.name.clone(),
+                        provider: q.provider.clone(),
+                        summary: format_quota_summary(&ring, now),
+                        ring,
+                    })
+                });
             PetOrbitAgent {
                 provider: bucket.agent_id,
                 display_provider,
@@ -414,6 +532,117 @@ fn frame_timing(state: &PetState, elapsed_ms: u64) -> (u32, u64) {
 mod tests {
     use super::*;
     use crate::sessions::LiveSession;
+    #[test]
+    fn orbit_tracks_installed_codex_login_and_leaves_api_routes_unattributed() {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("codex");
+        std::fs::create_dir(&home).unwrap();
+        let store = crate::store::Store::open(&root.path().join("data")).unwrap();
+        let auth = |user: &str| {
+            let claims =
+                serde_json::json!({"https://api.openai.com/auth":{"chatgpt_user_id":user}});
+            serde_json::json!({"auth_mode":"chatgpt","tokens":{
+                "account_id":"workspace",
+                "access_token":format!("e30.{}.", URL_SAFE_NO_PAD.encode(claims.to_string()))
+            }})
+        };
+        let settings = Settings {
+            sources: vec![Source {
+                id: "shared".into(),
+                path: home.to_string_lossy().into(),
+                codex_home_id: Some("managed".into()),
+                account_id: "a".into(),
+                ..Default::default()
+            }],
+            accounts: ["a", "b"]
+                .into_iter()
+                .map(|id| crate::models::Account {
+                    id: id.into(),
+                    identity_key: Some(crate::codex_auth::files::identity(&auth(id)).unwrap().key),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut snapshot = Snapshot {
+            sessions: vec![LiveSession {
+                id: "live".into(),
+                source_id: "shared".into(),
+                provider: "chatgpt-work".into(),
+                machine_id: "local".into(),
+                phase: Phase::Working,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let observe = |snapshot: &mut Snapshot| assign_quota_accounts(snapshot, &settings, &store);
+        for (user, key) in [
+            ("a", Some("codex:a")),
+            ("b", Some("codex:b")),
+            ("unknown", None),
+        ] {
+            std::fs::write(home.join("auth.json"), auth(user).to_string()).unwrap();
+            observe(&mut snapshot);
+            assert_eq!(snapshot.sessions[0].quota_account_key.as_deref(), key);
+        }
+        std::fs::write(home.join("auth.json"), auth("b").to_string()).unwrap();
+        std::fs::write(home.join("config.toml"), "model_provider = 'relay'\n").unwrap();
+        observe(&mut snapshot);
+        assert!(snapshot.sessions[0].quota_account_key.is_none());
+
+        let api_session = LiveSession {
+            id: "api".into(),
+            native_session: "api-session".into(),
+            turn_id: "api-turn".into(),
+            codex_model_provider: "relay".into(),
+            phase: Phase::NeedsInput,
+            ..snapshot.sessions[0].clone()
+        };
+        snapshot.sessions[0].native_session = "subscription-session".into();
+        snapshot.sessions[0].turn_id = "subscription-turn".into();
+        snapshot.sessions[0].codex_model_provider = "openai".into();
+        snapshot.sessions.push(api_session);
+        observe(&mut snapshot);
+        assert_eq!(
+            snapshot.sessions[0].quota_account_key.as_deref(),
+            Some("codex:b")
+        );
+        assert!(snapshot.sessions[1].quota_account_key.is_none());
+
+        // Request evidence takes precedence over a process's initial provider hint.
+        let route = crate::codex_routes::extract(
+            1,
+            30,
+            0,
+            "codex_http_client::client",
+            r#"thread_id="subscription-session" turn_id="subscription-turn" url="https://chatgpt.com/backend-api/codex/responses" status=200"#,
+            None,
+            None,
+        );
+        store.put_codex_routes("shared", &route).unwrap();
+        snapshot.sessions[0].codex_model_provider = "relay".into();
+        observe(&mut snapshot);
+        assert_eq!(
+            snapshot.sessions[0].quota_account_key.as_deref(),
+            Some("codex:b")
+        );
+        let quotas = ["a", "b"].map(|id| QuotaSnapshot {
+            account_id: id.into(),
+            provider: "codex".into(),
+            name: id.into(),
+            windows: vec![crate::models::QuotaWindow {
+                name: "5h".into(),
+                used_percent: 30.0,
+                window_minutes: Some(FIVE_HOURS),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let orbit = project_orbit(&snapshot, &quotas, 30);
+        assert_eq!(orbit[0].phase, Phase::NeedsInput);
+        assert_eq!(orbit[0].quota.as_ref().unwrap().account_name, "b");
+    }
     #[test]
     fn animation_identity_ignores_sessions_and_uses_effective_timing() {
         let a = project(&Snapshot::default());
@@ -640,17 +869,8 @@ mod tests {
 
     #[test]
     fn orbit_groups_active_agents_matches_source_quota_and_folds_overflow() {
-        use crate::models::{QuotaWindow, Source};
+        use crate::models::QuotaWindow;
         let now = 1_000_000;
-        let settings = Settings {
-            sources: vec![Source {
-                id: "src-codex-b".into(),
-                provider: "codex".into(),
-                account_id: "acct-b".into(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
         let quotas = vec![
             QuotaSnapshot {
                 provider: "codex".into(),
@@ -701,6 +921,7 @@ mod tests {
                     id: "2".into(),
                     provider: "codex".into(),
                     source_id: "src-codex-b".into(),
+                    quota_account_key: Some("codex:acct-b".into()),
                     phase: Phase::Thinking,
                     updated_at: 101,
                     ..Default::default()
@@ -722,7 +943,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let orbit = project_orbit(&snapshot, &settings, &quotas, now);
+        let orbit = project_orbit(&snapshot, &quotas, now);
         assert_eq!(
             orbit.len(),
             2,
@@ -768,7 +989,7 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
-        let folded = project_orbit(&many, &Settings::default(), &[], now);
+        let folded = project_orbit(&many, &[], now);
         assert_eq!(folded.len(), ORBIT_MAX_SLOTS);
         let tail = folded.last().unwrap();
         assert_eq!(tail.provider, ORBIT_OVERFLOW_PROVIDER);

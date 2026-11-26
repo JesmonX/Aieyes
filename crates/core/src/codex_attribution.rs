@@ -37,6 +37,30 @@ fn evidence_scope(settings: &Settings, source: &Source) -> String {
 }
 
 impl Store {
+    pub(crate) fn observed_codex_identity(
+        &self,
+        settings: &Settings,
+        source: &Source,
+    ) -> Result<Option<(String, i64)>> {
+        let scope: Option<String> = self
+            .db
+            .query_row(
+                "SELECT value FROM kv WHERE key=?1",
+                [format!("codex-evidence-scope:{}", source.id)],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if scope.as_deref() != Some(evidence_scope(settings, source).as_str()) {
+            return Ok(None);
+        }
+        Ok(self.db.query_row(
+            "SELECT identity_key,stamp FROM codex_account_timeline WHERE source_id=?1 AND kind<>'switchBefore'
+             ORDER BY stamp DESC,id DESC LIMIT 1",
+            [&source.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional()?)
+    }
+
     /// Both local and SSH readers pass through the Rust parser before committing.
     pub(crate) fn record_codex_history(
         &self,

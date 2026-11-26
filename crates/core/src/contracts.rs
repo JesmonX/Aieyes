@@ -67,6 +67,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "autoEstimates.configure", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "autoEstimates.rebuild", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "autoEstimates.tick", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "estimates.history", lane: Lane::Dashboard, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "buddyAuth.cancel", lane: Lane::Accounts, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "buddyAuth.logout", lane: Lane::Accounts, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "buddyAuth.start", lane: Lane::Accounts, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -252,7 +253,7 @@ pub const SESSION_SOUND_TONES: &[(&str, &str, &str)] = &[
     ("droplet", "水滴", "droplet"),
     ("pulse", "电子", "pulse"),
 ];
-pub const CONTRACT_HASH: &str = "e32ef382b1fa345d2adb562f8f3bb15855002347b46622c8531767d653ecc187";
+pub const CONTRACT_HASH: &str = "1660bbb9c0741d786bb03a6287866b6d2bbd09db3a6ebc8dc529cbde7817c780";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

@@ -197,7 +197,7 @@ macro_rules! common_fields {
 common_fields!(QuotaEstimate);
 common_fields!(CreditEstimate);
 
-fn decode_estimate(kind: &str, raw: &str) -> Result<Estimate> {
+pub(crate) fn decode_estimate(kind: &str, raw: &str) -> Result<Estimate> {
     let mut value: Value = serde_json::from_str(raw)?;
     ensure!(value.is_object(), "采样内容格式错误");
     let declared = value["kind"].as_str().unwrap_or("");

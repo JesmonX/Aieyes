@@ -145,6 +145,25 @@ pub(crate) fn extract(
 }
 
 impl Store {
+    /// Route evidence bound to a single live turn. A successful subscription request
+    /// remains relevant even if the turn also made API requests.
+    pub(crate) fn turn_uses_codex_subscription(
+        &self,
+        source: &str,
+        session: &str,
+        turn: &str,
+    ) -> Result<Option<bool>> {
+        if session.is_empty() || turn.is_empty() {
+            return Ok(None);
+        }
+        let mut query = self.db.prepare_cached(
+            "SELECT MAX(category='subscription') FROM codex_routes
+             WHERE source_id=?1 AND session_id=?2 AND turn_id=?3
+               AND COALESCE(json_extract(payload,'$.status'),200)<400",
+        )?;
+        Ok(query.query_row(params![source, session, turn], |r| r.get(0))?)
+    }
+
     pub(crate) fn put_codex_routes(&self, source: &str, rows: &[Route]) -> Result<()> {
         for row in rows {
             // Remote collectors use the same narrow schema. Reject arbitrary billing labels.

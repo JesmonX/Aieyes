@@ -4655,7 +4655,18 @@ enum LocalizationCatalog {
   "等待选择": "Awaiting a choice",
   "可以中断正在执行的本轮": "The running turn can be stopped",
   "返回会话列表": "Back to sessions",
-  "发送后续指令": "Send a follow-up instruction"
+  "发送后续指令": "Send a follow-up instruction",
+  "滚动估值历史": "Rolling valuation history",
+  "每天使用截至当日的近 90 天有效自动样本，样本权重每 7 天减半。": "Each day uses valid automatic samples from the preceding 90 days through that date. Sample weight halves every 7 days.",
+  "7d 容量推算取当日 5h 滚动估值乘以同套餐的容量倍率。": "The 7d projection multiplies that day's rolling 5h valuation by the capacity ratio for the same plan.",
+  "正在读取估值历史…": "Loading valuation history…",
+  "暂无可绘制的估值历史": "No valuation history to plot",
+  "估值序列": "Valuation series",
+  "虚线跨过没有估值的日期。": "Dashed lines span days with no valuation.",
+  "手动采样": "Manual sampling",
+  "7d 容量推算": "7d capacity projection",
+  "{0} 个样本": "{0} samples",
+  "缺少账户标识": "Account identifier is required"
 }
 """#.utf8))) ?? [:]
 }

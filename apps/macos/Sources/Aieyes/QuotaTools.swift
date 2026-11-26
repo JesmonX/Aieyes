@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 
 struct AutomaticValuationControls: View {
     @SurfaceModel var model: AppModel
@@ -84,6 +85,158 @@ struct SamplingManagementView: View {
     let engine = EngineClient(configurationOnly: true)
     deinit { engine.stop() }
 }
+
+private struct RollingEstimateSeries: Decodable, Identifiable {
+    struct Point: Decodable, Identifiable {
+        let day: String, value: Double, sampleCount: Int
+        var id: String { day }
+    }
+    let group: String, plan: String, period: String, samplingMode: String
+    let points: [Point]
+    var id: [String] { [samplingMode, period, group, plan] }
+    var label: String {
+        let metric = switch period {
+        case "fiveHour": "5h"
+        case "weekly": L("7d 直接估值")
+        case "weeklyRatio": L("7d 容量推算")
+        default: "1000 credits"
+        }
+        return [metric, group, plan]
+            .filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+}
+
+private struct RollingEstimateChart: View {
+    let series: [RollingEstimateSeries]
+    @State private var selectedSeries: [String]?
+    @State private var selectedDay: String?
+    private static let isoDay = Date.ISO8601FormatStyle().year().month().day().dateSeparator(.dash)
+
+    private struct PlotPoint: Identifiable {
+        let point: RollingEstimateSeries.Point
+        let date: Date
+        let run: Int
+        var id: String { point.day }
+    }
+
+    var body: some View {
+        if let row = series.first(where: { $0.id == selectedSeries })
+            ?? series.max(by: { ($0.points.last?.day ?? "") < ($1.points.last?.day ?? "") }) {
+            VStack(alignment: .leading, spacing: 8) {
+                if series.count > 1 {
+                    Picker(L("估值序列"), selection: Binding(get: { row.id }, set: {
+                        selectedSeries = $0
+                        selectedDay = nil
+                    })) {
+                        ForEach(series) { Text($0.label).tag($0.id) }
+                    }.labelsHidden().accessibilityLabel(L("估值序列"))
+                } else {
+                    Text(row.label).font(AppFont.secondary)
+                }
+                plot(row)
+                Text(L("每天使用截至当日的近 90 天有效自动样本，样本权重每 7 天减半。"))
+                    .font(AppFont.secondary).foregroundStyle(.secondary)
+                if row.period == "weeklyRatio" {
+                    Text(L("7d 容量推算取当日 5h 滚动估值乘以同套餐的容量倍率。"))
+                        .font(AppFont.secondary).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func plot(_ row: RollingEstimateSeries) -> some View {
+        let points = plotPoints(row.points)
+        if let first = points.first, let last = points.last {
+            let gaps = zip(points, points.dropFirst()).filter { $0.run != $1.run }
+            let selected = points.first(where: { $0.point.day == selectedDay }) ?? last
+            let reading = selected.point.day + " · " + Format.money(selected.point.value)
+                + " USD · " + L("{0} 个样本", selected.point.sampleCount)
+            Chart {
+                ForEach(gaps, id: \.1.id) { start, end in
+                    ForEach([start, end]) { entry in
+                        LineMark(x: .value(L("日期"), entry.date), y: .value("USD", entry.point.value),
+                                 series: .value(L("估值序列"), "gap-\(end.id)"))
+                            .foregroundStyle(Palette.accent)
+                            .lineStyle(StrokeStyle(lineWidth: 2, dash: [4, 3]))
+                            .accessibilityHidden(true)
+                    }
+                }
+                ForEach(points) { entry in
+                    LineMark(x: .value(L("日期"), entry.date), y: .value("USD", entry.point.value),
+                             series: .value(L("估值序列"), "observed-\(entry.run)"))
+                        .foregroundStyle(Palette.accent)
+                    if entry.id == selected.id {
+                        PointMark(x: .value(L("日期"), entry.date), y: .value("USD", entry.point.value))
+                            .foregroundStyle(Palette.accent)
+                            .symbolSize(32)
+                    }
+                }
+                RuleMark(x: .value(L("所选日期"), selected.date))
+                    .foregroundStyle(Palette.accent.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3]))
+            }
+            .chartXScale(domain: first.date.addingTimeInterval(-43_200)...last.date.addingTimeInterval(43_200))
+            .chartYScale(domain: 0...max(1, points.map(\.point.value).max() ?? 0))
+            .chartXAxis {
+                AxisMarks(values: first.id == last.id ? [first.date] : [first.date, last.date]) { mark in
+                    if let date = mark.as(Date.self) {
+                        let anchor: UnitPoint = first.id == last.id ? .top : date == first.date ? .topLeading : .topTrailing
+                        AxisValueLabel(anchor: anchor) {
+                            Text(date.formatted(Self.isoDay)).font(AppFont.secondary)
+                        }
+                    }
+                }
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { mark in
+                    AxisGridLine()
+                    AxisValueLabel {
+                        if let amount = mark.as(Double.self) { Text(Format.money(amount)).font(AppFont.secondary) }
+                    }
+                }
+            }
+            .chartOverlay { proxy in
+                GeometryReader { geometry in
+                    Color.clear.contentShape(Rectangle()).onContinuousHover { phase in
+                        guard case .active(let position) = phase, let frame = proxy.plotFrame,
+                              let date = proxy.value(atX: position.x - geometry[frame].minX, as: Date.self) else { return }
+                        selectedDay = points.min {
+                            abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
+                        }?.id
+                    }
+                }
+            }
+            .frame(height: 144)
+            .focusable()
+            .onKeyPress(.leftArrow) { move(-1, from: selected, in: points); return .handled }
+            .onKeyPress(.rightArrow) { move(1, from: selected, in: points); return .handled }
+            .accessibilityLabel(L("滚动估值历史"))
+            .accessibilityValue(reading)
+            .accessibilityHint(L("左右方向键选择日期，下方提供精确读数"))
+            Text(reading).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
+            if !gaps.isEmpty {
+                Text(L("虚线跨过没有估值的日期。")).font(AppFont.secondary).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func plotPoints(_ points: [RollingEstimateSeries.Point]) -> [PlotPoint] {
+        var run = 0
+        var previous: Date?
+        return points.compactMap { point in
+            guard let date = try? Self.isoDay.parse(point.day) else { return nil }
+            if let previous, date.timeIntervalSince(previous) > 86_400 { run += 1 }
+            previous = date
+            return PlotPoint(point: point, date: date, run: run)
+        }
+    }
+
+    private func move(_ offset: Int, from selected: PlotPoint, in points: [PlotPoint]) {
+        let index = points.firstIndex(where: { $0.id == selected.id }) ?? 0
+        selectedDay = points[min(points.count - 1, max(0, index + offset))].id
+    }
+}
+
 struct AgentValuationView: View {
     @StateObject private var historyReader = EstimateHistoryReader()
     @Environment(\.dismiss) private var dismiss
@@ -299,6 +452,8 @@ private struct QuotaEstimateContent: View {
     @State private var fullQuotaRecords: [QuotaEstimate]?
     @State private var fullCreditRecords: [QuotaEstimate]?
     @State private var historyError: String?
+    @State private var rollingHistory: [RollingEstimateSeries]?
+    @State private var rollingHistoryError = false
     @State private var selected = Set<String>()
     @State private var window = ""
     @State private var confirmed = false
@@ -342,7 +497,13 @@ private struct QuotaEstimateContent: View {
         .aieyesAccent().font(AppFont.body).disabled(model.installingUpdate)
         .padding(DesignTokens.dialogPadding)
         .frame(minWidth: DesignTokens.dialogEstimateMinWidth, idealWidth: DesignTokens.dialogEstimateWidth)
-        .task(id: active ? historyRevision : nil) { if active { await loadHistory() } }
+        .task(id: active ? historyRevision : nil) {
+            if active {
+                async let records: () = loadHistory()
+                async let rolling: () = loadRollingHistory()
+                _ = await (records, rolling)
+            }
+        }
         .onChange(of: credits) { _, _ in confirmed = false }
         .onAppear {
             selected = Set(sources.map(\.id))
@@ -362,6 +523,7 @@ private struct QuotaEstimateContent: View {
     private var content: some View {
         LazyVStack(alignment: .leading, spacing: 16) {
             Text(credits ? L("按 credits 消耗与样本成本估算 API 等价价值，金额不可兑换。") : L("按样本成本与额度消耗比例估算 API 等价价值，金额不可兑换。") + visibility.help).foregroundStyle(.secondary)
+            rollingHistorySection
             AutomaticValuationControls(model: model, sources: sources)
             sampling
             if busy { progress }
@@ -375,6 +537,44 @@ private struct QuotaEstimateContent: View {
             ForEach((model.dashboard.automaticEstimateSummaries ?? []).filter { $0.accountKey == quota.id && ($0.kind == "credits") == credits && (initialGroup == nil || $0.groupId == initialGroup) }) { estimate in result(estimate) }
             history
         }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var rollingHistorySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L("滚动估值历史")).font(AppFont.section)
+            if rollingHistoryError {
+                HStack {
+                    Text(L("估值记录读取失败")).foregroundStyle(.secondary)
+                    Button(L("重试读取")) { Task { await loadRollingHistory() } }
+                }
+            } else if let rollingHistory {
+                let rawGroup = (initialGroup ?? "").lowercased()
+                let aliases = ["gemini models": "gemini", "gemini 4 argon": "gemini-4-argon",
+                               "claude and gpt models": "claude-gpt", "claudes & gpts": "claude-gpt"]
+                let group = aliases[rawGroup] ?? rawGroup
+                let rows = rollingHistory.filter {
+                    $0.samplingMode == "rolling" && ($0.period == "credits") == credits
+                        && (group.isEmpty || group == $0.group)
+                }
+                if rows.isEmpty { Text(L("暂无可绘制的估值历史")).foregroundStyle(.secondary) }
+                else { RollingEstimateChart(series: rows).id(credits) }
+            } else {
+                ProgressView(L("正在读取估值历史…"))
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func loadRollingHistory() async {
+        rollingHistoryError = false
+        do {
+            let rows: [RollingEstimateSeries] = try await historyReader.engine.call(
+                "estimates.history",
+                params: ["accountKey": quota.id, "includeRolling": true, "includeDaily": false]
+            )
+            if !Task.isCancelled { rollingHistory = rows }
+        } catch {
+            if !Task.isCancelled { rollingHistoryError = true }
+        }
     }
     @ViewBuilder private var sampling: some View {
         if let current {

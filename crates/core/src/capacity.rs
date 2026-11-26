@@ -13,6 +13,32 @@ pub struct Capacity {
     pub weekly_percent: f64,
     pub updated_at: i64,
 }
+pub(crate) struct CapacitySample {
+    stamp: i64,
+    five: f64,
+    week: f64,
+}
+
+impl Capacity {
+    pub(crate) fn from_samples(samples: &[CapacitySample], at: i64) -> Self {
+        let mut result = Self::default();
+        let (mut five, mut week) = (0.0, 0.0);
+        for sample in samples
+            .iter()
+            .filter(|s| (at - 90 * 86400..=at).contains(&s.stamp))
+        {
+            let weight = 2_f64.powf(-(at - sample.stamp) as f64 / (7.0 * 86400.0));
+            five += weight * sample.five;
+            week += weight * sample.week;
+            result.samples += 1;
+            result.weekly_percent += sample.week;
+            result.updated_at = sample.stamp;
+        }
+        result.ratio = (week > 0.0).then(|| five / week);
+        result
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Baseline {
     first: QuotaSnapshot,
@@ -166,28 +192,39 @@ impl Store {
         self.capacity_for_group(account, "", at)
     }
     pub fn capacity_for_group(&self, account: &str, group: &str, at: i64) -> Result<Capacity> {
-        let account = scope_key(account, group);
-        let mut stmt = self.db.prepare("SELECT stamp,five,week FROM capacity_samples WHERE account_key=?1 AND stamp>=?2 AND stamp<=?3 ORDER BY stamp")?;
-        let rows = stmt.query_map(params![account, at - 90 * 86400, at], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, f64>(1)?,
-                r.get::<_, f64>(2)?,
-            ))
-        })?;
-        let mut result = Capacity::default();
-        let (mut five, mut week) = (0.0, 0.0);
-        for row in rows {
-            let (stamp, f, w) = row?;
-            let weight = 2_f64.powf(-(at - stamp) as f64 / (7.0 * 86400.0));
-            five += weight * f;
-            week += weight * w;
-            result.samples += 1;
-            result.weekly_percent += w;
-            result.updated_at = stamp;
-        }
-        result.ratio = (week > 0.0).then(|| five / week);
-        Ok(result)
+        let samples = self.capacity_samples(account, group, None, at - 90 * 86400, at)?;
+        Ok(Capacity::from_samples(&samples, at))
+    }
+    pub(crate) fn capacity_samples(
+        &self,
+        account: &str,
+        group: &str,
+        plan: Option<&str>,
+        from: i64,
+        to: i64,
+    ) -> Result<Vec<CapacitySample>> {
+        // Legacy capacity rows have no plan column. Pair them with the quota
+        // observation that produced the sample when reconstructing a plan's history.
+        let mut stmt = self.db.prepare_cached(
+            "SELECT s.stamp,s.five,s.week FROM capacity_samples s
+             WHERE s.account_key=?1 AND s.stamp BETWEEN ?2 AND ?3
+               AND (?4 IS NULL OR ?4=(
+                   SELECT lower(trim(json_extract(q.payload,'$.plan'))) FROM quota_history q
+                   WHERE q.account_key=?5 AND q.stamp=s.stamp
+                   ORDER BY q.id DESC LIMIT 1))
+             ORDER BY s.stamp",
+        )?;
+        let rows = stmt.query_map(
+            params![scope_key(account, group), from, to, plan, account],
+            |r| {
+                Ok(CapacitySample {
+                    stamp: r.get(0)?,
+                    five: r.get(1)?,
+                    week: r.get(2)?,
+                })
+            },
+        )?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
     pub fn bootstrap_capacity(&self) -> Result<()> {
         if self.db.query_row(

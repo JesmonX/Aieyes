@@ -346,6 +346,13 @@
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
+    "estimates.history": {
+      "lane": "dashboard",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
     "buddyAuth.cancel": {
       "lane": "accounts",
       "invalidates": [],
@@ -1771,7 +1778,7 @@
       "monochrome": false
     }
   },
-  "contractHash": "e32ef382b1fa345d2adb562f8f3bb15855002347b46622c8531767d653ecc187",
+  "contractHash": "1660bbb9c0741d786bb03a6287866b6d2bbd09db3a6ebc8dc529cbde7817c780",
   "petFrameDurations": [
     [
       280,

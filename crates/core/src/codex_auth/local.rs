@@ -59,6 +59,22 @@ fn current(root: &Path) -> Option<String> {
         .and_then(|v| files::identity(&v).ok())
         .map(|v| v.key)
 }
+
+/// Read the installed subscription identity without probing the CLI or saved profiles.
+pub(crate) fn session_subscription(
+    root: &Path,
+    model_provider: Option<&str>,
+    subscription_observed: bool,
+) -> Result<Option<String>> {
+    if mode(root)? != "file"
+        || (!subscription_observed
+            && crate::codex_api::direct::selected_model_provider(root, model_provider)?["kind"]
+                != "account")
+    {
+        return Ok(None);
+    }
+    Ok(current(root))
+}
 fn authority(root: &Path, profile: &Profile) -> Result<PathBuf> {
     let path = root.join("auth.json");
     if path.exists() {

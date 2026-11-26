@@ -20,6 +20,9 @@ pub struct Event {
     /// displayed provider. Headless rules still read `session_source` only.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub originator: String,
+    /// Native Codex model provider for this process; used for quota badge routing.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub model_provider: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub parent_session: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -524,6 +527,11 @@ pub fn codex(row: &Value) -> Option<Event> {
         },
         originator: if kind == "identity" {
             field(p, &["originator"])
+        } else {
+            String::new()
+        },
+        model_provider: if kind == "identity" {
+            field(p, &["model_provider"])
         } else {
             String::new()
         },
@@ -1074,6 +1082,7 @@ pub struct Activity {
     pub session_source: String,
     pub classification: String,
     pub originator: String,
+    pub model_provider: String,
     pub parent_session: String,
     pub parent_session_path: String,
     pub turn: String,
@@ -1248,6 +1257,9 @@ impl Activity {
         }
         if !e.originator.is_empty() {
             self.originator = e.originator.clone();
+        }
+        if !e.model_provider.is_empty() {
+            self.model_provider = e.model_provider.clone();
         }
         // Events without a signal keep the last one. An Aieyes-internal run stays
         // internal; otherwise the newest process (e.g. an interactive resume) wins.

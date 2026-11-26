@@ -90,6 +90,9 @@ pub struct LiveSession {
     pub source: String,
     pub source_id: String,
     pub provider: String,
+    /// Account key verified for this session's source, used by the desktop pet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_account_key: Option<String>,
     pub machine_id: String,
     pub machine: String,
     pub turn_id: String,
@@ -144,6 +147,8 @@ pub struct LiveSession {
     /// Native launcher identity, used only to select a supported session deep link.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub client: String,
+    #[serde(skip)]
+    pub codex_model_provider: String,
     /// Native ids of this session and of merged child sessions.
     #[serde(skip)]
     pub member_sessions: Vec<String>,
@@ -333,6 +338,7 @@ impl Snapshot {
         let mut usage_members: HashMap<String, Vec<crate::session_usage::UsageMember>> =
             HashMap::new();
         let mut clients: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut model_providers: HashMap<String, HashSet<String>> = HashMap::new();
         let mut processes: HashMap<String, HashSet<(u32, Option<u64>)>> = HashMap::new();
         let mut control_processes: HashMap<String, HashSet<ControlProcess>> = HashMap::new();
         for s in &self.sessions {
@@ -347,6 +353,12 @@ impl Snapshot {
                     .entry(s.id.clone())
                     .or_default()
                     .insert(s.client.clone());
+            }
+            if !s.codex_model_provider.is_empty() {
+                model_providers
+                    .entry(s.id.clone())
+                    .or_default()
+                    .insert(s.codex_model_provider.clone());
             }
             if let Some(pid) = s.pid.filter(|p| *p > 0) {
                 processes
@@ -494,6 +506,12 @@ impl Snapshot {
                 && values.len() == 1
             {
                 session.client = values.into_iter().next().unwrap();
+            }
+            if session.codex_model_provider.is_empty()
+                && let Some(values) = model_providers.remove(&session.id)
+                && values.len() == 1
+            {
+                session.codex_model_provider = values.into_iter().next().unwrap();
             }
             if session.pid.is_none()
                 && let Some(values) = processes.remove(&session.id)
@@ -1168,6 +1186,7 @@ impl Reader {
                 workspace,
                 native_session: session.clone(),
                 client: cursor.activity.originator.clone(),
+                codex_model_provider: cursor.activity.model_provider.clone(),
                 pid: (source.host_id.is_none() && cursor.activity.pid > 0 && alive != Some(false))
                     .then_some(cursor.activity.pid),
                 process_start: (source.host_id.is_none()
@@ -2707,6 +2726,7 @@ impl SessionMonitor {
             &crate::session_interaction::pending_hook_requests(&store.db),
         );
         self.enrich_input_state_keys(&mut snapshot);
+        crate::pets::assign_quota_accounts(&mut snapshot, settings, store);
         self.usage.enrich(&mut snapshot, store, settings);
         snapshot
     }

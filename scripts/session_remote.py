@@ -24,7 +24,7 @@ def trae_helper():
 
 def hook_names(provider):
     return CODEBUDDY if provider=='codebuddy' else CLAUDE if provider=='claude' else CURSOR if provider=='cursor' else ZCODE if provider=='zcode' else AGY
-EVENT_KEYS = {'kind', 'session', 'sessionSource', 'classification', 'originator', 'parentSession', 'parentSessionPath', 'turn', 'record', 'parent', 'call', 'tool', 'at', 'pid', 'processStart', 'fullyIdle', 'failed', 'interrupted', 'notification', 'questionAccepted', 'answeredCalls'}
+EVENT_KEYS = {'kind', 'session', 'sessionSource', 'classification', 'originator', 'modelProvider', 'parentSession', 'parentSessionPath', 'turn', 'record', 'parent', 'call', 'tool', 'at', 'pid', 'processStart', 'fullyIdle', 'failed', 'interrupted', 'notification', 'questionAccepted', 'answeredCalls'}
 
 def text(value):
     return value[:256] if isinstance(value, str) else ''
@@ -401,6 +401,7 @@ def metadata(v, provider, hook):
         if kind=='identity':
             row['sessionSource']=text(p.get('source'))
             if text(p.get('originator')):row['originator']=text(p['originator'])
+            if text(p.get('model_provider')):row['modelProvider']=text(p['model_provider'])
             source=p.get('source')
             if isinstance(source,dict):row['parentSession']=text(((source.get('subagent') or {}).get('thread_spawn') or {}).get('parent_thread_id'))
         return [row]

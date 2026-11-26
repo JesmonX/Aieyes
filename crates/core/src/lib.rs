@@ -556,6 +556,18 @@ impl Engine {
             }
             "autoEstimates.configure" => self.configure_automatic(params),
             "autoEstimates.tick" => self.tick_automatic(),
+            "estimates.history" => {
+                let account = params["accountKey"]
+                    .as_str()
+                    .filter(|key| !key.is_empty())
+                    .context("缺少账户标识")?;
+                Ok(serde_json::to_value(self.store.valuation_history(
+                    account,
+                    models::now(),
+                    params["includeRolling"].as_bool().unwrap_or(false),
+                    params["includeDaily"].as_bool().unwrap_or(true),
+                )?)?)
+            }
             "autoEstimates.rebuild" => {
                 let range = match (params["from"].as_i64(), params["to"].as_i64()) {
                     (None, None) => None,

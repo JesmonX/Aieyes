@@ -165,8 +165,6 @@ import Darwin
         precondition(PetOrbitLayout.preferredEdge(for: PetOrbitLayout.slots(count: 3)[0]) == .minX)
         precondition(PetOrbitLayout.preferredEdge(for: PetOrbitLayout.slots(count: 3)[1]) == .minY)
         precondition(PetOrbitLayout.preferredEdge(for: PetOrbitLayout.slots(count: 3)[2]) == .maxX)
-        var orbitSettings = Settings()
-        orbitSettings.sources = [AgentSource(id: "src-codex-b", name: "Codex B", provider: "codex", accountId: "acct-b")]
         let now = Date(timeIntervalSince1970: 1_000_000)
         let quotaA = Quota(sourceId: "src-a", accountId: "acct-a", provider: "codex", name: "Codex A", updatedAt: 1_000_000, origin: "local",
                            windows: [QuotaWindow(name: "5h", usedPercent: 10, windowMinutes: CoreContract.fiveHourMinutes, resetsAt: 1_003_600)],
@@ -176,20 +174,21 @@ import Darwin
                                      QuotaWindow(name: "7d", usedPercent: 42, windowMinutes: CoreContract.weekMinutes, resetsAt: nil)],
                            bankReset: nil, bankUpdatedAt: nil, plan: "pro", error: nil)
         var s1 = LiveSession(id: "s1", source: "claude", phase: .working, updatedAt: now); s1.provider = "claude"
-        var s2 = LiveSession(id: "s2", source: "codex", phase: .thinking, updatedAt: now); s2.provider = "codex"; s2.sourceId = "src-codex-b"
+        var s2 = LiveSession(id: "s2", source: "codex", phase: .thinking, updatedAt: now); s2.provider = "codex"; s2.quotaAccountKey = "codex:acct-b"
         var s3 = LiveSession(id: "s3", source: "work", phase: .needsInput, updatedAt: now); s3.provider = "chatgpt-work"
         var s4 = LiveSession(id: "s4", source: "cursor", phase: .complete, updatedAt: now); s4.provider = "cursor"
-        let projectedOrbit = PetOrbitStore.project(sessions: [s1, s2, s3, s4], settings: orbitSettings, quotas: [quotaA, quotaB], now: now)
+        let projectedOrbit = PetOrbitStore.project(sessions: [s1, s2, s3, s4], quotas: [quotaA, quotaB], now: now)
         precondition(projectedOrbit.count == 2 && projectedOrbit[0].provider == "codex" && projectedOrbit[0].activeCount == 2 && projectedOrbit[0].phase == SessionPhase.needsInput)
         precondition(projectedOrbit[0].quota?.accountName == "Codex B" && projectedOrbit[0].quota?.summary == "5h 65% (2h) · 7d 58%")
         precondition(projectedOrbit[1].provider == "claude" && projectedOrbit[1].quota == nil)
+        precondition(PetOrbitStore.project(sessions: [s2, s3], quotas: [quotaA], now: now).first?.quota == nil)
         let manyProviders = ["codex", "claude", "antigravity", "cursor", "opencode", "kimi", "qoder", "grok", "pi"]
         let manySessions: [LiveSession] = manyProviders.enumerated().map { idx, prov in
             var s = LiveSession(id: "m-\(idx)", source: prov, phase: prov == "pi" ? .needsInput : .working, updatedAt: now)
             s.provider = prov
             return s
         }
-        let foldedOrbit = PetOrbitStore.project(sessions: manySessions, settings: Settings(), quotas: [], now: now)
+        let foldedOrbit = PetOrbitStore.project(sessions: manySessions, quotas: [], now: now)
         precondition(foldedOrbit.count == PetOrbitLayout.maxSlots && foldedOrbit.last?.isOverflow == true && foldedOrbit.last?.overflowProviders.count == 3 && foldedOrbit.last?.phase == SessionPhase.needsInput)
         let pulseWindow = NSWindow(contentRect: NSRect(x: 220, y: 220, width: 44, height: 44), styleMask: [.titled], backing: .buffered, defer: false)
         pulseWindow.isReleasedWhenClosed = false; pulseWindow.level = .statusBar

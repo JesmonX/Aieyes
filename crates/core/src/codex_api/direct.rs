@@ -129,10 +129,13 @@ fn table(root: &Path, c: &Connection, helper: &Path) -> toml::Value {
 }
 
 pub(crate) fn selected(home: &Path) -> Result<Value> {
+    selected_model_provider(home, None)
+}
+
+pub(crate) fn selected_model_provider(home: &Path, provider: Option<&str>) -> Result<Value> {
     let values = config(&root(home))?;
-    let name = values
-        .get("model_provider")
-        .and_then(toml::Value::as_str)
+    let name = provider
+        .or_else(|| values.get("model_provider").and_then(toml::Value::as_str))
         .unwrap_or("openai");
     let details = values.get("model_providers").and_then(|p| p.get(name));
     let account = name == "openai"

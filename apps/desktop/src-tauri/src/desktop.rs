@@ -961,10 +961,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         let mut pet_asset = Value::Null;
         let mut ring_revision = None;
         let mut quota_ring = None;
-        let mut orbit_context: Option<(
-            aieyes_core::models::Settings,
-            Vec<aieyes_core::models::QuotaSnapshot>,
-        )> = None;
+        let mut orbit_quotas: Option<Vec<aieyes_core::models::QuotaSnapshot>> = None;
         let mut waiting_seeded = false;
         let mut known_waiting = std::collections::HashSet::<String>::new();
         loop {
@@ -1056,12 +1053,12 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                     |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
                 )
                 .ok();
-            if revision != ring_revision || tick.is_multiple_of(30) || orbit_context.is_none() {
+            if revision != ring_revision || tick.is_multiple_of(30) || orbit_quotas.is_none() {
                 if let Ok(ring) = store.menu_quota_ring() {
                     quota_ring = ring;
                 }
-                if let Ok(context) = store.pet_orbit_context() {
-                    orbit_context = Some(context);
+                if let Ok(quotas) = store.pet_orbit_quotas() {
+                    orbit_quotas = Some(quotas);
                 }
                 ring_revision = revision;
             }
@@ -1069,11 +1066,9 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            let orbit_agents = orbit_context
+            let orbit_agents = orbit_quotas
                 .as_ref()
-                .map(|(settings, quotas)| {
-                    aieyes_core::pets::project_orbit(&snapshot, settings, quotas, now_secs)
-                })
+                .map(|quotas| aieyes_core::pets::project_orbit(&snapshot, quotas, now_secs))
                 .unwrap_or_default();
             let quota_ring = quota_ring.clone();
             let supported = if tick.is_multiple_of(15) {

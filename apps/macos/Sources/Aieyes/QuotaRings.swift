@@ -59,7 +59,10 @@ private struct QuotaRingDetail: View {
     let close: () -> Void
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     private var windows: [QuotaWindow] { quota.windows.filter { group == nil || $0.groupLabel == group } }
-    private var groupID: String? { windows.first?.groupId ?? group }
+    private var groupID: String? {
+        guard let group else { return nil }
+        return windows.first?.groupId ?? group
+    }
     private var records: [QuotaEstimate] { model.dashboard.presentationEstimates(account: quota.id).filter { group == nil || $0.groupId == groupID } }
     var body: some View {
         let _ = interfaceLanguage

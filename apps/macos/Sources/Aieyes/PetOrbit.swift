@@ -157,7 +157,6 @@ enum PetOrbitLayout {
         guard let model else { return }
         let next = Self.project(
             sessions: model.live.sessions,
-            settings: model.settings,
             quotas: model.menuDashboard.quotas,
             now: now
         )
@@ -183,7 +182,6 @@ enum PetOrbitLayout {
 
     static func project(
         sessions: [LiveSession],
-        settings: Settings,
         quotas: [Quota],
         now: Date = Date()
     ) -> [PetOrbitAgent] {
@@ -193,7 +191,13 @@ enum PetOrbitLayout {
             var allSameRaw = true
             var phase: SessionPhase
             var activeCount = 0
-            var sourceIds: [String] = []
+            var quotaSession: LiveSession?
+        }
+        func preferredQuotaSession(_ a: LiveSession, _ b: LiveSession?) -> Bool {
+            guard a.quotaAccountKey != nil else { return false }
+            guard let b else { return true }
+            return (phasePriority(a.phase), -(a.turnStartedAt ?? 0), -a.updatedAt.timeIntervalSince1970, a.id)
+                 < (phasePriority(b.phase), -(b.turnStartedAt ?? 0), -b.updatedAt.timeIntervalSince1970, b.id)
         }
         var grouped: [String: Bucket] = [:]
         for session in sessions where session.phase.active {
@@ -204,9 +208,7 @@ enum PetOrbitLayout {
                     bucket.phase = session.phase
                 }
                 if bucket.displayProvider != session.provider { bucket.allSameRaw = false }
-                if !session.sourceId.isEmpty && !bucket.sourceIds.contains(session.sourceId) {
-                    bucket.sourceIds.append(session.sourceId)
-                }
+                if preferredQuotaSession(session, bucket.quotaSession) { bucket.quotaSession = session }
                 grouped[agentId] = bucket
             } else {
                 grouped[agentId] = Bucket(
@@ -215,13 +217,15 @@ enum PetOrbitLayout {
                     allSameRaw: true,
                     phase: session.phase,
                     activeCount: 1,
-                    sourceIds: session.sourceId.isEmpty ? [] : [session.sourceId]
+                    quotaSession: session.quotaAccountKey == nil ? nil : session
                 )
             }
         }
         var items = grouped.values.map { bucket -> PetOrbitAgent in
             let displayProvider = bucket.allSameRaw ? bucket.displayProvider : bucket.agentId
-            let quota = matchQuota(agentId: bucket.agentId, sourceIds: bucket.sourceIds, settings: settings, quotas: quotas, now: now)
+            let quota = (bucket.quotaSession?.quotaAccountKey)
+                .flatMap { key in quotas.first { $0.id == key } }
+                .flatMap { orbitQuota($0, now: now) }
             return PetOrbitAgent(
                 provider: bucket.agentId,
                 displayProvider: displayProvider,
@@ -258,40 +262,15 @@ enum PetOrbitLayout {
         return items
     }
 
-    private static func matchQuota(
-        agentId: String,
-        sourceIds: [String],
-        settings: Settings,
-        quotas: [Quota],
-        now: Date
-    ) -> PetOrbitQuota? {
-        var accountIds: [String] = []
-        for sourceId in sourceIds {
-            if let source = settings.sources.first(where: { $0.id == sourceId }),
-               !source.accountId.isEmpty, !accountIds.contains(source.accountId) {
-                accountIds.append(source.accountId)
-            }
-        }
-        func build(_ quota: Quota) -> PetOrbitQuota? {
-            guard let item = QuotaRingModel.items(quota).first, item.kind != .empty else { return nil }
-            return PetOrbitQuota(
-                accountName: quota.name,
-                provider: quota.provider,
-                kind: item.kind,
-                summary: PetOrbitLayout.formatQuotaSummary(item.kind, now: now),
-                refreshedAt: quota.snapshotAge
-            )
-        }
-        for accountId in accountIds {
-            if let quota = quotas.first(where: { CoreContract.sameAgent($0.provider, agentId) && $0.accountId == accountId }),
-               let built = build(quota) {
-                return built
-            }
-        }
-        return quotas
-            .filter { CoreContract.sameAgent($0.provider, agentId) && !(settings.hideFreeQuotaCards == true && $0.freePlan == true) }
-            .compactMap(build)
-            .first
+    private static func orbitQuota(_ quota: Quota, now: Date) -> PetOrbitQuota? {
+        guard let item = QuotaRingModel.items(quota).first, item.kind != .empty else { return nil }
+        return PetOrbitQuota(
+            accountName: quota.name,
+            provider: quota.provider,
+            kind: item.kind,
+            summary: PetOrbitLayout.formatQuotaSummary(item.kind, now: now),
+            refreshedAt: quota.snapshotAge
+        )
     }
 
     static func activeSessions(for agent: PetOrbitAgent, in sessions: [LiveSession]) -> [LiveSession] {
