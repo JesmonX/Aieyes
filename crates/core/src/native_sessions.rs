@@ -14,8 +14,7 @@ pub(crate) struct State {
     tables: HashMap<String, TableState>,
     /// Observed writers by trajectory/task: `true` for headless or internal runs.
     trae: HashMap<std::path::PathBuf, (String, bool)>,
-    /// Kiro session id → excluded, decided while its process was alive.
-    kiro: HashMap<String, bool>,
+    pub(crate) kiro: kiro::State,
     /// Last complete metadata while extension JSON files are rewritten.
     tasks: HashMap<std::path::PathBuf, tasks::Row>,
     #[cfg(test)]

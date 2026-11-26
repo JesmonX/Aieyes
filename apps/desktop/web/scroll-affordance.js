@@ -37,3 +37,22 @@
   },{passive:false});
   addEventListener('aieyes:language',()=>document.querySelectorAll(SCROLLER).forEach(update));
 })();
+/* Vertical sidebar navigation (aside > nav): fade edges only where items scroll out of view. */
+(() => {
+  const NAV='aside > nav',mounted=new WeakSet();
+  const update=el=>{
+    const max=el.scrollHeight-el.clientHeight,value=[el.scrollTop>1&&'start',el.scrollTop<max-1&&'end'].filter(Boolean).join(' ');
+    if((el.dataset.voverflow??'')!==value){if(value)el.dataset.voverflow=value;else delete el.dataset.voverflow;}
+  };
+  const sizes=new ResizeObserver(rows=>{for(const {target} of rows){if(target.isConnected)update(target);else{sizes.unobserve(target);mounted.delete(target);}}});
+  const mount=node=>{
+    if(node.nodeType!==1)return;
+    for(const el of [...(node.matches(NAV)?[node]:[]),...node.querySelectorAll(NAV)]){if(!mounted.has(el)){mounted.add(el);sizes.observe(el);}update(el);}
+  };
+  new MutationObserver(rows=>{for(const row of rows)row.addedNodes.forEach(mount);}).observe(document.documentElement,{childList:true,subtree:true});
+  document.addEventListener('scroll',event=>{if(event.target instanceof Element&&event.target.matches(NAV))update(event.target);},{capture:true,passive:true});
+  addEventListener('resize',()=>document.querySelectorAll(NAV).forEach(update));
+  addEventListener('aieyes:language',()=>document.querySelectorAll(NAV).forEach(update));
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>mount(document.documentElement));
+  else mount(document.documentElement);
+})();

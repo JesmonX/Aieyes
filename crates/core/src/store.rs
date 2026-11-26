@@ -108,6 +108,7 @@ impl Store {
         CREATE INDEX IF NOT EXISTS events_model ON events(model);
         CREATE INDEX IF NOT EXISTS events_account ON events(provider,account_id);
         CREATE INDEX IF NOT EXISTS events_account_stamp ON events(provider,account_id,stamp);
+        CREATE INDEX IF NOT EXISTS antigravity_request_start ON events(account_id,json_extract(payload,'$.intervalStart'),stamp,model) WHERE provider='antigravity' AND json_extract(payload,'$.intervalEvidence')='antigravity-step-v1';
         CREATE TABLE IF NOT EXISTS event_sources(event_id TEXT NOT NULL REFERENCES events(id),source_id TEXT NOT NULL,PRIMARY KEY(event_id,source_id));
         CREATE INDEX IF NOT EXISTS event_sources_source ON event_sources(source_id,event_id);
         CREATE TABLE IF NOT EXISTS source_identities(source_id TEXT NOT NULL,provider TEXT NOT NULL,account_id TEXT NOT NULL,PRIMARY KEY(source_id,provider,account_id));
@@ -155,6 +156,7 @@ impl Store {
         store.migrate_estimate_tables()?;
         store.migrate_antigravity()?;
         store.migrate_usage_ids()?;
+        store.backfill_antigravity_effort_prices()?;
         store.bootstrap_capacity()?;
         store.prepare_antigravity_group_corrections()?;
         store.repair_history_estimates()?;
@@ -750,7 +752,7 @@ impl Store {
         }
         tx.execute("INSERT INTO kv VALUES('settings',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[serde_json::to_string(s)?])?;
         if !changed_models.is_empty() {
-            self.reprice_in_transaction(s, true, Some(&changed_models))?;
+            self.reprice_in_transaction(s, true, Some(&changed_models), false)?;
         }
         self.mark_wakeup_settings_pending(s)?;
         self.reconcile_estimates(s)?;
@@ -866,7 +868,7 @@ impl Store {
             "INSERT OR REPLACE INTO kv(key,value) VALUES('openrouter-models',?1)",
             [serde_json::to_string(prices)?],
         )?;
-        let repriced = self.reprice_in_transaction(&self.settings()?, true, None)?;
+        let repriced = self.reprice_in_transaction(&self.settings()?, true, None, false)?;
         tx.commit()?;
         Ok(repriced)
     }
@@ -1151,14 +1153,22 @@ impl Store {
             .as_ref()
             .filter(|price| {
                 prior_model.as_deref() == Some(next.model.as_str())
-                    || pricing::find_price(
+                    || pricing::find_usage_price(
+                        &next.provider,
                         &next.model,
                         std::slice::from_ref(*price),
                         &settings.model_mappings,
                     )
                     .is_some()
             })
-            .or_else(|| pricing::find_price(&next.model, prices, &settings.model_mappings));
+            .or_else(|| {
+                pricing::find_usage_price(
+                    &next.provider,
+                    &next.model,
+                    prices,
+                    &settings.model_mappings,
+                )
+            });
         crate::history_counting::observe(self, &mut next, price, settings)?;
         let (cost, covered) = pricing::estimate(&next.tokens, price);
         self.db.execute("INSERT INTO events VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET model=excluded.model,stamp=excluded.stamp,payload=excluded.payload,cost=excluded.cost,priced_tokens=excluded.priced_tokens,price=excluded.price",
@@ -1191,7 +1201,7 @@ impl Store {
     }
     pub fn reprice(&self, settings: &Settings, only_unpriced: bool) -> Result<u64> {
         let tx = self.write_transaction()?;
-        let count = self.reprice_in_transaction(settings, only_unpriced, None)?;
+        let count = self.reprice_in_transaction(settings, only_unpriced, None, false)?;
         tx.commit()?;
         Ok(count)
     }
@@ -1200,12 +1210,33 @@ impl Store {
         settings: &Settings,
         only_unpriced: bool,
         models: Option<&[String]>,
+        agy_efforts_only: bool,
     ) -> Result<u64> {
         let prices = self.prices()?;
-        let mut query = self.db.prepare("SELECT id,payload,price,priced_tokens FROM events WHERE (?1 IS NULL OR id>?1) AND (?2 IS NULL OR model IN (SELECT value FROM json_each(?2))) ORDER BY id LIMIT 512")?;
-        let selected = models.map(serde_json::to_string).transpose()?;
+        let provider_filter = if agy_efforts_only {
+            "AND provider='antigravity'"
+        } else {
+            ""
+        };
+        let mut query = self.db.prepare(&format!("SELECT id,payload,price,priced_tokens FROM events WHERE (?1 IS NULL OR id>?1) {provider_filter} AND (?2 IS NULL OR model IN (SELECT value FROM json_each(?2))) ORDER BY id LIMIT 512"))?;
+        let mut selected = models.map(<[String]>::to_vec);
+        if let (Some(models), Some(selected)) = (models, &mut selected) {
+            let mut variants = self
+                .db
+                .prepare("SELECT DISTINCT model FROM events WHERE provider='antigravity'")?;
+            for model in variants.query_map([], |r| r.get::<_, String>(0))? {
+                let model = model?;
+                if pricing::effort_base(&model, true)
+                    .is_some_and(|base| models.iter().any(|m| m == base))
+                {
+                    selected.push(model);
+                }
+            }
+        }
+        let selected = selected.as_ref().map(serde_json::to_string).transpose()?;
         let mut after: Option<String> = None;
         let mut count = 0;
+        let mut agy_accounts = std::collections::BTreeSet::new();
         loop {
             let rows = query
                 .query_map(params![after, selected], |r| {
@@ -1223,12 +1254,24 @@ impl Store {
             after = rows.last().map(|r| r.0.clone());
             for (id, raw, snapshot, covered) in rows {
                 let e: UsageEvent = serde_json::from_str(&raw)?;
+                if agy_efforts_only && pricing::effort_base(&e.model, true).is_none() {
+                    continue;
+                }
+                if let Some(models) = models
+                    && !crate::providers::antigravity(&e.provider)
+                    && !models.contains(&e.model)
+                {
+                    continue;
+                }
                 if only_unpriced && covered >= e.tokens.total() {
                     continue;
                 }
-                if let Some(current) =
-                    pricing::find_price(&e.model, &prices, &settings.model_mappings)
-                {
+                if let Some(current) = pricing::find_usage_price(
+                    &e.provider,
+                    &e.model,
+                    &prices,
+                    &settings.model_mappings,
+                ) {
                     let mut p = current.clone();
                     if only_unpriced && let Some(raw) = snapshot {
                         let old: ModelPrice = serde_json::from_str(&raw)?;
@@ -1238,6 +1281,9 @@ impl Store {
                         p.cache_write = old.cache_write.or(p.cache_write);
                     }
                     let (c, n) = pricing::estimate(&e.tokens, Some(&p));
+                    if n > covered && crate::providers::antigravity(&e.provider) {
+                        agy_accounts.insert(e.account_id.clone());
+                    }
                     self.db.execute(
                         "UPDATE events SET cost=?1,priced_tokens=?2,price=?3 WHERE id=?4",
                         params![c, n, serde_json::to_string(&p)?, id],
@@ -1252,7 +1298,34 @@ impl Store {
                 }
             }
         }
+        for account in agy_accounts {
+            let prefix = format!("automatic-history.v5:antigravity:{account}:");
+            self.db.execute(
+                "DELETE FROM kv WHERE substr(key,1,length(?1))=?1",
+                [&prefix],
+            )?;
+        }
         Ok(count)
+    }
+
+    fn backfill_antigravity_effort_prices(&self) -> Result<()> {
+        const KEY: &str = "antigravity-effort-prices.v1";
+        let done = || {
+            self.db
+                .query_row("SELECT EXISTS(SELECT 1 FROM kv WHERE key=?1)", [KEY], |r| {
+                    r.get::<_, bool>(0)
+                })
+        };
+        if done()? {
+            return Ok(());
+        }
+        let tx = self.write_transaction()?;
+        if !done()? {
+            self.reprice_in_transaction(&self.settings()?, true, None, true)?;
+            self.db.execute("INSERT INTO kv VALUES(?1,'true')", [KEY])?;
+        }
+        tx.commit()?;
+        Ok(())
     }
     pub fn cursor(&self, source: &str, path: &str) -> Result<Option<(String, u64, ParseState)>> {
         let row: Option<(String, u64, String)> = self
@@ -1968,8 +2041,13 @@ impl Store {
                         snapshot.map(|s| serde_json::from_str(&s)).transpose()?;
                     let gap = gaps.entry(e.model.clone()).or_insert_with(|| PricingGap {
                         model: e.model.clone(),
-                        price_id: pricing::find_price(&e.model, &prices, &settings.model_mappings)
-                            .map(|p| p.id.clone()),
+                        price_id: pricing::find_usage_price(
+                            &e.provider,
+                            &e.model,
+                            &prices,
+                            &settings.model_mappings,
+                        )
+                        .map(|p| p.id.clone()),
                         ..Default::default()
                     });
                     gap.tokens

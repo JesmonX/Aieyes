@@ -1430,6 +1430,18 @@ struct PetInteractionSettingsView: View {
                     .font(AppFont.secondary)
                     .foregroundStyle(.secondary)
 
+                Toggle(
+                    L("在弹窗中审批 Kiro CLI 工具权限"),
+                    isOn: Binding(
+                        get: { store.status.kiroApprovals == true },
+                        set: { value in Task { await store.configure(kiroApprovals: value) } }
+                    )
+                )
+                .disabled(store.saving)
+                Text(L("适用于 Kiro CLI 3.4.0 及更新版本的新 V3 会话。可允许或拒绝本次操作，超时后交还原终端。"))
+                    .font(AppFont.secondary)
+                    .foregroundStyle(.secondary)
+
                 HStack {
                     Toggle(
                         L("允许通过终端适配发送文本"),

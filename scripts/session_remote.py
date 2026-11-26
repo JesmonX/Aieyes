@@ -1268,8 +1268,48 @@ def kiro_process_classification(lock):
     return verdict or ('interactive' if tui else 'headless' if keyed else None)
 
 
+def kiro_pending_approval(path):
+    """Find unresolved V3 tool approvals in the latest complete message records."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return False
+        with path.open('rb') as stream:
+            size = stream.seek(0, os.SEEK_END)
+            offset = max(0, size - _FAST_LINE_LIMIT)
+            stream.seek(offset)
+            data = stream.read(size - offset)
+    except OSError:
+        return False
+    if offset:
+        data = data.partition(b'\n')[2]
+    resolved = set()
+    for line in reversed(data.split(b'\n')[:-1]):
+        try:
+            row = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        payload = row.get('payload') if isinstance(row, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        kind = payload.get('type')
+        if kind in ('session_start', 'turn_start', 'turn_end', 'user'):
+            break
+        if kind not in ('pending_interaction', 'interaction_resolved'):
+            continue
+        call = payload.get('toolCallId')
+        if not isinstance(call, str) or not call:
+            continue
+        consent_round = payload.get('consentRound')
+        key = (call, consent_round if type(consent_round) is int and 0 <= consent_round < 2**64 else None)
+        if kind == 'interaction_resolved':
+            resolved.add(key)
+        elif payload.get('interactionType') == 'tool_approval' and key not in resolved:
+            return True
+    return False
+
+
 def collect_kiro(path, cursors):
-    """Kiro V2 CLI and V3/IDE session metadata only; no message JSONL is read."""
+    """Kiro V2 CLI and V3/IDE metadata and V3 approval lifecycle."""
     root = path.parent if path.name == 'cli' and path.parent.name == 'sessions' else path if path.name == 'sessions' else path / 'sessions'
     if not root.is_dir():
         return [], 0
@@ -1315,6 +1355,8 @@ def collect_kiro(path, cursors):
         parent = text(value.get('parentSessionId')) if v3 and value.get('createdReason') == 'subagent' else ''
         if v3:
             kind = {'in_progress': 'start', 'provisioning': 'start', 'waiting_on_user': 'PermissionRequest', 'completed': 'complete', 'idle': 'complete', 'failed': 'failed'}.get(value.get('status'), 'unknown')
+            if value.get('status') == 'in_progress' and kiro_pending_approval(file.with_name('messages.jsonl')):
+                kind = 'PermissionRequest'
         else:
             metadata = (value.get('session_state') or {}).get('conversation_metadata') or {}
             last = (metadata.get('user_turn_metadatas') or [{}])[-1]

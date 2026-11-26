@@ -665,7 +665,8 @@ impl Engine {
             let prices = self.store.prices()?;
             let mut rows: Vec<Value> = info["models"].as_array().cloned().unwrap_or_default();
             for row in &mut rows {
-                let price = pricing::find_price(
+                let price = pricing::find_usage_price(
+                    &source.provider,
                     row["id"].as_str().unwrap_or(""),
                     &prices,
                     &settings.model_mappings,

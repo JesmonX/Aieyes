@@ -2,18 +2,30 @@
 //! kiro-cli's default (V2) engine writes `sessions/cli/<id>.json`, plus
 //! `<id>.lock` naming the live process; kiro-cli V3 and the IDE write
 //! `sessions/<workspace>/sess_<id>/session.json` beside `messages.jsonl`.
-//! Only ids, status, parent links and the working directory are read;
-//! prompts and replies never leave memory.
+//! Session metadata and V3 interaction events determine activity. Prompts
+//! and replies are never included in the activity rows.
 use super::Activity;
-use crate::session_events::{HEADLESS, INTERACTIVE, INTERNAL};
+use crate::{
+    session_events::{HEADLESS, INTERACTIVE, INTERNAL},
+    sessions::ControlProcess,
+};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
 
 /// Directory entries visited per listing; Kiro never prunes old sessions.
 const MAX_ENTRIES: usize = 4096;
+const MESSAGE_TAIL: u64 = 2 * 1024 * 1024;
+
+#[derive(Clone, Default)]
+pub(crate) struct State {
+    // Keep a V2 headless/internal verdict after its process exits.
+    verdicts: HashMap<String, bool>,
+    pub(crate) approval_processes: HashMap<String, ControlProcess>,
+}
 
 /// Kiro's home: `$KIRO_HOME` when set, else `~/.kiro`.
 pub(crate) fn home() -> PathBuf {
@@ -107,6 +119,16 @@ fn recent(dir: &Path, now: u64) -> Vec<(PathBuf, u64)> {
 /// loses its lock (its process starts or exits).
 pub(crate) fn fingerprint(dir: &Path) -> String {
     let files = recent(dir, crate::models::now() as u64);
+    // A transcript can change even when session.json has the newer mtime.
+    let messages: Vec<_> = files
+        .iter()
+        .filter(|(path, _)| v3(path))
+        .map(|(path, _)| {
+            std::fs::metadata(path.with_file_name("messages.jsonl"))
+                .ok()
+                .map(|meta| (meta.len(), meta.modified().ok()))
+        })
+        .collect();
     let mut locks: Vec<_> = entries(&dir.join("cli"))
         .map(|e| e.file_name())
         .filter(|n| n.to_string_lossy().ends_with(".lock"))
@@ -115,7 +137,7 @@ pub(crate) fn fingerprint(dir: &Path) -> String {
     format!(
         "kiro:{}:{}",
         files.len(),
-        crate::models::hash(&format!("{files:?}{locks:?}"))
+        crate::models::hash(&format!("{files:?}{messages:?}{locks:?}"))
     )
 }
 
@@ -150,10 +172,10 @@ fn canonical(path: &Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_owned())
 }
 
-/// `<id>.lock` beside a V2 session while its process runs: `{pid, started_at}`.
+/// V2 `<id>.lock` or V3 `.lock` beside a live session: `{pid, started_at}`.
 fn lock(path: &Path) -> Option<(u32, Option<i64>)> {
-    let path = path.with_extension("lock");
-    if std::fs::metadata(&path).ok()?.len() > 4096 {
+    let meta = path.symlink_metadata().ok()?;
+    if !meta.is_file() || meta.len() > 4096 {
         return None;
     }
     let v: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
@@ -163,6 +185,58 @@ fn lock(path: &Path) -> Option<(u32, Option<i64>)> {
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|t| t.timestamp());
     Some((pid, started))
+}
+
+pub(crate) fn tui_argv(argv: &[String]) -> bool {
+    argv.iter().take(4).any(|a| {
+        let a = a.replace('\\', "/");
+        a.ends_with("/tui.js") && a.contains("kiro")
+    })
+}
+
+/// The V3 session lock names the TUI process, which owns the terminal.
+fn approval_process(path: &Path) -> Option<ControlProcess> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let (pid, started) = lock(&path.with_file_name(".lock"))?;
+    let locked_at = u64::try_from(started?).ok()?;
+    let mut system = System::new();
+    let id = Pid::from_u32(pid);
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[id]),
+        true,
+        ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
+    );
+    let process = system.process(id)?;
+    let start = process.start_time();
+    if start == 0 || start > locked_at {
+        return None;
+    }
+    let argv = process
+        .cmd()
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    tui_argv(&argv).then_some(ControlProcess { pid, start })
+}
+
+pub(crate) fn owns_approval_hook(dir: &Path, native: &str, process: ControlProcess) -> bool {
+    entries(dir).any(|workspace| {
+        if !workspace.file_type().is_ok_and(|kind| kind.is_dir()) {
+            return false;
+        }
+        let path = workspace.path().join(native).join("session.json");
+        if !path
+            .parent()
+            .is_some_and(|p| p.symlink_metadata().is_ok_and(|m| m.is_dir()))
+        {
+            return false;
+        }
+        approval_process(&path) == Some(process)
+            && crate::task_history::read(&path)
+                .ok()
+                .and_then(|value| id(&value, &path))
+                .is_some_and(|id| id == native)
+    })
 }
 
 /// One process from a session's lock holder upward. Only whether
@@ -186,13 +260,7 @@ pub(crate) fn chain_verdict(chain: &[Link]) -> Option<&'static str> {
     {
         return Some(verdict);
     }
-    let tui = |argv: &[String]| {
-        argv.iter().take(4).any(|a| {
-            let a = a.replace('\\', "/");
-            a.ends_with("/tui.js") && a.contains("kiro")
-        })
-    };
-    if chain.iter().any(|l| tui(&l.argv)) {
+    if chain.iter().any(|l| tui_argv(&l.argv)) {
         return Some(INTERACTIVE);
     }
     chain.iter().any(|l| l.api_key).then_some(HEADLESS)
@@ -273,9 +341,61 @@ fn v2_kind(v: &Value) -> &'static str {
     }
 }
 
-/// V3 / IDE `status`.
-fn v3_kind(v: &Value) -> &'static str {
+/// V3 CLI can leave `status` in progress while a tool approval is on screen.
+fn has_pending_approval(path: &Path) -> std::io::Result<bool> {
+    if !path.symlink_metadata()?.is_file() {
+        return Ok(false);
+    }
+    let mut file = std::fs::File::open(path)?;
+    let size = file.metadata()?.len();
+    let offset = size.saturating_sub(MESSAGE_TAIL);
+    file.seek(SeekFrom::Start(offset))?;
+    let mut data = Vec::new();
+    file.take(size - offset).read_to_end(&mut data)?;
+    let data = if offset > 0 {
+        data.splitn(2, |b| *b == b'\n').nth(1).unwrap_or_default()
+    } else {
+        &data
+    };
+    let Some(end) = data.iter().rposition(|b| *b == b'\n') else {
+        return Ok(false);
+    };
+    let mut resolved = HashSet::new();
+    for line in data[..end].rsplit(|b| *b == b'\n') {
+        let Ok(row) = serde_json::from_slice::<Value>(line) else {
+            continue;
+        };
+        let payload = &row["payload"];
+        let kind = payload["type"].as_str();
+        if matches!(
+            kind,
+            Some("session_start" | "turn_start" | "turn_end" | "user")
+        ) {
+            break;
+        }
+        if !matches!(kind, Some("pending_interaction" | "interaction_resolved")) {
+            continue;
+        }
+        let Some(call) = payload["toolCallId"].as_str().filter(|id| !id.is_empty()) else {
+            continue;
+        };
+        let key = (call.to_owned(), payload["consentRound"].as_u64());
+        if kind == Some("interaction_resolved") {
+            resolved.insert(key);
+        } else if payload["interactionType"] == "tool_approval" && !resolved.contains(&key) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn v3_kind(v: &Value, path: &Path) -> &'static str {
     match v["status"].as_str() {
+        Some("in_progress")
+            if has_pending_approval(&path.with_file_name("messages.jsonl")).unwrap_or(false) =>
+        {
+            "PermissionRequest"
+        }
         Some("in_progress" | "provisioning") => "start",
         Some("waiting_on_user") => "PermissionRequest",
         Some("completed" | "idle") => "complete",
@@ -288,8 +408,9 @@ fn v3_kind(v: &Value) -> &'static str {
 /// process is headless or Aieyes' are skipped; `verdicts` keeps that decision
 /// after the process exits. A session never seen running carries no signal
 /// and counts. V3 subagents fold into their parent session.
-pub(crate) fn read(dir: &Path, now: u64, verdicts: &mut HashMap<String, bool>) -> Vec<Activity> {
+pub(crate) fn read(dir: &Path, now: u64, state: &mut State) -> Vec<Activity> {
     let probe = canonical(&probe_dir());
+    state.approval_processes.clear();
     let mut seen = HashMap::new();
     let mut out = vec![];
     for (path, at) in recent(dir, now) {
@@ -301,14 +422,14 @@ pub(crate) fn read(dir: &Path, now: u64, verdicts: &mut HashMap<String, bool>) -
         };
         let v3 = v3(&path);
         let live = (!v3)
-            .then(|| lock(&path))
+            .then(|| lock(&path.with_extension("lock")))
             .flatten()
             .and_then(|(pid, started)| live_verdict(pid, started));
-        let skip = verdicts.get(&id).copied().unwrap_or(false)
+        let skip = state.verdicts.get(&id).copied().unwrap_or(false)
             || cwd(&v).is_some_and(|c| canonical(Path::new(c)) == probe)
             || match live {
                 Some(verdict) => verdict != INTERACTIVE,
-                None => verdicts.get(&id).copied().unwrap_or(false),
+                None => false,
             };
         seen.insert(id.clone(), skip);
         if skip {
@@ -331,13 +452,19 @@ pub(crate) fn read(dir: &Path, now: u64, verdicts: &mut HashMap<String, bool>) -
             } else {
                 ""
             };
-            (v3_kind(&v), parent.to_owned())
+            (v3_kind(&v, &path), parent.to_owned())
         } else {
             (v2_kind(&v), String::new())
         };
+        if v3
+            && kind == "PermissionRequest"
+            && let Some(process) = approval_process(&path)
+        {
+            state.approval_processes.insert(id.clone(), process);
+        }
         out.push((id.clone(), id, kind.into(), at, parent));
     }
-    *verdicts = seen;
+    state.verdicts = seen;
     out
 }
 
@@ -433,8 +560,8 @@ mod tests {
         );
         assert_eq!(files(&sessions).len(), 8);
 
-        let mut verdicts = HashMap::new();
-        let rows = read(&sessions, crate::models::now() as u64, &mut verdicts);
+        let mut state = State::default();
+        let rows = read(&sessions, crate::models::now() as u64, &mut state);
         let mut rows: Vec<_> = rows
             .iter()
             .map(|r| (r.0.as_str(), r.2.as_str(), r.4.as_str()))
@@ -450,9 +577,9 @@ mod tests {
                 ("sess_y", "complete", "sess_x"),
             ]
         );
-        assert_eq!(verdicts.get("probe"), Some(&true));
-        assert_eq!(verdicts.get("sess_z"), Some(&true));
-        assert_eq!(verdicts.get("s1"), Some(&false));
+        assert_eq!(state.verdicts.get("probe"), Some(&true));
+        assert_eq!(state.verdicts.get("sess_z"), Some(&true));
+        assert_eq!(state.verdicts.get("s1"), Some(&false));
 
         let before = fingerprint(&sessions);
         assert!(before.starts_with("kiro:7:"));
@@ -484,9 +611,9 @@ mod tests {
             json!({"id":"future","status":"new_status"}),
         );
 
-        let mut verdicts = HashMap::new();
+        let mut state = State::default();
         let now = crate::models::now() as u64;
-        let mut rows: Vec<_> = read(&sessions, now, &mut verdicts)
+        let mut rows: Vec<_> = read(&sessions, now, &mut state)
             .into_iter()
             .map(|r| (r.0, r.2))
             .collect();
@@ -505,7 +632,7 @@ mod tests {
             &path("empty"),
             json!({"id":"empty","status":"waiting_on_user"}),
         );
-        assert_eq!(read(&sessions, now, &mut verdicts).len(), 5);
+        assert_eq!(read(&sessions, now, &mut state).len(), 5);
     }
 
     #[test]
@@ -628,10 +755,10 @@ mod tests {
             &sessions.join("cli/plain.lock"),
             json!({"pid":std::process::id()}),
         );
-        let mut verdicts = HashMap::new();
+        let mut state = State::default();
         let now = crate::models::now() as u64;
-        let ids = |verdicts: &mut HashMap<String, bool>| {
-            let mut ids: Vec<_> = read(&sessions, now, verdicts)
+        let ids = |state: &mut State| {
+            let mut ids: Vec<_> = read(&sessions, now, state)
                 .into_iter()
                 .map(|r| r.0)
                 .collect();
@@ -643,7 +770,7 @@ mod tests {
         // classification or post-exit persistence assertions.
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            let observed = ids(&mut verdicts);
+            let observed = ids(&mut state);
             if observed == ["plain"] {
                 break;
             }
@@ -661,13 +788,13 @@ mod tests {
         child.0.wait().unwrap();
         std::fs::remove_file(sessions.join("cli/run.lock")).unwrap();
         assert_eq!(
-            ids(&mut verdicts),
+            ids(&mut state),
             ["plain"],
             "the verdict outlives the process"
         );
-        verdicts.clear();
+        state.verdicts.clear();
         assert_eq!(
-            ids(&mut verdicts),
+            ids(&mut state),
             ["plain", "run"],
             "never seen running: counted"
         );

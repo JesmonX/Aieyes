@@ -1,7 +1,7 @@
 //! AskUserQuestion and opt-in tool approval replies use Claude's PermissionRequest hook contract,
 //! MCP forms its Elicitation hook contract.
 //! Qoder CLI ships the same tools, transcript and hook contracts, so it shares this path.
-//! CodeBuddy and ZCode take the allow / deny part of the PermissionRequest contract only.
+//! CodeBuddy, ZCode and Kiro take the allow / deny part of the PermissionRequest contract only.
 //! The observer hooks remain metadata-only; these separate hooks are opt-in (Feishu or Desktop Interaction).
 //! A held request lives in `channel_claude_requests` until its helper delivers the reply; the
 //! tool input and the answer are erased at that moment.
@@ -104,7 +104,7 @@ fn profile(provider: &str) -> Option<Profile> {
     match provider {
         "claude" | "qoder" | "qoder-cn" => Some(Profile::CLAUDE),
         // ZCode's schema accepts `interrupt` on a deny, but nothing in ZCode reads it.
-        "codebuddy" | "zcode" => Some(basic),
+        "codebuddy" | "zcode" | "kiro" => Some(basic),
         _ => None,
     }
 }
@@ -399,7 +399,7 @@ fn submit(
     ensure!(
         // The monitor binds no process of its own to agents that run inside a generic runtime;
         // their helper recorded the agent process it runs under.
-        (target.process == process || !hooked(req.provider()))
+        (target.process == process || !hooked(req.provider()) && req.provider() != "kiro")
             && req.pid > 0
             && req.process_start > 0
             && crate::sessions::process_matches(req.pid, req.process_start),
@@ -515,7 +515,16 @@ pub(crate) fn answer_pending_approval(
 ) -> Outcome {
     let attempt = (|| -> Result<Outcome> {
         ensure!(req.kind == "approval", "不支持的审批操作");
-        let response = card::reply(decision, reason)?;
+        let mut response = card::reply(decision, reason)?;
+        if req.provider() == "kiro" {
+            ensure!(
+                crate::session_interaction::config(&store.db)?.approvals_for("kiro"),
+                "桌宠快捷交互已关闭，可在设置中开启"
+            );
+            response["hookSpecificOutput"] = json!({
+                "decision": response["hookSpecificOutput"]["decision"]
+            });
+        }
         let confirmed = submit(
             store,
             req,
@@ -639,6 +648,16 @@ struct Site {
 }
 
 fn site(source: &Source) -> Option<Site> {
+    if source.provider == "kiro" {
+        let home = crate::native_sessions::kiro::directory(&source.path)?
+            .parent()?
+            .to_owned();
+        return Some(Site {
+            config: home.join("hooks/aieyes-desktop-approval.json"),
+            home,
+            zcode: false,
+        });
+    }
     if hooked(&source.provider) {
         return home(source).map(|home| Site {
             config: home.join("settings.json"),
@@ -656,6 +675,38 @@ fn site(source: &Source) -> Option<Site> {
     })
 }
 
+pub(crate) fn validate_kiro_approval_setup(settings: &crate::models::Settings) -> Result<()> {
+    ensure!(
+        settings.sources.iter().any(|s| s.provider == "kiro"
+            && s.host_id.is_none()
+            && settings.source_enabled(s)
+            && site(s).is_some()),
+        "请先启用本机 Kiro CLI 会话来源"
+    );
+    let mut command = crate::process::cli_command_with_pre_command(
+        "kiro-cli",
+        &["--version"],
+        if cfg!(unix) { ":" } else { "" },
+        "",
+    );
+    command.env("KIRO_NO_AUTO_UPDATE", "1");
+    let output = crate::process::run(command, vec![], Duration::from_secs(3)).unwrap_or_default();
+    ensure!(
+        kiro_approval_version(&String::from_utf8_lossy(&output)),
+        "弹窗审批需要本机 Kiro CLI 3.4.0 或更新版本"
+    );
+    Ok(())
+}
+
+fn kiro_approval_version(output: &str) -> bool {
+    let Some(version) = output.trim().strip_prefix("kiro-cli ") else {
+        return false;
+    };
+    let mut parts = version.split('.').map(str::parse::<u32>);
+    matches!((parts.next(), parts.next(), parts.next()),
+        (Some(Ok(major)), Some(Ok(minor)), Some(Ok(_))) if (major, minor) >= (3, 4))
+}
+
 fn owned(handler: &Value) -> bool {
     handler["command"]
         .as_str()
@@ -664,6 +715,26 @@ fn owned(handler: &Value) -> bool {
             args.iter()
                 .any(|a| a.as_str().is_some_and(|s| s.contains(MARKER)))
         })
+}
+
+fn reconcile_kiro(value: &mut Value, enabled: bool, command: &str) -> Result<()> {
+    ensure!(
+        value.is_object()
+            && (value["version"].is_null() || value["version"] == "v1")
+            && (value["hooks"].is_null() || value["hooks"].is_array()),
+        "hooks 配置格式无效，原配置已保留"
+    );
+    let mut rows = value["hooks"].as_array().cloned().unwrap_or_default();
+    rows.retain(|row| !owned(&row["action"]));
+    if enabled {
+        rows.push(json!({
+            "name":"Aieyes Desktop Approval", "trigger":"PermissionRequest",
+            "timeout":SEQUENTIAL_HOLD + 15, "action":{"type":"command","command":command}
+        }));
+    }
+    value["version"] = json!("v1");
+    value["hooks"] = json!(rows);
+    Ok(())
 }
 
 /// `(event, matcher, timeout in seconds)` of the hooks this configuration asks for.
@@ -852,7 +923,11 @@ pub(crate) fn sync_hooks(store: &Store) -> Result<()> {
             &source.provider,
             feishu,
             desktop_questions,
-            desktop_approvals,
+            if source.provider == "kiro" {
+                dc.approvals_for("kiro")
+            } else {
+                desktop_approvals
+            },
         );
         if let Err(error) = sync_site(store, source, &site, &entries, &mut helper) {
             failure.get_or_insert(error);
@@ -869,6 +944,7 @@ fn sync_site(
     helper: &mut Option<Helper>,
 ) -> Result<()> {
     let path = &site.config;
+    let kiro = source.provider == "kiro";
     if !site.home.is_dir() || fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
         return Ok(());
     }
@@ -904,10 +980,14 @@ fn sync_site(
                 &helper.as_ref().unwrap().path(&folder),
                 &store.root,
                 &source.id,
-                site.zcode,
+                site.zcode || kiro,
             )?
         };
-        reconcile(&mut value, site.zcode, entries, &command)?;
+        if kiro {
+            reconcile_kiro(&mut value, !entries.is_empty(), &command)?;
+        } else {
+            reconcile(&mut value, site.zcode, entries, &command)?;
+        }
         Ok((value != before)
             .then(|| serde_json::to_vec_pretty(&value))
             .transpose()?)
@@ -953,6 +1033,9 @@ fn sync_site(
     if let Ok(meta) = fs::metadata(path) {
         fs::set_permissions(&tmp, meta.permissions())?;
     }
+    if kiro {
+        fs::create_dir_all(site.home.join("hooks"))?;
+    }
     fs::rename(tmp, path)?;
     Ok(())
 }
@@ -984,6 +1067,15 @@ pub(crate) fn hook_summary(store: &Store) -> Value {
             &config["hooks"]
         };
         let matcher = |event: &str| {
+            if source.provider == "kiro" {
+                return config["hooks"].as_array().and_then(|rows| {
+                    rows.iter()
+                        .any(|r| {
+                            r["trigger"] == event && r["enabled"] != false && owned(&r["action"])
+                        })
+                        .then(|| "*".to_owned())
+                });
+            }
             events[event].as_array().and_then(|rows| {
                 rows.iter().find_map(|row| {
                     row["hooks"]
@@ -1048,6 +1140,9 @@ fn valid_native(provider: &str, id: &str) -> bool {
     if hooked(provider) {
         return codex::valid_id(id);
     }
+    if provider == "kiro" && !id.starts_with("sess_") {
+        return false;
+    }
     (1..=128).contains(&id.len())
         && id
             .bytes()
@@ -1077,7 +1172,15 @@ fn agent_process(provider: &str) -> (u32, u64, Option<&'static str>) {
             .map(|s| s.to_string_lossy().into_owned())
             .collect();
         // The helper and the shell that launched it name the agent's directory too.
-        if !argv.iter().any(|a| a.contains(MARKER))
+        if provider == "kiro" && crate::native_sessions::kiro::tui_argv(&argv) {
+            return (
+                pid.as_u32(),
+                process.start_time(),
+                Some(crate::session_events::INTERACTIVE),
+            );
+        }
+        if provider != "kiro"
+            && !argv.iter().any(|a| a.contains(MARKER))
             && crate::session_events::is_program(provider, &argv)
         {
             return (
@@ -1140,8 +1243,7 @@ fn hold(root: &Path, source_id: &str) -> Result<()> {
     let desktop_q_alive = dc.enabled
         && (dc.claude_questions || dc.claude_approvals)
         && desktop_alive(&store, DESKTOP_QUESTION_TTL);
-    let desktop_a_alive =
-        dc.enabled && dc.claude_approvals && desktop_alive(&store, DESKTOP_APPROVAL_TTL);
+    let desktop_a_alive = dc.approvals_for(provider) && desktop_alive(&store, DESKTOP_APPROVAL_TTL);
     let desktop_form_alive = dc.enabled
         && (dc.claude_questions || dc.claude_approvals)
         && desktop_alive(&store, DESKTOP_APPROVAL_TTL);
@@ -1178,6 +1280,18 @@ fn hold(root: &Path, source_id: &str) -> Result<()> {
         pid > 0 && start > 0 && verdict != Some(crate::session_events::HEADLESS),
         "not an interactive agent process"
     );
+    if provider == "kiro" {
+        let dir = crate::native_sessions::kiro::directory(&installed.path)
+            .context("source unavailable")?;
+        ensure!(
+            crate::native_sessions::kiro::owns_approval_hook(
+                &dir,
+                native,
+                crate::sessions::ControlProcess { pid, start }
+            ),
+            "source or Kiro session process mismatch"
+        );
+    }
     let session_id = crate::models::hash(&format!("local:{provider}:{native}"));
     // A copied hook must never bind a different source's native session.
     let bound = if hooked(provider) {
@@ -1327,10 +1441,18 @@ fn hold(root: &Path, source_id: &str) -> Result<()> {
         }
         _ => {
             // The hash covers the whole input; what is stored is only what a card can show.
-            let hash = approval_hash(tool_name, raw);
             let mut budget = STORE_BUDGET;
             let (stored, truncated) = card::display_copy(raw, &mut budget);
             meta["truncated"] = json!(truncated);
+            let hash = if provider == "kiro" {
+                let permission = &input["permission"];
+                let (display, cut) = card::display_copy(permission, &mut budget);
+                meta["permission"] = display;
+                meta["truncated"] = json!(truncated || cut);
+                approval_hash(tool_name, &json!({"input":raw,"permission":permission}))
+            } else {
+                approval_hash(tool_name, raw)
+            };
             if profile.suggestions {
                 meta["suggestions"] = json!(card::suggestions(&input["permission_suggestions"]));
             }
@@ -1432,7 +1554,7 @@ fn hold(root: &Path, source_id: &str) -> Result<()> {
                             || desktop(DESKTOP_QUESTION_TTL)
                     }
                     "elicitation" => desktop(DESKTOP_APPROVAL_TTL),
-                    _ => dc.claude_approvals && desktop(DESKTOP_APPROVAL_TTL),
+                    _ => dc.approvals_for(provider) && desktop_alive(&store, DESKTOP_APPROVAL_TTL),
                 };
             if !still_active {
                 break;

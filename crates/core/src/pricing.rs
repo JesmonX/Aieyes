@@ -168,6 +168,24 @@ pub fn find_price<'a>(
     prices: &'a [ModelPrice],
     mappings: &std::collections::BTreeMap<String, String>,
 ) -> Option<&'a ModelPrice> {
+    find_usage_price("", model, prices, mappings)
+}
+
+pub(crate) fn effort_base(model: &str, agy: bool) -> Option<&str> {
+    let name = model.rsplit('/').next()?;
+    let (base, effort) = name.rsplit_once('-')?;
+    let standard = matches!(effort, "minimal" | "low" | "medium" | "high");
+    let supported = (standard && base.starts_with("gemini-"))
+        || (agy && matches!(effort, "low" | "medium" | "high" | "xhigh" | "max"));
+    (supported && !base.is_empty()).then(|| &model[..model.len() - effort.len() - 1])
+}
+
+pub(crate) fn find_usage_price<'a>(
+    provider: &str,
+    model: &str,
+    prices: &'a [ModelPrice],
+    mappings: &std::collections::BTreeMap<String, String>,
+) -> Option<&'a ModelPrice> {
     if crate::antigravity::unknown_model(model) {
         return None;
     }
@@ -175,14 +193,44 @@ pub fn find_price<'a>(
         if mappings.contains_key(model) {
             return None;
         }
-        let name = model.rsplit('/').next()?;
-        let (base, effort) = name.rsplit_once('-')?;
-        if !base.starts_with("gemini-") || !matches!(effort, "minimal" | "low" | "medium" | "high")
-        {
+        let agy = crate::providers::antigravity(provider);
+        let base = effort_base(model, agy)?;
+        if let Some(price) = exact_price(base, prices, mappings) {
+            return Some(price);
+        }
+        if !agy || mappings.contains_key(base) {
             return None;
         }
-        let base_model = &model[..model.len() - effort.len() - 1];
-        exact_price(base_model, prices, mappings)
+        // AGY can spell a decimal version with a hyphen (e.g. Opus 5-5).
+        // Match identical slugs and namespaces, with only numeric dots normalized.
+        let mut candidates = prices.iter().filter(|p| {
+            let id = if base.contains('/') {
+                &p.id
+            } else if let Some((_, name)) = p.id.split_once('/') {
+                name
+            } else {
+                &p.id
+            };
+            let bytes = id.as_bytes();
+            !id.contains(':')
+                && bytes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &b)| {
+                        if b == b'.'
+                            && i > 0
+                            && bytes[i - 1].is_ascii_digit()
+                            && bytes.get(i + 1).is_some_and(u8::is_ascii_digit)
+                        {
+                            b'-'
+                        } else {
+                            b
+                        }
+                    })
+                    .eq(base.bytes())
+        });
+        let first = candidates.next()?;
+        candidates.next().is_none().then_some(first)
     })
 }
 
@@ -543,6 +591,56 @@ impl crate::Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agy_effort_uses_an_unambiguous_base_tariff_across_model_families() {
+        let prices = [
+            "anthropic/claude-opus-5.5",
+            "anthropic/claude-opus-5.5:batch",
+            "google/gemini-4-neon",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-120b-high",
+            "custom/model",
+            "openai/gpt-5.5",
+            "other/gpt-5.5",
+        ]
+        .map(|id| ModelPrice {
+            id: id.into(),
+            ..Default::default()
+        });
+        let mut mappings = std::collections::BTreeMap::new();
+        for (model, index) in [
+            ("claude-opus-5-5-max", Some(0)),
+            ("anthropic/claude-opus-5-5-low", Some(0)),
+            ("gemini-4-neon-xhigh", Some(2)),
+            ("gpt-oss-120b-medium", Some(3)),
+            ("gpt-oss-120b-high", Some(4)),
+            ("model-max", Some(5)),
+            ("gpt-5-5-low", None),
+            ("openai/gpt-5-5-low", Some(6)),
+            ("claude-opus-5-5-preview", None),
+            ("claude-opus-5-4-max", None),
+            ("antigravity-unknown-5-high", None),
+        ] {
+            assert_eq!(
+                find_usage_price("antigravity", model, &prices, &mappings).map(|p| &p.id),
+                index.map(|i| &prices[i].id),
+                "{model}"
+            );
+        }
+        assert!(find_price("gpt-oss-120b-medium", &prices, &mappings).is_none());
+        mappings.insert("claude-opus-5-5".into(), prices[5].id.clone());
+        assert_eq!(
+            find_usage_price("antigravity", "claude-opus-5-5-high", &prices, &mappings)
+                .unwrap()
+                .id,
+            prices[5].id
+        );
+        mappings.insert("claude-opus-5-5-high".into(), "missing".into());
+        assert!(
+            find_usage_price("antigravity", "claude-opus-5-5-high", &prices, &mappings).is_none()
+        );
+    }
 
     #[test]
     fn gemini_effort_uses_the_base_tariff_after_exact_resolution() {

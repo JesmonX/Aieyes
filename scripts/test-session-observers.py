@@ -55,6 +55,28 @@ class ObserverTests(unittest.TestCase):
             self.assertEqual(next(r for r in rows if r['identity'] == 'work')['events'][0]['classification'], 'headless')
             self.assertEqual(m.collect_kiro(root / 'empty', {}), ([], 0))
 
+    def test_kiro_v3_transcript_exposes_only_the_current_pending_approval_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            session = root / 'sessions/workspace/sess_cli/session.json'
+            session.parent.mkdir(parents=True)
+            session.write_text(json.dumps(dict(status='in_progress')))
+            messages = session.with_name('messages.jsonl')
+            pending = dict(type='pending_interaction', interactionType='tool_approval',
+                           toolCallId='call-read', consentRound=1, question='PRIVATE')
+            resolved = dict(type='interaction_resolved', toolCallId='call-read', consentRound=1)
+            for events, expected in [
+                ([pending, dict(type='session_metadata')], 'PermissionRequest'),
+                ([pending, resolved], 'start'),
+                ([pending, dict(type='turn_end')], 'start'),
+                ([pending, dict(type='turn_start')], 'start'),
+            ]:
+                with self.subTest(events=events):
+                    messages.write_text(''.join(json.dumps(dict(payload=event)) + '\n' for event in events))
+                    rows, _ = m.collect_kiro(root, {})
+                    self.assertEqual(rows[0]['events'][-1]['kind'], expected)
+                    self.assertNotIn('PRIVATE', json.dumps(rows))
+
     def test_trae_remote_sessions_match_projects_and_keep_task_verdicts(self):
         helper = m.trae_helper()
         with tempfile.TemporaryDirectory() as directory:

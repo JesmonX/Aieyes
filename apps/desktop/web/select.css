@@ -14,7 +14,7 @@
 .form-row > .win-select,label > .win-select,.account-config > label > .win-select { width:100%; }
 .form-row > .win-select > select,label > .win-select > select { width:100%; }
 .filters > .win-select { flex:0 1 auto; width:auto; max-width:230px; }
-.filters .win-select-trigger,.range-controls .win-select-trigger { font-size:var(--font-secondary); line-height:var(--line-secondary); }
+.filters .win-select-trigger,.range-controls .win-select-trigger { font-size:var(--font-secondary); line-height:max(var(--line-secondary),1.285em); }
 .panel-body .filters > .win-select { max-width:calc((100% - var(--space-control)) / 2); }
 .panel-body .filters .win-select > select { max-width:100%; width:100%; }
 .win-select-menu {
@@ -22,7 +22,7 @@
   border:1px solid var(--border); border-radius:var(--radius-overlay);
   background:var(--solid); color:var(--ink); box-sizing:border-box;
   overflow:auto; overscroll-behavior:contain; scrollbar-width:thin;
-  font-family:var(--font-ui); font-size:var(--font-secondary); line-height:var(--line-body);
+  font-family:var(--font-ui); font-size:var(--font-secondary); line-height:max(var(--line-body),1.33em);
   max-height:234px; z-index:100; outline:none;
 }
 .win-select-option { display:flex; align-items:center; gap:8px; min-height:28px; padding:4px 8px; border-radius:var(--radius-control); cursor:pointer; }

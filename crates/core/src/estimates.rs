@@ -811,7 +811,7 @@ impl Store {
         &self,
         e: &mut EstimateCommon,
         group: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<Option<i64>> {
         let key = e.account_key.clone();
         let (provider, account) = key.split_once(':').context("账户格式错误")?;
         e.cost = 0.0;
@@ -827,6 +827,8 @@ impl Store {
         let mut boundary = false;
         let mut unmapped_group = false;
         let mut unknown_account = None;
+        let mut first_agy_request = None;
+        let mut agy_request_coverage = true;
         // EXISTS avoids multiplying events observed through several selected sources.
         let mut stmt = self.db.prepare("SELECT e.payload,e.cost,e.priced_tokens,e.price FROM events e WHERE e.provider=?1 AND e.stamp>?3 AND e.stamp<=?4 AND EXISTS(SELECT 1 FROM event_sources s WHERE s.event_id=e.id AND s.source_id IN (SELECT value FROM json_each(?5)) AND (e.account_id=?2 OR s.source_id IN (SELECT value FROM json_each(?6))))")?;
         let rows = stmt.query_map(
@@ -894,12 +896,10 @@ impl Store {
                 continue;
             }
             if let Some(group) = group {
-                let model = settings
-                    .model_mappings
-                    .get(&event.model)
-                    .map(String::as_str)
-                    .unwrap_or(&event.model);
-                match crate::antigravity::group_for_model(model) {
+                match crate::antigravity::mapped_group_for_model(
+                    &event.model,
+                    &settings.model_mappings,
+                ) {
                     Some(kind) if Some(kind) == crate::antigravity::group_kind(group) => {}
                     Some(_) => continue,
                     None => {
@@ -915,6 +915,14 @@ impl Store {
             {
                 boundary = true;
                 continue;
+            }
+            if event.interval_evidence == "antigravity-step-v1" {
+                first_agy_request = Some(
+                    first_agy_request
+                        .map_or(event.timestamp, |first: i64| first.min(event.timestamp)),
+                );
+            } else if provider == "antigravity" {
+                agy_request_coverage = false;
             }
             e.total_tokens += event.tokens.total();
             if let Some(frozen) = &e.repair_prices {
@@ -948,7 +956,7 @@ impl Store {
         e.calculation_note = if let Some(reason) = unknown_account {
             e.calculation_status = "unknownAccount".into();
             e.calculation_note = format!("{reason}；本区间不参与估值，已保留有效值");
-            return Ok(());
+            return Ok(None);
         } else if unknown_billing {
             e.calculation_status = "unknownBilling".into();
             "存在未归属或不完整请求，本区间不参与估值；已保留有效值"
@@ -969,7 +977,38 @@ impl Store {
             "手动采样估值 · 按本次模型组合估算"
         }
         .into();
-        Ok(())
+        Ok(first_agy_request.filter(|_| agy_request_coverage))
+    }
+
+    pub(crate) fn agy_request_crosses(
+        &self,
+        account: &str,
+        sources: &[String],
+        group: &str,
+        at: i64,
+        settings: &Settings,
+    ) -> Result<bool> {
+        let mut query = self.db.prepare_cached(
+            "SELECT model FROM events e WHERE e.provider='antigravity' AND e.account_id=?1
+             AND e.stamp>?2 AND json_extract(e.payload,'$.intervalStart')<?2
+             AND json_extract(e.payload,'$.intervalEvidence')='antigravity-step-v1'
+             AND json_extract(e.payload,'$.attribution')!='inherited-history'
+             AND COALESCE(json_extract(e.payload,'$.billing.category'),'')!='api'
+             AND EXISTS(SELECT 1 FROM event_sources s WHERE s.event_id=e.id
+                 AND s.source_id IN (SELECT value FROM json_each(?3)))",
+        )?;
+        let rows = query.query_map(params![account, at, serde_json::to_string(sources)?], |r| {
+            r.get::<_, String>(0)
+        })?;
+        for model in rows {
+            let model = model?;
+            if crate::antigravity::mapped_group_for_model(&model, &settings.model_mappings)
+                .is_none_or(|kind| Some(kind) == crate::antigravity::group_kind(group))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
     pub fn begin_estimate(
         &self,

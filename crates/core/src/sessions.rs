@@ -1405,29 +1405,34 @@ impl Reader {
                         let error = state.error.clone();
                         let mut files: Vec<_> = rows
                             .into_iter()
-                            .map(|(session, turn, kind, at, parent_session)| FileBatch {
-                                key: format!("{}#{session}", path.display()),
-                                modified: at / 1000,
-                                reset: true,
-                                database: true,
-                                events: vec![
-                                    Event {
-                                        kind: "start".into(),
-                                        session: session.clone(),
-                                        turn: turn.clone(),
-                                        at,
-                                        parent_session,
-                                        ..Default::default()
-                                    },
-                                    Event {
-                                        kind,
-                                        session,
-                                        turn,
-                                        at,
-                                        ..Default::default()
-                                    },
-                                ],
-                                ..Default::default()
+                            .map(|(session, turn, kind, at, parent_session)| {
+                                let process = state.kiro.approval_processes.get(&session);
+                                FileBatch {
+                                    key: format!("{}#{session}", path.display()),
+                                    modified: at / 1000,
+                                    reset: true,
+                                    database: true,
+                                    events: vec![
+                                        Event {
+                                            kind: "start".into(),
+                                            session: session.clone(),
+                                            turn: turn.clone(),
+                                            at,
+                                            parent_session,
+                                            pid: process.map_or(0, |p| p.pid),
+                                            process_start: process.map_or(0, |p| p.start),
+                                            ..Default::default()
+                                        },
+                                        Event {
+                                            kind,
+                                            session,
+                                            turn,
+                                            at,
+                                            ..Default::default()
+                                        },
+                                    ],
+                                    ..Default::default()
+                                }
                             })
                             .collect();
                         if error.is_some()
@@ -4775,6 +4780,60 @@ mod claude_source_tests {
             ..source.clone()
         };
         assert!(reader.collect_local(&missing, now).error.is_some());
+    }
+
+    #[test]
+    fn kiro_v3_read_approval_updates_the_pet_from_messages_alone() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("sessions/workspace/sess_kiro");
+        fs::create_dir_all(&dir).unwrap();
+        let metadata = dir.join("session.json");
+        let session = |status| json!({"id":"sess_kiro","status":status});
+        fs::write(&metadata, session("in_progress").to_string()).unwrap();
+        let messages = dir.join("messages.jsonl");
+        let mut log = fs::File::create(&messages).unwrap();
+        let now = SystemTime::now();
+        let append = |file: &mut fs::File, payload: Value, newline: &str| {
+            write!(file, "{}{newline}", json!({"payload":payload})).unwrap();
+            // The log alone must invalidate the cached state even with an older mtime.
+            file.set_modified(now - Duration::from_secs(5)).unwrap();
+        };
+        let mut reader = Reader::default();
+        let source = Source {
+            id: "kiro".into(),
+            provider: "kiro".into(),
+            path: temp.path().to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let poll = |reader: &mut Reader, expected, input_kind, behavior| {
+            let mut snapshot = reader.local(std::slice::from_ref(&source), seconds(now), None);
+            snapshot.finish();
+            assert_eq!(snapshot.phase(), Some(expected));
+            assert_eq!(snapshot.sessions[0].input_kind, input_kind);
+            assert_eq!(crate::pets::project(&snapshot).behavior, behavior);
+        };
+
+        append(&mut log, json!({"type":"turn_start"}), "\n");
+        poll(&mut reader, Phase::Working, "", "running");
+        append(
+            &mut log,
+            json!({"type":"pending_interaction","interactionType":"tool_approval",
+                "toolCallId":"call-read","consentRound":2,"question":"Read File",
+                "_meta":{"kiro":{"toolId":"read_file","consent":{"capability":"fs_read","resource":"/tmp/fixture.txt"}}}}),
+            "\n",
+        );
+        append(&mut log, json!({"type":"session_metadata"}), "\n");
+        poll(&mut reader, Phase::NeedsInput, "approval", "attention");
+        let resolved = |round| json!({"type":"interaction_resolved","toolCallId":"call-read","consentRound":round});
+        append(&mut log, resolved(1), "\n");
+        poll(&mut reader, Phase::NeedsInput, "approval", "attention");
+        append(&mut log, resolved(2), "");
+        poll(&mut reader, Phase::NeedsInput, "approval", "attention");
+        writeln!(log).unwrap();
+        poll(&mut reader, Phase::Working, "", "running");
+
+        fs::write(&metadata, session("idle").to_string()).unwrap();
+        poll(&mut reader, Phase::Complete, "", "success");
     }
 
     #[test]

@@ -5,7 +5,7 @@ button,input,select,textarea { font:inherit; color:inherit; border-radius:var(--
 button {
   display:inline-flex; align-items:center; justify-content:center; gap:6px;
   min-height:var(--control-sm); padding:2px var(--control-padding-x);
-  font-size:var(--font-secondary); line-height:var(--line-secondary); font-weight:var(--weight-regular);
+  font-size:var(--font-secondary); line-height:max(var(--line-secondary),1.285em); font-weight:var(--weight-regular);
   border:1px solid var(--control-stroke); border-bottom-color:var(--control-bottom-stroke);
   background:var(--control-fill); box-shadow:var(--control-shadow); cursor:pointer;
   transition:background-color var(--t-fast) var(--ease),color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),box-shadow var(--t-fast) var(--ease);
@@ -29,14 +29,14 @@ button.danger:enabled:active { background-color:color-mix(in srgb,var(--danger) 
 :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 input,select,textarea {
   min-width:0; min-height:var(--control-md); padding:2px var(--control-padding-x);
-  line-height:var(--line-body); background:var(--field-fill); border:1px solid var(--control-stroke); box-shadow:none;
+  line-height:max(var(--line-body),1.33em); background:var(--field-fill); border:1px solid var(--control-stroke); box-shadow:none;
   transition:background-color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),box-shadow var(--t-fast) var(--ease);
 }
 input:enabled:hover,select:enabled:hover,textarea:enabled:hover { border-color:var(--checkbox-stroke); }
 input:focus-visible,select:focus-visible,textarea:focus-visible { outline:2px solid var(--accent); outline-offset:1px; border-color:var(--control-stroke); box-shadow:none; }
 input:disabled,select:disabled,textarea:disabled { opacity:.45; cursor:default; box-shadow:none; }
 select {
-  appearance:none; cursor:pointer; height:var(--control-md); padding-right:30px;
+  appearance:none; cursor:pointer; height:auto; min-height:var(--control-md); padding-right:30px;
   text-align:start; text-overflow:ellipsis; vertical-align:middle;
   background-color:var(--control-fill); background-image:var(--control-chevron);
   background-repeat:no-repeat; background-position:right 9px center; background-size:12px 12px;
@@ -64,29 +64,29 @@ input[type=checkbox][role=switch]:checked:enabled:hover { background:var(--contr
 input[type=checkbox][role=switch]:enabled:active::after { transform:translateX(var(--switch-offset)) scale(.9); }
 input[type=checkbox]:not([role=switch]):disabled,input[type=checkbox][role=switch]:disabled { cursor:default; box-shadow:none; }
 /* Align the control with the first text line, including wrapped labels. */
-label:has(> input[type=checkbox]) { display:flex; align-items:flex-start; gap:var(--space-control); min-width:0; line-height:var(--line-body); overflow-wrap:anywhere; cursor:pointer; }
-label > input[type=checkbox] { margin-top:calc((var(--line-body) - var(--checkbox-size)) / 2); }
-label > input[type=checkbox][role=switch] { margin-top:calc((var(--line-body) - var(--switch-height)) / 2); }
+label:has(> input[type=checkbox]) { display:flex; align-items:flex-start; gap:var(--space-control); min-width:0; line-height:max(var(--line-body),1.33em); overflow-wrap:anywhere; cursor:pointer; }
+label > input[type=checkbox] { margin-top:calc((max(var(--line-body),1.33em) - var(--checkbox-size)) / 2); }
+label > input[type=checkbox][role=switch] { margin-top:calc((max(var(--line-body),1.33em) - var(--switch-height)) / 2); }
 label:has(> input[type=checkbox]:disabled) { color:var(--muted); cursor:default; }
 /* Segmented choices retain one outline and a quiet selected segment. */
 .panel-tabs,.settings-tabs,.metric-picker { display:flex; align-items:stretch; gap:0; padding:0; border:0; border-radius:var(--radius-control); background:var(--surface-sunken); }
-.panel-tabs button,.settings-tabs button,.metric-picker button { flex:1; min-width:0; min-height:var(--control-compact-height); padding:3px 8px; border:0; border-radius:var(--radius-control); font-size:var(--font-entry); line-height:var(--line-secondary); font-weight:var(--weight-regular); background:transparent; color:var(--ink); box-shadow:none; }
+.panel-tabs button,.settings-tabs button,.metric-picker button { flex:1; min-width:0; min-height:var(--control-compact-height); padding:3px 8px; border:0; border-radius:var(--radius-control); font-size:var(--font-entry); line-height:max(var(--line-secondary),1.285em); font-weight:var(--weight-regular); background:transparent; color:var(--ink); box-shadow:none; }
 .panel-tabs button:enabled:hover,.settings-tabs button:enabled:hover,.metric-picker button:enabled:hover { background:var(--surface-soft); color:var(--ink); transform:none; box-shadow:none; }
 .panel-tabs button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true] { background:var(--control-tint); color:var(--ink); box-shadow:none; }
 .panel-tabs button:enabled:active,.settings-tabs button:enabled:active,.metric-picker button:enabled:active { background:var(--segment-selected); box-shadow:var(--control-pressed-shadow); }
-.settings-tabs { width:min(430px,100%); margin:0 auto var(--space-section); }
+.settings-tabs { min-width:min(430px,100%); width:max-content; max-width:100%; margin:0 auto var(--space-section); }
 .settings-tabs button { white-space:nowrap; }
 .settings-tabs button svg { display:none; }
-.metric-picker { width:230px; max-width:100%; }
+.metric-picker { min-width:230px; width:max-content; max-width:100%; }
 /* Shared inline controls and compact fields. */
 .filters { gap:var(--space-control); padding:0; border:0; }
-.filters select,#days { height:var(--control-compact-height); min-height:var(--control-compact-height); padding-top:2px; padding-bottom:2px; line-height:var(--line-secondary); font-size:var(--font-secondary); }
+.filters select,#days { height:auto; min-height:var(--control-compact-height); padding-top:2px; padding-bottom:2px; line-height:max(var(--line-secondary),1.285em); font-size:var(--font-secondary); }
 .filters select { flex:0 1 auto; width:auto; max-width:230px; }
 /* One pill on every surface: an ink tint and hairline stay visible on tinted, opaque and translucent cards alike. */
-.subscription-badge { display:inline-block; max-width:120px; padding:3px 8px; border-radius:var(--radius-pill); background:color-mix(in srgb,var(--ink) 8%,transparent); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ink) 10%,transparent); color:var(--ink); font-size:var(--font-secondary); line-height:var(--line-secondary); font-weight:var(--weight-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
+.subscription-badge { display:inline-block; max-width:120px; padding:3px 8px; border-radius:var(--radius-pill); background:color-mix(in srgb,var(--ink) 8%,transparent); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ink) 10%,transparent); color:var(--ink); font-size:var(--font-secondary); line-height:max(var(--line-secondary),1.285em); font-weight:var(--weight-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
 .quota-subscription { display:flex; justify-content:center; align-items:center; gap:4px; flex:0 1 var(--quota-badge-width); min-width:0; }
 .quota-subscription .subscription-badge { max-width:100%; min-width:0; overflow:hidden; text-overflow:ellipsis; }
-.subscription-remaining { flex:none; color:var(--muted, currentColor); font-size:var(--font-secondary); line-height:var(--line-secondary); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.subscription-remaining { flex:none; color:var(--muted, currentColor); font-size:var(--font-secondary); line-height:max(var(--line-secondary),1.285em); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .panel-account-group legend button { margin-left:8px; font-size:var(--font-entry); }
 /* Settings sit on the window backdrop, using the floating panel's card finish. */
 .settings-layout { display:grid; grid-template-columns:minmax(0,1fr); gap:var(--space-layout); align-items:start; }
@@ -159,15 +159,15 @@ dialog { border-radius:var(--radius-overlay); --control-md:32px; }
 .multi-option:has(> input:checked),.multi-option:has(> input:focus-visible) { background:var(--soft); }
 .multi-option:active { background:color-mix(in srgb,var(--accent) 16%,transparent); }
 .multi-list { display:flex; flex-direction:column; gap:2px; }
-.hint { border-radius:var(--radius-control); background:var(--solid); font-size:var(--font-caption); line-height:var(--line-caption); box-shadow:var(--shadow); }
+.hint { border-radius:var(--radius-control); background:var(--solid); font-size:var(--font-caption); line-height:max(var(--line-caption),1.33em); box-shadow:var(--shadow); }
 dialog[open] { animation:control-reveal .18s var(--ease); }
 @keyframes control-reveal { from { opacity:0; transform:translateY(3px); } to { opacity:1; transform:none; } }
 .machine-list,.agent-machines { container-type:inline-size; }
-.machine-row.list-row { display:grid; grid-template-columns:minmax(130px,1fr) 112px 114px 104px; gap:16px; }
+.machine-row.list-row { display:grid; grid-template-columns:minmax(120px,1fr) max(112px,7.5em) max(114px,8.2em) max(104px,6.8em); gap:12px 14px; }
 .machine-info { min-width:0; }
 .machine-info strong,.machine-info small,.source-path { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .machine-row label { margin:0; display:flex; align-items:center; gap:8px; white-space:nowrap; }
-.machine-actions { display:grid; grid-template-columns:56px 36px; gap:8px; }
+.machine-actions { display:grid; grid-template-columns:minmax(max(56px,4em),1fr) 36px; align-items:center; gap:8px; }
 .machine-action-placeholder { width:36px; min-height:var(--control-height); }
 .agent-machines > .agent-machine.list-row { display:grid; grid-template-columns:minmax(95px,1fr) minmax(80px,1fr) auto auto auto 34px; gap:10px; }
 .agent-machines > .agent-machine > label { max-width:none; overflow-wrap:anywhere; }
@@ -201,7 +201,7 @@ dialog[open] { animation:control-reveal .18s var(--ease); }
 .pet-preview-error { font-size:var(--font-caption); overflow-wrap:anywhere; }
 #pet-library-warnings .error { font-size:var(--font-caption); overflow-wrap:anywhere; }
 @container (max-width:600px) {
-  .machine-row.list-row { grid-template-columns:minmax(0,1fr) minmax(0,1fr) 104px; gap:12px; }
+  .machine-row.list-row { grid-template-columns:minmax(0,1fr) minmax(0,1fr) max(104px,6.8em); gap:12px; }
   .machine-row .machine-info { grid-column:1 / 3; }
   .machine-row .machine-actions { grid-column:3; grid-row:1 / 3; align-self:center; }
   .machine-row .machine-monitor { grid-column:1; }
@@ -214,8 +214,8 @@ dialog[open] { animation:control-reveal .18s var(--ease); }
   .agent-machine > [data-auto-machine-status] { grid-column:1; grid-row:3; }
   .agent-machine > [data-machine-hooks] { grid-column:2; grid-row:3; }
 }
-@container (max-width:380px) {
-  .machine-row.list-row { grid-template-columns:minmax(0,1fr) 104px; }
+@container (max-width:420px) {
+  .machine-row.list-row { grid-template-columns:minmax(0,1fr) max(104px,6.8em); }
   .machine-row .machine-info { grid-column:1; }
   .machine-row .machine-actions { grid-column:2; grid-row:1; }
   .machine-row .machine-monitor,.machine-row .machine-collection { grid-column:1 / -1; }
@@ -239,10 +239,14 @@ dialog[open] { animation:control-reveal .18s var(--ease); }
 :is(.refresh-menu,.panel-menu,.panel-more-menu,.machine-menu-body,.workspace-help-menu) button { min-height:var(--control-md); }
 /* Filter bars stay small, including their fields. */
 :is(.filters,.range-controls,.price-toolbar,.section-head) :is(input:not([type=checkbox],[type=radio]),textarea,.multi-trigger) { min-height:var(--control-sm); }
-:is(.filters,.range-controls,.price-toolbar,.section-head) select { height:var(--control-sm); min-height:var(--control-sm); }
+:is(.filters,.range-controls,.price-toolbar,.section-head) select { height:auto; min-height:var(--control-sm); }
+/* Short action buttons keep their label on one line instead of growing tall when a row narrows. */
+:is(#read-quotas,#order-quotas,#refresh,.analysis-link,.sampling-manage,.back-link),
+:is(.section-actions,.actions,.dialog-foot,.dialog-actions,.machine-actions,.server-card-actions,.price-toolbar,.wake-toolbar,.setup-toolbar,.desktop-actions,.settings-save-bar,.price-virtual-row,.quota-links,.orbit-actions) > button,
+.server-toolbar button { white-space:nowrap; flex-shrink:0; }
 /* Switches and checkboxes are hit through their label; keep that target at least 24px tall. Padding
    centers a single line in it, and the control stays on the first line when the label wraps. */
-label:has(> input:is([type=checkbox],[type=radio])) { min-height:var(--hit-target); padding-block:calc((var(--hit-target) - var(--line-body)) / 2); }
+label:has(> input:is([type=checkbox],[type=radio])) { min-height:var(--hit-target); padding-block:max(0px,calc((var(--hit-target) - max(var(--line-body),1.33em)) / 2)); }
 /* Disclosure (§5.3): one indicator for every <details> that is not a menu: a leading chevron that
    points right when closed and down when open. It sits in the summary's own gutter, so existing
    flex and grid summaries keep their columns, and the whole summary row stays the target. */
@@ -261,7 +265,7 @@ details[data-menu] > summary::-webkit-details-marker { display:none; }
 .wake-more > summary {
   display:inline-flex; align-items:center; gap:6px; min-height:var(--control-sm); padding:2px var(--control-padding-x);
   border:1px solid var(--control-stroke); border-radius:var(--radius-control); background:var(--control-fill); box-shadow:var(--control-shadow);
-  font-size:var(--font-secondary); line-height:var(--line-secondary);
+  font-size:var(--font-secondary); line-height:max(var(--line-secondary),1.285em); white-space:nowrap;
 }
 .wake-more > summary::after { content:''; width:12px; height:12px; background:var(--control-chevron) center / contain no-repeat; }
 .wake-more > summary:hover { background-color:var(--control-hover); }
@@ -286,6 +290,7 @@ button.back-link:enabled:hover { background:var(--soft); }
 button.back-link svg { width:16px; height:16px; }
 /* Summaries whose first row is taller than the rest line the chevron up with that row. */
 .quota-disclosure > .quota-title::before { top:calc(var(--provider-mark-size) / 2); }
+#live-sessions > summary::before { top:max(14px,0.67em); }
 }
 
 @layer platform {

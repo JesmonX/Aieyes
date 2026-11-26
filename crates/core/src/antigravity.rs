@@ -136,6 +136,15 @@ pub fn group_for_model(model: &str) -> Option<&'static str> {
         None
     }
 }
+pub(crate) fn mapped_group_for_model(
+    model: &str,
+    mappings: &BTreeMap<String, String>,
+) -> Option<&'static str> {
+    let mapped = mappings
+        .get(model)
+        .or_else(|| crate::pricing::effort_base(model, true).and_then(|base| mappings.get(base)));
+    group_for_model(mapped.map_or(model, String::as_str))
+}
 pub fn group_kind(group: &str) -> Option<&'static str> {
     match group.to_ascii_lowercase().as_str() {
         "gemini" | "gemini models" => Some("gemini"),

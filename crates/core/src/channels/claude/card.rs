@@ -235,6 +235,47 @@ fn lines(input: &Value) -> String {
 /// `reply`.
 pub(crate) fn approval_card(req: &PendingClaude, lang: &str) -> Approval {
     let tr = |t: &str| crate::localization::translate(lang, t).into_owned();
+    if req.provider() == "kiro" {
+        let permission = &req.meta["permission"];
+        let capability = permission["capability"].as_str().unwrap_or("");
+        let mut card = Approval::new(
+            &req.tool_name,
+            if capability == "shell" {
+                "command"
+            } else {
+                "tool"
+            },
+        );
+        card.reason = capability.to_owned();
+        card.cwd = req.meta["cwd"].as_str().unwrap_or("").to_owned();
+        card.command = permission["command"]
+            .as_str()
+            .or_else(|| permission["resource"].as_str())
+            .unwrap_or("")
+            .to_owned();
+        card.paths = permission["paths"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|path| path.as_str().map(str::to_owned))
+            .collect();
+        let only_location = req.input.as_object().is_some_and(|input| {
+            input.len() == 1
+                && ["command", "path", "file_path", "url"].iter().any(|key| {
+                    input.get(*key).and_then(Value::as_str).is_some_and(|v| {
+                        v == card.command || card.paths.iter().any(|path| path == v)
+                    })
+                })
+        });
+        if !only_location {
+            card.details = lines(&req.input);
+        }
+        card.decisions = vec![
+            Decision::approve(lang),
+            Decision::new("decline", "拒绝本次", "danger", "deny", "once", lang),
+        ];
+        return card.bounded();
+    }
     let profile = profile(req.provider()).unwrap_or(Profile::CLAUDE);
     let input = &req.input;
     let text = |key: &str| input[key].as_str().unwrap_or("");

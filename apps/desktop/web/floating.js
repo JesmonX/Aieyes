@@ -302,7 +302,6 @@
   document.querySelector('#panel-add-host')?.addEventListener('click', () => openSetup('hosts'));
   document.querySelector('#panel-accounts')?.addEventListener('click', () => {const more = document.querySelector('#panel-more');if (more) more.open = false;window.AieyesApp?.openPanelAccounts();});
   document.querySelector('#panel-quit').addEventListener('click', () => action('quit'));
-  document.querySelector('#panel-close')?.addEventListener('click', () => setPanel(false));
   document.querySelector('#orbit-open-sessions')?.addEventListener('click', () => action('open-sessions'));
   document.querySelector('#orbit-close')?.addEventListener('click', () => action('close-panel'));
   document.querySelector('#panel-more')?.addEventListener('toggle', (event) => {

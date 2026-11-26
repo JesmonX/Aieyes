@@ -142,6 +142,8 @@ struct ModelDay {
     usage: Aggregate,
     missing: Tokens,
     unpriced: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    agy_gap: bool,
 }
 type Day = BTreeMap<String, ModelDay>;
 pub(crate) struct Pending {
@@ -288,7 +290,7 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
     shared.sort();
     let shared_json = serde_json::to_string(&shared)?;
     let scope = hash(&serde_json::to_string(&(
-        "usage-v5-display-agents",
+        "usage-v6-agy-pricing-gaps",
         &f.provider,
         &f.account_id,
         &f.source_id,
@@ -404,6 +406,7 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
                     a.events += 1;
                 }
                 if covered < e.tokens.total() {
+                    entry.agy_gap |= crate::providers::antigravity(&e.provider);
                     let price: Option<ModelPrice> = row
                         .get::<_, Option<String>>(3)?
                         .map(|s| serde_json::from_str(&s))
@@ -475,8 +478,13 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
                 if entry.unpriced > 0 {
                     let gap = gaps.entry(model.clone()).or_insert_with(|| PricingGap {
                         model: model.clone(),
-                        price_id: pricing::find_price(model, &prices, &settings.model_mappings)
-                            .map(|p| p.id.clone()),
+                        price_id: pricing::find_usage_price(
+                            if entry.agy_gap { "antigravity" } else { "" },
+                            model,
+                            &prices,
+                            &settings.model_mappings,
+                        )
+                        .map(|p| p.id.clone()),
                         ..Default::default()
                     });
                     gap.tokens.add(&entry.missing);

@@ -395,12 +395,9 @@ test('Linux native panel takes keyboard focus and closes explicitly even when pi
   const h=harness('floating.js',{platform:'linux',nativePet:true,panelOpen:true,panelPinned:true});
   await flush();await flush();
   assert.equal(h.document.activeElement,h.element('#panel'),'Focus parks on the panel, not on a control');
-  await h.element('#panel-close').dispatch('click');await flush();
-  assert.equal(h.info.panelOpen,false);
-  assert.notEqual(h.document.activeElement,h.element('#ball'));
-  h.events.get('desktop:panel')({payload:{...h.info,panelOpen:true}});
   await h.document.dispatch('keydown',{key:'Escape'});await flush();
   assert.equal(h.info.panelOpen,false);
+  assert.notEqual(h.document.activeElement,h.element('#ball'));
 });
 test('refresh menu arrow keys move between its actions', async () => {
   const h = harness('floating.js'); await flush();

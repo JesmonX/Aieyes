@@ -200,7 +200,9 @@ Codex 的 `mcpServer/elicitation/request` 表单（平铺字段）是 `kind: "qu
 
 本机文本卡片的 `promptHash` 绑定当时显示的问题，问题变化后旧卡片的回答被拒绝。SSH 会话由远程脚本做同样的检查。
 
-Kiro、DeepSeek Harness、Antigravity、Qoder 桌面版、Kimi、Grok、Copilot CLI、CodeBuddy、WorkBuddy 的选项题和审批只读展示，开启终端输入也不会变成可回答：
+本机 Kiro CLI 3.4.0 起可在桌宠快捷交互设置里单独开启「在弹窗中审批 Kiro CLI 工具权限」。新开的 V3 会话通过 Kiro 的 `PermissionRequest` Hook 显示审批，浮窗支持允许或拒绝本次操作。选择回原终端、应用退出或等待 120 秒后，Kiro 继续显示原审批菜单。长期规则与 Kiro 限制由用户亲自处理的审批在原终端操作。
+
+未接入 Hook 的 Kiro 会话，以及 DeepSeek Harness、Antigravity、Qoder 桌面版、Kimi、Grok、Copilot CLI、CodeBuddy、WorkBuddy 的选项题和审批只读展示，开启终端输入也不会变成可回答：
 各终端界面的选项菜单按键不同（实测 Kimi 的审批用回车和 Esc、提问菜单用数字和方向键，Grok 的审批是四项单选菜单），而且终端画面无法和记录中的请求逐一对应，不能确认按键会落在预期的请求上。
 这些卡片的 `adapter` 为 `focusOnly`，`canRespond` 为 `false`，`readonlyReason` 说明需要回原窗口，跳转由客户端的聚焦功能完成。
 
@@ -333,7 +335,8 @@ Hook 输入里没有 `tool_use_id`，调用标识取自会话记录；计划模�
 | OpenCode（本机服务） | `approve`、`approveAlways`（请求带可保存规则时）、`decline`（可附说明）；命令和文件修改有各自的 `kind`，文件修改带差异 | 表单可填写或取消；可选字段可留空 | `newTurn`；执行中为 `queue`，并可 `interrupt` |
 | Claude / Qoder（SSH） | 只读 | 选项题只读，自由文本经 tmux | tmux |
 | Kimi、Grok、Copilot CLI、CodeBuddy（提问）、WorkBuddy（本机和 SSH） | 只读，显示工具和命令 | 选项题只读并列出选项；无提问工具的自由文本经终端 | 终端（WorkBuddy 无） |
-| Kiro、DeepSeek Harness、Antigravity、Qoder 桌面版（本机） | 只读，显示工具和命令 | 选项题只读并列出选项 | 终端（Qoder 桌面版无） |
+| Kiro CLI（本机） | 3.4.0 起可单独启用 V3 Hook，允许或拒绝本次；其他审批显示工具和对象 | 选项题只读并列出选项 | 终端 |
+| DeepSeek Harness、Antigravity、Qoder 桌面版（本机） | 只读，显示工具和命令 | 选项题只读并列出选项 | 终端（Qoder 桌面版无） |
 | OpenCode `--standalone` 或 SSH | 只读，无内容 | 只读，无内容 | 终端 |
 | 其他 Agent（Cursor、Gemini、Cline、Kilo、Pi、OMP、ZCode 的提问等） | 只读，无内容 | 提问工具只读且无选项内容；普通文本提问显示最后一条回复，经终端回答 | 终端 |
 

@@ -23,6 +23,7 @@ struct SessionInteractionStatus: Decodable, Equatable {
     var autoPopup: Bool
     var claudeQuestions: Bool
     var claudeApprovals: Bool
+    var kiroApprovals: Bool? = nil
     var allowTerminal: Bool
     var desktopAllowTerminal: Bool?
     var feishuPaired: Bool?
@@ -838,6 +839,7 @@ enum InteractionKeyboard {
         autoPopup: Bool? = nil,
         claudeQuestions: Bool? = nil,
         claudeApprovals: Bool? = nil,
+        kiroApprovals: Bool? = nil,
         allowTerminal: Bool? = nil
     ) async {
         guard !saving else { return }
@@ -848,6 +850,7 @@ enum InteractionKeyboard {
         if let autoPopup { params["autoPopup"] = autoPopup }
         if let claudeQuestions { params["claudeQuestions"] = claudeQuestions }
         if let claudeApprovals { params["claudeApprovals"] = claudeApprovals }
+        if let kiroApprovals { params["kiroApprovals"] = kiroApprovals }
         if let allowTerminal { params["allowTerminal"] = allowTerminal }
         do {
             let next: SessionInteractionStatus = try await client.call("sessions.interaction.configure", params: params)

@@ -123,7 +123,7 @@ async function modelChecks() {
         for (const surface of ['main','panel']) {
           frame = await route(platform, scenario, surface);
           await page.locator('#theme').selectOption('dark');await frame.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
-          if (platform === 'linux' && scenario === 'workspace' && surface === 'panel') {await frame.locator('#panel-close').click();await page.locator('#restore').click();await frame.waitForFunction(() => document.body.dataset.view === 'panel');}
+          if (platform === 'linux' && scenario === 'workspace' && surface === 'panel') {assert.equal(await frame.locator('#panel-close').count(), 0);await frame.locator('#panel-refresh').focus();await page.keyboard.press('Escape');await frame.waitForFunction(() => document.body.dataset.view === 'ball');await page.locator('#restore').click();await frame.waitForFunction(() => document.body.dataset.view === 'panel');}
           if (scenario === 'workspace' && surface === 'panel') await page.screenshot({ path: path.join(output, `${platform}-panel.png`) });
         }
       }

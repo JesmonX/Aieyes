@@ -52,7 +52,7 @@
 
   font-family: var(--font-ui);
   font-size: var(--font-body);
-  line-height: var(--line-body);
+  line-height: max(var(--line-body), 1.33em);
   font-synthesis: none;
   font-optical-sizing: auto;
   text-rendering: optimizeLegibility;

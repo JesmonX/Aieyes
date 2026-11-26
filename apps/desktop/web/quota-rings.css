@@ -2,8 +2,8 @@
 /* Quota rings (quota-rings.js): dial and two-column tiles beside the account cards. Healthy arcs use the
    accent like the cards' bars; 30% or less warns and under 10% is danger. Main window sizes are the
    default, the panel overrides them. */
-.quota-style-switch { gap:1px; padding:1px; }
-.quota-style-switch > button { width:28px; min-height:0; height:22px; padding:0; color:var(--muted); }
+.quota-style-switch { gap:1px; padding:1px; flex-shrink:0; }
+.quota-style-switch > button { width:28px; min-height:22px; height:auto; padding:0; color:var(--muted); white-space:nowrap; }
 .quota-style-switch > button[aria-pressed=true] { color:var(--control-mark); }
 .quota-style-label { display:none; }
 .quota-heading[data-show-labels] .quota-style-switch > button { width:auto; padding-inline:6px; gap:4px; }
@@ -23,7 +23,7 @@
   display:flex; flex-direction:column; align-items:center; justify-content:flex-start; gap:4px;
   width:100%; min-width:0; min-height:0; margin:0; padding:4px 2px;
   border:0; border-radius:var(--radius-card); background:transparent; box-shadow:none;
-  color:var(--ink); font-size:var(--font-caption); line-height:16px; font-weight:var(--weight-regular);
+  color:var(--ink); font-size:var(--font-caption); line-height:max(16px,1.33em); font-weight:var(--weight-regular);
   text-align:center; white-space:normal; font-variant-numeric:tabular-nums;
 }
 button.quota-tile:where(:enabled):hover { background-color:var(--control-hover); }
@@ -60,29 +60,31 @@ button.quota-tile[data-style=tile]:where(:enabled):hover { background-color:colo
 .ring-bang { font-size:var(--font-section); line-height:1; font-weight:var(--weight-bold); color:var(--resource-high); }
 
 /* B · dial: reset times inside the ring, remaining shares on hover or focus */
-.quota-tile[data-style=dial] .ring-value { display:flex; align-items:center; font-size:var(--font-secondary); line-height:17px; font-weight:var(--weight-strong); white-space:nowrap; }
-.panel-body .quota-tile[data-style=dial] .ring-value { font-size:var(--font-entry); line-height:15px; }
+.quota-tile[data-style=dial] .ring-value { display:flex; align-items:center; font-size:var(--font-secondary); line-height:max(17px,1.15em); font-weight:var(--weight-strong); white-space:nowrap; }
+.panel-body .quota-tile[data-style=dial] .ring-value { font-size:var(--font-entry); line-height:max(15px,1.15em); }
 .quota-tile[data-style=dial] .ring-sub { color:var(--muted); font-weight:var(--weight-medium); }
 .ring-divider { display:block; width:22px; height:1px; margin:3px 0; background:var(--border); }
 .ring-swap-time { display:inline-flex; align-items:center; }
 .ring-swap-pct { display:none; }
 button.quota-tile:is(:hover,:focus-visible) .ring-swap-pct { display:inline; }
 button.quota-tile:is(:hover,:focus-visible) .ring-swap-time { display:none; }
-.ring-amount { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--font-entry); line-height:16px; font-weight:var(--weight-strong); }
-.tile-name { display:flex; align-items:center; justify-content:center; gap:4px; max-width:100%; min-width:0; font-size:var(--font-caption); line-height:16px; }
+.ring-amount { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--font-entry); line-height:max(16px,1.2em); font-weight:var(--weight-strong); }
+.tile-name { display:flex; align-items:center; justify-content:center; gap:4px; max-width:100%; min-width:0; font-size:var(--font-caption); line-height:max(16px,1.33em); }
 .tile-name > span:last-child { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-.quota-tile[data-style=dial] .tile-extras { display:flex; justify-content:center; gap:6px; max-width:100%; overflow:hidden; white-space:nowrap; color:var(--faint); font-size:var(--font-caption); line-height:16px; }
+.quota-tile[data-style=dial] .tile-extras { display:flex; justify-content:center; gap:6px; max-width:100%; overflow:hidden; white-space:nowrap; color:var(--faint); font-size:var(--font-caption); line-height:max(16px,1.33em); }
 .quota-tile[data-style=dial] .tile-extras > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 
 /* E · two-column tile: remaining inside, reset times, then the extras */
-.tile-head { display:flex; align-items:center; gap:5px; min-width:0; height:16px; }
+.tile-head { display:flex; align-items:center; gap:5px; min-width:0; min-height:16px; height:auto; }
 .tile-head-name { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:var(--font-entry); font-weight:var(--weight-medium); }
 .tile-plan { max-width:40%; overflow:hidden; text-overflow:ellipsis; flex:none; margin-left:auto; padding-left:4px; color:var(--faint); font-size:var(--font-caption); }
 .tile-body { display:grid; grid-template-columns:auto auto minmax(0,1fr); align-items:center; column-gap:10px; min-width:0; }
-.ring-num { display:block; font-size:var(--font-entry); line-height:17px; font-weight:var(--weight-strong); }
-.panel-body .ring-num { font-size:var(--font-caption); line-height:15px; }
+.panel-body .quota-tile[data-style=tile] { padding:7px 8px; }
+.panel-body .tile-body { column-gap:6px; }
+.ring-num { display:block; font-size:var(--font-entry); line-height:max(17px,1em); font-weight:var(--weight-strong); }
+.panel-body .ring-num { font-size:var(--font-caption); line-height:1; }
 .ring-center .provider-mark { --provider-mark-size:calc(var(--ring-size,48px) / 2); }
-.tile-times { display:grid; gap:3px; min-width:0; font-size:var(--font-entry); line-height:18px; font-weight:var(--weight-medium); }
+.tile-times { display:grid; gap:3px; min-width:0; font-size:var(--font-entry); line-height:max(18px,1.3em); font-weight:var(--weight-medium); }
 .tile-time { display:flex; align-items:center; white-space:nowrap; min-width:0; }
 .tile-time.meter-credit-ratio { display:block; white-space:normal; overflow-wrap:anywhere; }
 .meter-reset { color:var(--muted); }
@@ -92,7 +94,7 @@ button.quota-tile:is(:hover,:focus-visible) .ring-swap-time { display:none; }
 .quota-tile[data-provider=kiro] .tile-extras:empty { display:none; }
 .tile-amount { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 .tile-sub { color:var(--faint); font-size:var(--font-caption); font-weight:var(--weight-regular); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.quota-tile[data-style=tile] .tile-extras { display:grid; justify-items:end; gap:3px; min-width:0; overflow:hidden; white-space:nowrap; color:var(--faint); font-size:var(--font-caption); line-height:18px; }
+.quota-tile[data-style=tile] .tile-extras { display:grid; justify-items:end; gap:3px; min-width:0; overflow:hidden; white-space:nowrap; color:var(--faint); font-size:var(--font-caption); line-height:max(18px,1.3em); }
 .quota-tile[data-style=tile] .tile-extras > span { display:flex; align-items:center; max-width:100%; min-width:0; overflow:hidden; }
 }
 
@@ -112,7 +114,7 @@ button.quota-tile:is(:hover,:focus-visible) .ring-swap-time { display:none; }
 .quota-rings > .quota-supplement { background:var(--card-fill); border:1px solid var(--card-border); border-radius:var(--radius-card); padding:10px; display:grid; gap:6px; font-size:var(--font-caption); --provider-mark-size:16px; }
 .orb-account { display:flex; align-items:center; gap:7px; min-width:0; }
 .supplement-identity { flex:1; min-width:0; overflow-wrap:anywhere; user-select:text; font-weight:600; }
-.orb-account .subscription-badge { max-width:76px; overflow:hidden; text-overflow:ellipsis; }
+.orb-account .subscription-badge { max-width:max(76px,6em); overflow:hidden; text-overflow:ellipsis; }
 .orb-account button,.orb-account summary { padding:3px; border:0; background:none; cursor:pointer; }
 .orb-account summary::marker { content:''; }
 .orb-context { color:var(--muted); display:flex; flex-wrap:wrap; gap:6px; align-items:center; }

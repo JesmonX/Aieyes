@@ -34,6 +34,8 @@ macOS 默认目录 `~/.claude` 的登录保存在钥匙串 `Claude Code-credenti
 
 在添加数据源时选择「Antigravity」，agy 是它的 CLI 接入方式。默认从 `~/.gemini/antigravity-cli/conversations` 的 SQLite 会话数据库读取调用时间、实际模型、输入、输出和缓存 Token；本机及 SSH 均支持，只回传统计字段。IDE 原生历史采集尚未实现。也可指定标准 JSONL 目录或使用自定义限额命令。
 
+AGY 计价优先使用实际模型名的映射或精确价格。缺少精确匹配时，`low`、`medium`、`high`、`xhigh`、`max` 档位可沿用基础模型的映射或唯一匹配的价格。匹配也识别模型版本中数字间的点号与连字符，例如 `claude-opus-5-5-high` 对应 `anthropic/claude-opus-5.5`。升级会为已有档位记录补齐可匹配的未计价用量。
+
 额度使用登录机器上现有 access token 只读查询 Antigravity 原生 REST 接口；默认刷新不启动 agy，也不刷新令牌。Gemini 与 Claude/GPT 组按实际模型分别计价和学习容量倍率；未知组或模型、缺失价格、跨采样边界会阻止输出不可靠的估值，并说明原因。每个账户同时保留一段额度采样。旧 `agy` 配置、账户、用量、排序和唤醒关联自动迁移为 `antigravity`，冲突账户保留为独立身份。
 
 每行一个事件；`id` 必须在同一会话内稳定。时间支持 Unix 秒或 RFC 3339：

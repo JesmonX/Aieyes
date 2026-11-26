@@ -80,7 +80,7 @@ impl Pool {
         tokens: u64,
         at: i64,
     ) -> bool {
-        // Prefer live evidence over replay, then a containing interval over fragments.
+        // Prefer confirmed AGY unions, then live evidence, then other replay.
         if !claim_interval(&mut self.intervals, start, end) {
             return false;
         }
@@ -217,7 +217,9 @@ impl Store {
                AND (s.kind,s.record_id) NOT IN (
                    SELECT kind,CAST(json_extract(payload,'$.originalEstimateId') AS TEXT) FROM estimates
                    WHERE account_key=?1 AND json_extract(payload,'$.originalEstimateId') IS NOT NULL)
-             ORDER BY (s.record_id LIKE 'auto-replay-%'),s.started_at,s.ended_at DESC,s.record_id",
+             ORDER BY CASE WHEN s.record_id LIKE 'auto-replay-v5-merged-%' THEN 0
+                           WHEN s.record_id NOT LIKE 'auto-replay-%' THEN 1 ELSE 2 END,
+                      s.started_at,s.ended_at DESC,s.record_id",
         )?;
         let samples = stmt.query_map(params![account, at, oldest_sample], |r| {
             Ok((
@@ -554,7 +556,7 @@ impl Store {
             return Ok(rows.clone());
         }
         let settings = self.settings()?;
-        let mut query = self.db.prepare("SELECT s.account_key,s.plan,s.group_id,s.period,s.started_at,s.ended_at,s.cost,s.consumed,s.tokens,s.source_ids,s.kind FROM automatic_samples s WHERE s.ended_at>=?1 AND s.ended_at<=?2 AND NOT EXISTS(SELECT 1 FROM estimates e WHERE e.kind=s.kind AND CAST(json_extract(e.payload,'$.originalEstimateId') AS TEXT)=s.record_id) ORDER BY (s.record_id LIKE 'auto-replay-%'),s.started_at,s.ended_at DESC,s.record_id")?;
+        let mut query = self.db.prepare("SELECT s.account_key,s.plan,s.group_id,s.period,s.started_at,s.ended_at,s.cost,s.consumed,s.tokens,s.source_ids,s.kind FROM automatic_samples s WHERE s.ended_at>=?1 AND s.ended_at<=?2 AND NOT EXISTS(SELECT 1 FROM estimates e WHERE e.kind=s.kind AND CAST(json_extract(e.payload,'$.originalEstimateId') AS TEXT)=s.record_id) ORDER BY CASE WHEN s.record_id LIKE 'auto-replay-v5-merged-%' THEN 0 WHEN s.record_id NOT LIKE 'auto-replay-%' THEN 1 ELSE 2 END,s.started_at,s.ended_at DESC,s.record_id")?;
         let mut groups = BTreeMap::<(String, String, String, String), Accumulator>::new();
         let rows = query.query_map(params![at - LOOKBACK, at], |r| {
             Ok((

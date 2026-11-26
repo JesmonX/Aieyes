@@ -99,6 +99,12 @@ fn status_key(id: &str) -> String {
 fn window_id(w: &QuotaWindow) -> &str {
     if w.id.is_empty() { &w.name } else { &w.id }
 }
+fn matching_window<'a>(q: &'a QuotaSnapshot, window: &QuotaWindow) -> Option<&'a QuotaWindow> {
+    q.windows.iter().find(|w| window_id(w) == window_id(window))
+}
+fn agy_idle_window(w: &QuotaWindow) -> bool {
+    w.used_percent == 0.0 && matches!(w.resets_at, None | Some(0))
+}
 fn fresh_credits(q: &QuotaSnapshot) -> Option<&CreditsSnapshot> {
     if q.credits_origin.as_deref() == Some("log")
         || q.credits_updated_at.is_some_and(|t| t != q.updated_at)
@@ -328,6 +334,18 @@ pub(crate) fn recalculate(e: &mut Estimate) {
 }
 
 impl Store {
+    fn active_automatic_window(&self, account: &str, window: &str) -> Result<Option<Estimate>> {
+        Ok(self
+            .working_estimates(Some(account))?
+            .into_iter()
+            .find(|e| {
+                e.sampling_mode == "automatic"
+                    && e.status == "active"
+                    && e.account_key == account
+                    && e.window_id == window
+            }))
+    }
+
     pub(crate) fn reconcile_automatic_scopes(
         &self,
         previous: &Settings,
@@ -410,13 +428,13 @@ impl Store {
                     range.map_or(0, |r| r.1)
                 )
             } else {
-                format!("automatic-history.v4:{key}:{scope}")
+                format!(
+                    "automatic-history.v5:{key}:{scope}:{}:{}",
+                    range.map_or(0, |r| r.0),
+                    range.map_or(0, |r| r.1)
+                )
             };
-            let config = if a.provider == "codex" {
-                hash(&format!("{config}:{marker}"))
-            } else {
-                config
-            };
+            let config = hash(&format!("{config}:{marker}"));
             let mut report: Value = self.auto_get(&marker)?;
             if report["complete"] == true {
                 reports.push(report);
@@ -430,11 +448,7 @@ impl Store {
                 )?;
                 report = json!({"accountKey":key,"cursor":0,"lastId":last,"since":range.map_or(now()-90*86400, |r| r.0),"until":range.map_or(now(), |r| r.1),"observations":0,"restoredIntervals":0,"skippedReasons":{},"complete":false});
                 self.auto_put(
-                    &if a.provider == "codex" {
-                        format!("automatic-replay-baseline:{key}:{config}")
-                    } else {
-                        format!("automatic-replay-baseline:{key}")
-                    },
+                    &format!("automatic-replay-baseline:{key}:{config}"),
                     &Baseline::default(),
                 )?;
             }
@@ -580,12 +594,17 @@ impl Store {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(hash(&serde_json::to_string(&json!([
+        let evidence = serde_json::to_string(&json!([
             config,
             revisions,
             settings.model_mappings,
             codex_coverage_scope(settings, key)
-        ]))?))
+        ]))?;
+        Ok(if key.starts_with("antigravity:") {
+            hash(&format!("agy-v5:{evidence}"))
+        } else {
+            hash(&evidence)
+        })
     }
 
     /// Persist one authoritative observation and independently pair each pool's rounded counter.
@@ -632,11 +651,7 @@ impl Store {
             "采样过程中登录或来源设置变化"
         );
         let storage_key = if replay {
-            if snapshot.provider == "codex" {
-                format!("automatic-replay-baseline:{key}:{config}")
-            } else {
-                format!("automatic-replay-baseline:{key}")
-            }
+            format!("automatic-replay-baseline:{key}:{config}")
         } else {
             baseline_key(&key)
         };
@@ -750,37 +765,60 @@ impl Store {
             }
             for (window, record_window, weekly) in targets {
                 let pool = window.map(window_id).unwrap_or("credits").to_owned();
-                let from = baseline
+                let mut from = baseline
                     .pending
                     .get(&pool)
                     .cloned()
                     .unwrap_or_else(|| old.clone());
-                if crate::providers::antigravity(&q.provider)
-                    && let Some(w) = window
-                {
-                    let comparable = from
-                        .windows
-                        .iter()
-                        .find(|v| window_id(v) == window_id(w))
-                        .is_some_and(|old| {
-                            w.used_percent >= old.used_percent
-                                && same_cycle(old.resets_at, w.resets_at, q.updated_at)
-                        });
-                    if !comparable {
-                        baseline.pending.insert(pool, q.clone());
-                        if w.used_percent > 0.0
-                            || from
-                                .windows
-                                .iter()
-                                .find(|v| window_id(v) == window_id(w))
-                                .is_some_and(|v| v.used_percent > 0.0)
+                let agy_window = window.filter(|_| crate::providers::antigravity(&q.provider));
+                let mut activation = None;
+                if let Some(w) = agy_window {
+                    let previous = matching_window(&old, w).unwrap();
+                    let anchor = matching_window(&from, w).unwrap();
+                    if agy_idle_window(previous) && agy_idle_window(w) {
+                        // Keep an idle observation from before the first request,
+                        // including when the latest poll fell inside that request.
+                        if q.updated_at - from.updated_at > crate::store::QUOTA_OBSERVATION_MAX_GAP
                         {
+                            from = old.clone();
+                        }
+                        baseline.pending.insert(pool, from);
+                        continue;
+                    }
+                    if agy_idle_window(previous) && agy_idle_window(anchor) && w.used_percent > 0.0
+                    {
+                        activation = w
+                            .resets_at
+                            .zip(w.window_minutes)
+                            .and_then(|(reset, minutes)| reset.checked_sub(minutes * 60))
+                            .filter(|at| old.updated_at < *at && *at <= q.updated_at);
+                    }
+                    let comparable = w.used_percent >= previous.used_percent
+                        && same_cycle(previous.resets_at, w.resets_at, q.updated_at)
+                        && same_cycle(anchor.resets_at, w.resets_at, q.updated_at);
+                    if !comparable && activation.is_none() {
+                        baseline.pending.insert(pool, q.clone());
+                        if w.used_percent > 0.0 || anchor.used_percent > 0.0 {
                             waiting_reason = "部分额度窗口已重置或回退，已为该窗口重建基线".into();
                         }
                         continue;
                     }
+                    // A saturated counter can hide additional usage. Both
+                    // windows of the same group may share those requests.
+                    if q.windows.iter().any(|peer| {
+                        crate::antigravity::window_group(peer)
+                            == crate::antigravity::window_group(w)
+                            && (peer.used_percent == 100.0
+                                || matching_window(&old, peer).is_some_and(|p| {
+                                    p.used_percent == 100.0
+                                        && same_cycle(p.resets_at, peer.resets_at, q.updated_at)
+                                }))
+                    }) {
+                        baseline.pending.insert(pool, q.clone());
+                        continue;
+                    }
                 }
-                let consumed = if let Some(w) = window {
+                let mut consumed = if let Some(w) = window {
                     from.windows
                         .iter()
                         .find(|v| window_id(v) == window_id(w))
@@ -798,9 +836,9 @@ impl Store {
                     baseline.pending.entry(pool).or_insert(from);
                     continue;
                 }
-                let group = window
-                    .filter(|_| crate::providers::antigravity(&q.provider))
-                    .map(crate::antigravity::window_group);
+                let group = agy_window.map(crate::antigravity::window_group);
+                let win = record_window.map(window_id).unwrap_or("credits");
+                let lane = if weekly { "weekly" } else { "primary" };
                 let mut sample = EstimateCommon {
                     sampling_mode: "automatic".into(),
                     account_key: key.clone(),
@@ -834,7 +872,6 @@ impl Store {
                     continue;
                 }
                 if replay && q.provider == "codex" {
-                    let win = record_window.map(window_id).unwrap_or("credits");
                     let overlaps: bool = self.db.query_row(
                         "SELECT EXISTS(SELECT 1 FROM estimates e,json_each(e.payload,'$.automaticSegments') s WHERE e.account_key=?1 AND json_extract(e.payload,'$.windowId')=?2 AND COALESCE(json_extract(e.payload,'$.rollingExcludedReason'),'')='' AND json_extract(e.payload,'$.samplingMode')='automatic' AND COALESCE(json_extract(s.value,'$.valid'),1)=1 AND json_extract(s.value,'$.attributionVersion')=?3 AND (COALESCE(json_extract(s.value,'$.pool'),'primary')='weekly')=?4 AND json_extract(s.value,'$.startedAt')<?5 AND json_extract(s.value,'$.endedAt')>?6)",
                         rusqlite::params![key,win,crate::codex_attribution::VERSION,weekly,q.updated_at,from.updated_at], |r| r.get(0))?;
@@ -844,7 +881,63 @@ impl Store {
                         continue;
                     }
                 }
-                self.calculate_usage(&mut sample, group)?;
+                let first_request = self.calculate_usage(&mut sample, group)?;
+                let mut live_record = None;
+                if let Some(w) = agy_window {
+                    if let Some(cycle_start) = activation {
+                        if first_request != Some(cycle_start) {
+                            baseline.pending.insert(pool, q.clone());
+                            waiting_reason = "部分额度窗口已重置或回退，已为该窗口重建基线".into();
+                            continue;
+                        }
+                        // Pin the proved cycle onto the idle observation so
+                        // a subsequent poll can extend this same interval.
+                        from.windows
+                            .iter_mut()
+                            .find(|p| window_id(p) == window_id(w))
+                            .unwrap()
+                            .resets_at = w.resets_at;
+                    }
+                    // A live poll can precede the import of a still-running
+                    // request. Once it finishes, reopen contiguous samples
+                    // from this window and replace them only with a valid union.
+                    if !replay && sample.calculation_status == "boundary" {
+                        live_record = self.active_automatic_window(&key, win)?;
+                        if let Some(record) = &live_record {
+                            for prior in record
+                                .automatic_segments
+                                .iter()
+                                .rev()
+                                .filter(|s| s.pool == lane && s.valid)
+                            {
+                                if prior.ended_at != sample.started_at
+                                    || !same_cycle(Some(prior.reset_at), w.resets_at, q.updated_at)
+                                {
+                                    break;
+                                }
+                                sample.started_at = prior.started_at;
+                                consumed += prior.consumed;
+                                self.calculate_usage(&mut sample, group)?;
+                                if sample.calculation_status != "boundary" {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if sample.calculation_status != "boundary"
+                        && self.agy_request_crosses(
+                            &q.account_id,
+                            ids,
+                            group.unwrap(),
+                            q.updated_at,
+                            settings,
+                        )?
+                    {
+                        baseline.pending.insert(pool, from);
+                        waiting_reason = "等待跨采样边界的请求结束".into();
+                        continue;
+                    }
+                }
                 let reliable = sample.calculation_status == "ready"
                     && sample.cost.is_finite()
                     && sample.cost >= 0.0
@@ -853,7 +946,7 @@ impl Store {
                     baseline.pending.entry(pool).or_insert(from);
                     continue;
                 }
-                // Every positive counter observation consumes this pending span even when unusable.
+                // Advance past a closed observation even when unusable.
                 baseline.pending.insert(pool, q.clone());
                 if consumed <= 0.0
                     || !reliable
@@ -864,23 +957,31 @@ impl Store {
                     }
                     continue;
                 }
-                let win = record_window.map(window_id).unwrap_or("credits");
+                let replay_prefix = if let Some(w) = agy_window {
+                    if matching_window(&old, w)
+                        .zip(matching_window(&from, w))
+                        .is_some_and(|(p, start)| p.used_percent > start.used_percent)
+                    {
+                        "auto-replay-v5-merged"
+                    } else {
+                        "auto-replay-v5"
+                    }
+                } else {
+                    "auto-replay-v4"
+                };
                 let replay_id = format!(
-                    "auto-replay-v4-{}-{}-{}-{}",
+                    "{replay_prefix}-{}-{}-{}-{}",
                     hash(&key),
                     hash(win),
-                    from.updated_at,
+                    sample.started_at,
                     q.updated_at
                 );
                 let existing = if replay {
                     self.estimate_for(&replay_id, kind == "credits").ok()
+                } else if live_record.is_some() {
+                    live_record
                 } else {
-                    self.working_estimates(Some(&key))?.into_iter().find(|e| {
-                        e.sampling_mode == "automatic"
-                            && e.status == "active"
-                            && e.account_key == key
-                            && e.window_id == win
-                    })
+                    self.active_automatic_window(&key, win)?
                 };
                 let mut record = if let Some(e) = existing {
                     e
@@ -942,20 +1043,27 @@ impl Store {
                 };
                 if replay
                     && record.automatic_segments.iter().any(|s| {
-                        s.started_at == from.updated_at
+                        s.started_at == sample.started_at
                             && s.ended_at == q.updated_at
                             && (s.pool == "weekly") == weekly
                     })
                 {
                     continue;
                 }
+                if sample.started_at < from.updated_at {
+                    record.automatic_segments.retain(|s| {
+                        s.pool != lane
+                            || s.started_at < sample.started_at
+                            || s.ended_at > from.updated_at
+                    });
+                }
                 record.automatic_segments.push(AutoSegment {
                     attribution_version: if q.provider == "codex" { crate::codex_attribution::VERSION } else { 0 },
                     attribution_evidence: if q.provider == "codex" { json!({"basis":"creator+timeline+quota","quotaFrom":from.updated_at,"quotaTo":q.updated_at,"config":config}) } else { Value::Null },
-                    pool: if weekly { "weekly" } else { "primary" }.into(),
+                    pool: lane.into(),
                     prices: sample.prices.clone(),
                     valid: true,
-                    started_at: from.updated_at,
+                    started_at: sample.started_at,
                     ended_at: q.updated_at,
                     reset_at: window.and_then(|w| w.resets_at).unwrap_or(0),
                     cost: sample.cost,
@@ -964,7 +1072,7 @@ impl Store {
                     consumed,
                     ..Default::default()
                 });
-                record.started_at = record.started_at.min(from.updated_at);
+                record.started_at = record.started_at.min(sample.started_at);
                 record.checkpoint_at = q.updated_at;
                 for price in sample.prices {
                     if !record.prices.contains(&price) {
@@ -2670,8 +2778,14 @@ mod tests {
         (root, e, q)
     }
     fn agy_event(e: &Engine, q: &QuotaSnapshot, id: &str) {
+        agy_model_event(e, id, "gemini-3.8-flash-n", q.updated_at, q.updated_at + 5);
+    }
+    fn agy_model_event(e: &Engine, id: &str, model: &str, from: i64, to: i64) {
         let settings = e.store.settings().unwrap();
-        let event=crate::usage::parse(&settings.sources[0],&mut ParseState::default(),&json!({"id":id,"timestamp":q.updated_at+5,"intervalStart":q.updated_at,"intervalEvidence":"antigravity-step-v1","model":"gemini-3.8-flash-n","tokens":{"input":1000}})).unwrap();
+        let event = crate::usage::parse(&settings.sources[0], &mut ParseState::default(), &json!({
+            "id":id,"timestamp":to,"intervalStart":from,"intervalEvidence":"antigravity-step-v1",
+            "model":model,"tokens":{"input":1000}
+        })).unwrap();
         e.store
             .put_event(&event, &e.store.prices().unwrap(), &settings)
             .unwrap();
@@ -2683,6 +2797,99 @@ mod tests {
         for w in &mut q.windows[2..] {
             w.resets_at = w.resets_at.map(|t| t + 30);
         }
+    }
+    #[test]
+    fn agy_replay_pairs_an_idle_activation_and_merges_crossing_requests() {
+        let (_root, e, mut q) = agy_fixture();
+        e.store
+            .save_prices(&[ModelPrice {
+                id: "anthropic/claude-opus-5.5".into(),
+                input: Some(0.01),
+                ..Default::default()
+            }])
+            .unwrap();
+        let start = q.updated_at - 200;
+        let model = "claude-opus-5-5-high";
+        agy_model_event(&e, "activation", model, start + 10, start + 25);
+        agy_model_event(&e, "crossing", model, start + 37, start + 49);
+        agy_model_event(&e, "third", model, start + 50, start + 60);
+        agy_model_event(&e, "after-limit", model, start + 74, start + 82);
+        agy_model_event(
+            &e,
+            "other-group",
+            "gemini-3.8-flash-n",
+            start + 64,
+            start + 76,
+        );
+        for (at, five, week) in [
+            (0, 0.0, 0.0),
+            (20, 0.0, 0.0),
+            (40, 4.0, 2.0),
+            (70, 16.0, 8.0),
+            (90, 100.0, 50.0),
+        ] {
+            q.updated_at = start + at;
+            for (window, used) in q.windows[2..].iter_mut().zip([five, week]) {
+                window.used_percent = used;
+                window.resets_at = if used > 0.0 {
+                    Some(start + 25 + window.window_minutes.unwrap() * 60)
+                } else {
+                    (window.window_minutes == Some(300)).then_some(0)
+                };
+            }
+            e.store.quota(&q).unwrap();
+        }
+        for expected in [true, false] {
+            let out = e
+                .store
+                .rebuild_automatic_history(Some("antigravity:a"), false)
+                .unwrap();
+            assert_eq!(out["changed"], expected);
+        }
+        let records = e.store.estimates().unwrap();
+        let record = records
+            .iter()
+            .find(|r| r.window_id == "claude-gpt:300")
+            .unwrap();
+        assert_eq!(record.automatic_segments.len(), 2);
+        for (i, segment) in record.automatic_segments.iter().enumerate() {
+            assert_eq!((segment.started_at, segment.ended_at), (start, start + 70));
+            assert_eq!(
+                (segment.cost, segment.tokens, segment.priced_tokens),
+                (30.0, 3000, 3000)
+            );
+            assert_eq!(segment.consumed, [16.0, 8.0][i]);
+        }
+    }
+
+    #[test]
+    fn agy_live_late_completion_replaces_the_overlapping_sample() {
+        let (_root, e, mut q) = agy_fixture();
+        let start = q.updated_at;
+        observe(&e, &q);
+        agy_event(&e, &q, "before-crossing");
+        agy_step(&mut q);
+        observe(&e, &q);
+        assert_eq!(e.store.estimates().unwrap()[0].cost, 10.0);
+        agy_model_event(
+            &e,
+            "late-crossing",
+            "gemini-3.8-flash-n",
+            start + 20,
+            start + 45,
+        );
+        agy_event(&e, &q, "after-crossing");
+        agy_step(&mut q);
+        observe(&e, &q);
+        let records = e.store.estimates().unwrap();
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert_eq!(record.automatic_segments.len(), 2);
+        for segment in &record.automatic_segments {
+            assert_eq!((segment.started_at, segment.ended_at), (start, start + 60));
+            assert_eq!((segment.cost, segment.tokens), (30.0, 3000));
+        }
+        assert_eq!(record.cost, 30.0);
     }
     #[test]
     fn agy_argon_weekly_pool_is_separate_and_legacy_automatic_costs_are_repaired() {

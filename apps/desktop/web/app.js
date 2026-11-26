@@ -1538,33 +1538,38 @@ function readonlyRow(label, value) {return `<div class="form-row" data-field-siz
 function select(name, label, entries, current) {return `<div class="form-row" data-field-size="${/Protocol$/.test(name) ? 'protocol' : 'choice'}"> <label for="field-${name}">${label}</label><select id="field-${name}" name="${name}">${entries.map(([k, v]) => option(k, v, current)).join('')}</select></div>`;}
 function textarea(name, label, value = '') {return `<div class="form-row"><label for="field-${name}">${label}</label><textarea id="field-${name}" name="${name}">${escapeHTML(value)}</textarea></div>`;}
 const PRICE_ROW_HEIGHT = 64;
+function priceRowHeight() {
+  const bodySize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 15;
+  return Math.max(PRICE_ROW_HEIGHT, Math.ceil((bodySize / 15) * PRICE_ROW_HEIGHT));
+}
 let priceCache = { source: null, query: '', rows: [] };
 function matchingPrices() {
   const query = state.priceSearch.trim().toLocaleLowerCase();
   if (priceCache.source !== state.prices || priceCache.query !== query) priceCache = { source: state.prices, query, rows: state.prices.filter((p) => AieyesUI.modelSearch(p, query)) };
   return priceCache.rows;
 }
-function priceWindow(top) {
-  const prices = matchingPrices(),first = Math.max(0, Math.floor(top / PRICE_ROW_HEIGHT) - 2);
-  return { prices, first, last: Math.min(prices.length, first + 9) };
+function priceWindow(top, rowHeight = priceRowHeight()) {
+  const prices = matchingPrices(),first = Math.max(0, Math.floor(top / rowHeight) - 2);
+  return { prices, first, last: Math.min(prices.length, first + 9), rowHeight };
 }
-function priceRowHTML(p, index) {
-  return `<div class="list-row price-virtual-row" data-price-row="${escapeHTML(p.id)}" data-price-index="${index}" style="top:${index * PRICE_ROW_HEIGHT}px"><div class="row-body" title="${escapeHTML(p.id)}">${escapeHTML(p.id)}<small>${AieyesI18n.t("输入 {0} · 输出 {1}", p.input == null ? '—' : money(p.input * 1e6), p.output == null ? '—' : money(p.output * 1e6))}</small></div><button data-map-price="${escapeHTML(p.id)}">${AieyesI18n.t("一键映射")}</button><button data-price="${escapeHTML(p.id)}" aria-label="${AieyesI18n.t("编辑 {0} 的价格", escapeHTML(p.id))}">${AieyesI18n.t("编辑")}</button></div>`;
+function priceRowHTML(p, index, rowHeight = priceRowHeight()) {
+  return `<div class="list-row price-virtual-row" data-price-row="${escapeHTML(p.id)}" data-price-index="${index}" style="top:${index * rowHeight}px"><div class="row-body" title="${escapeHTML(p.id)}">${escapeHTML(p.id)}<small>${AieyesI18n.t("输入 {0} · 输出 {1}", p.input == null ? '—' : money(p.input * 1e6), p.output == null ? '—' : money(p.output * 1e6))}</small></div><button data-map-price="${escapeHTML(p.id)}">${AieyesI18n.t("一键映射")}</button><button data-price="${escapeHTML(p.id)}" aria-label="${AieyesI18n.t("编辑 {0} 的价格", escapeHTML(p.id))}">${AieyesI18n.t("编辑")}</button></div>`;
 }
 function priceRows(top = 0) {
-  const { prices, first, last } = priceWindow(top);
-  return prices.length ? `<div class="price-list-spacer" style="height:${prices.length * PRICE_ROW_HEIGHT}px">` + prices.slice(first, last).map((p, offset) => priceRowHTML(p, first + offset)).join('') + '</div>' : `<div class="empty">${priceCache.query ? AieyesI18n.t("无匹配模型") : AieyesI18n.t("同步模型价格")}</div>`;
+  const { prices, first, last, rowHeight } = priceWindow(top);
+  return prices.length ? `<div class="price-list-spacer" style="--price-row-height:${rowHeight}px;height:${prices.length * rowHeight}px">` + prices.slice(first, last).map((p, offset) => priceRowHTML(p, first + offset, rowHeight)).join('') + '</div>' : `<div class="empty">${priceCache.query ? AieyesI18n.t("无匹配模型") : AieyesI18n.t("同步模型价格")}</div>`;
 }
 // Scrolling keeps the rows that stay in view untouched (moving a node would drop its focus) and never
 // removes the row holding focus; new rows are inserted in index order so Tab follows the list.
 function scrollPriceRows(viewport) {
   const spacer = viewport.querySelector('.price-list-spacer');if (!spacer) return;
-  const { prices, first, last } = priceWindow(viewport.scrollTop),wanted = new Set(prices.slice(first, last).map((p) => p.id));
+  const rowHeight = parseFloat(spacer.style.getPropertyValue('--price-row-height')) || priceRowHeight();
+  const { prices, first, last } = priceWindow(viewport.scrollTop, rowHeight),wanted = new Set(prices.slice(first, last).map((p) => p.id));
   for (const row of [...spacer.children]) if (!wanted.has(row.dataset.priceRow) && !row.contains(document.activeElement)) row.remove();
   const present = new Set([...spacer.children].map((row) => row.dataset.priceRow));
   for (let index = first; index < last; index++) {
     if (present.has(prices[index].id)) continue;
-    const holder = document.createElement('template');holder.innerHTML = priceRowHTML(prices[index], index);
+    const holder = document.createElement('template');holder.innerHTML = priceRowHTML(prices[index], index, rowHeight);
     spacer.insertBefore(holder.content.firstElementChild, [...spacer.children].find((row) => Number(row.dataset.priceIndex) > index) ?? null);
   }
   bindPrices();
@@ -2320,12 +2325,18 @@ function bindQuotaTools() {
   const heading = document.querySelector('.quota-heading');
   if (!PANEL && heading?.querySelector('.quota-style-switch')) {
     const fit = () => {
+      if (!heading.isConnected) return;
       heading.toggleAttribute('data-show-labels', true);
       const title = heading.querySelector('h2'), actions = heading.querySelector('.section-actions');
+      if (!title || !actions) return;
       const gap = parseFloat(getComputedStyle(heading).columnGap) || 0;
-      heading.toggleAttribute('data-show-labels', title.scrollWidth + actions.scrollWidth + gap <= heading.clientWidth);
+      const titleRect = title.getBoundingClientRect(), actionsRect = actions.getBoundingClientRect();
+      const sameRow = Math.abs(titleRect.top - actionsRect.top) < Math.max(titleRect.height, actionsRect.height, 1) * 0.6;
+      const fits = sameRow && title.scrollWidth + actions.scrollWidth + gap <= heading.clientWidth + 0.5;
+      heading.toggleAttribute('data-show-labels', fits);
     };
     fit();
+    document.fonts?.ready?.then(fit);
     quotaHeadingObserver = new ResizeObserver(fit);
     quotaHeadingObserver.observe(heading);
     quotaHeadingObserver.observe(heading.querySelector('h2'));

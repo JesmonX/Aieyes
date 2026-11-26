@@ -255,54 +255,66 @@ fn normalize_questions_value(items: &[Value]) -> Value {
 /// Kiro appends `{id,timestamp,payload}`. An approval stays pending until it is resolved.
 fn kiro(rows: Vec<Value>, waiting: bool) -> Excerpt {
     let mut out = Excerpt::default();
-    let mut pending: Option<(String, String, Value)> = None;
-    for v in rows {
+    let mut pending: Vec<&Value> = Vec::new();
+    for v in &rows {
         let p = &v["payload"];
         match p["type"].as_str().unwrap_or("") {
             "user" => {
                 out.user_text = text(&p["content"]);
                 out.user_at = millis(&v["timestamp"]);
                 out.text.clear();
-                pending = None;
+                pending.clear();
+            }
+            "session_start" | "turn_start" => {
+                out.text.clear();
+                pending.clear();
             }
             // Text before a tool call is progress, not the reply.
-            "turn_start" | "tool_call" => out.text.clear(),
+            "tool_call" => out.text.clear(),
             "assistant" if p["operationType"] == "Say" => out.text = text(&p["content"]),
-            "pending_interaction" => {
-                let options = p["options"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|o| json!({"label":o["name"]}))
-                    .collect::<Vec<_>>();
-                let id = p["_meta"]["kiro"]["toolId"]
-                    .as_str()
-                    .or_else(|| p["interactionType"].as_str())
-                    .unwrap_or("1");
-                let raw = json!([{"id":id,"question":p["question"],"options":options}]);
-                pending = Some((
-                    text(&p["toolCallId"]),
-                    content::questions(&raw),
-                    normalize_questions_value(raw.as_array().unwrap()),
-                ));
+            "pending_interaction" => pending.push(p),
+            "interaction_resolved" if p["toolCallId"].is_string() => {
+                pending.retain(|request| {
+                    request["toolCallId"] != p["toolCallId"]
+                        || request["consentRound"] != p["consentRound"]
+                });
             }
-            "interaction_resolved" => {
-                if pending
-                    .as_ref()
-                    .is_some_and(|(call, _, _)| p["toolCallId"].as_str() == Some(call))
-                {
-                    pending = None;
-                }
-            }
-            "turn_end" => pending = None,
+            "turn_end" => pending.clear(),
             _ => {}
         }
     }
     if waiting {
         // Without a pending interaction the model asked in its last message.
-        if let Some((_, question, structured)) = pending {
-            out.question = question;
-            out.structured_questions = Some(structured);
+        if let Some(p) = pending.last() {
+            let options = p["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|o| json!({"label":o["name"]}))
+                .collect::<Vec<_>>();
+            let kiro = &p["_meta"]["kiro"];
+            let id = kiro["toolId"]
+                .as_str()
+                .or_else(|| p["interactionType"].as_str())
+                .unwrap_or("1");
+            let raw = json!([{"id":id,"question":p["question"],"options":options}]);
+            out.question = content::questions(&raw);
+            if p["interactionType"] == "tool_approval" {
+                let consent = &kiro["consent"];
+                let resource = clip(consent["resource"].as_str().unwrap_or(""), 4000);
+                if !resource.is_empty() {
+                    out.question.push('\n');
+                    out.question.push_str(&resource);
+                }
+                out.structured_approval = Some(json!({
+                    "toolName": kiro["toolId"].as_str().or_else(|| consent["capability"].as_str()).unwrap_or("Kiro"),
+                    "kind": if consent["capability"] == "shell" { "command" } else { "tool" },
+                    "reason": clip(p["question"].as_str().unwrap_or(""), 800),
+                    "command": resource,
+                }));
+            } else {
+                out.structured_questions = Some(normalize_questions_value(raw.as_array().unwrap()));
+            }
         } else {
             out.question = out.text.clone();
         }

@@ -48,6 +48,7 @@ pub struct Config {
     pub auto_popup: bool,
     pub claude_questions: bool,
     pub claude_approvals: bool,
+    pub kiro_approvals: bool,
     pub allow_terminal: bool,
 }
 
@@ -58,8 +59,20 @@ impl Default for Config {
             auto_popup: false,
             claude_questions: false,
             claude_approvals: false,
+            kiro_approvals: false,
             allow_terminal: false,
         }
+    }
+}
+
+impl Config {
+    pub(crate) fn approvals_for(&self, provider: &str) -> bool {
+        self.enabled
+            && if provider == "kiro" {
+                self.kiro_approvals
+            } else {
+                self.claude_approvals
+            }
     }
 }
 
@@ -148,13 +161,14 @@ pub(crate) struct HookWait {
     pub kind: String,
     /// Seconds.
     pub at: i64,
+    pub process: crate::sessions::ControlProcess,
 }
 
 /// Open interaction-hook requests, keyed by `(source id, native session)`.
 pub(crate) fn pending_hook_requests(db: &Connection) -> HashMap<(String, String), HookWait> {
     let mut out = HashMap::new();
     let Ok(mut stmt) = db.prepare(
-        "SELECT source_id,native,id,kind,at FROM channel_claude_requests \
+        "SELECT source_id,native,id,kind,at,pid,process_start FROM channel_claude_requests \
          WHERE consumed=0 AND response IS NULL AND heartbeat>?1 ORDER BY at DESC, rowid DESC",
     ) else {
         return out;
@@ -166,6 +180,10 @@ pub(crate) fn pending_hook_requests(db: &Connection) -> HashMap<(String, String)
                 id: r.get(2)?,
                 kind: r.get(3)?,
                 at: r.get(4)?,
+                process: crate::sessions::ControlProcess {
+                    pid: r.get(5)?,
+                    start: r.get(6)?,
+                },
             },
         ))
     });
@@ -177,7 +195,7 @@ pub(crate) fn pending_hook_requests(db: &Connection) -> HashMap<(String, String)
 }
 
 /// A CLI without observer hooks (Qoder) logs a tool call as running while its permission
-/// request is held by the interaction hook, and CodeBuddy / ZCode report nothing at all until
+/// request is held by the interaction hook, and CodeBuddy / ZCode / Kiro report no approval until
 /// the hook returns. Surface that wait, or the popup never shows a request the hook has
 /// already taken from the terminal.
 pub(crate) fn promote_hook_requests(
@@ -208,14 +226,19 @@ pub(crate) fn promote_hook_requests(
         };
         // A session event newer than the request means it was answered in the terminal and
         // the hook helper has not noticed yet.
-        if session.event_at
-            > (wait.at.max(0) as u64)
-                .saturating_add(2)
-                .saturating_mul(1000)
+        if session.provider != "kiro"
+            && session.event_at
+                > (wait.at.max(0) as u64)
+                    .saturating_add(2)
+                    .saturating_mul(1000)
         {
             continue;
         }
         session.phase = Phase::NeedsInput;
+        if session.provider == "kiro" {
+            session.pid = Some(wait.process.pid);
+            session.process_start = Some(wait.process.start);
+        }
         session.input_request = format!("claudeHook:{}", wait.id);
         session.input_kind = match wait.kind.as_str() {
             "approval" => "approval",
@@ -234,7 +257,7 @@ pub fn observe(store: &Store, snapshot: &Snapshot) -> Result<()> {
         touch_heartbeat(store);
     }
     if cfg.enabled
-        && (cfg.claude_questions || cfg.claude_approvals)
+        && (cfg.claude_questions || cfg.claude_approvals || cfg.kiro_approvals)
         && at - LAST_HOOK_SYNC.load(Ordering::Relaxed) >= 30
     {
         LAST_HOOK_SYNC.store(at, Ordering::Relaxed);
@@ -475,6 +498,7 @@ fn status(store: &Store) -> Result<Value> {
         "autoPopup": cfg.auto_popup,
         "claudeQuestions": cfg.claude_questions,
         "claudeApprovals": cfg.claude_approvals,
+        "kiroApprovals": cfg.kiro_approvals,
         "allowTerminal": cfg.allow_terminal || feishu.allow_terminal,
         "desktopAllowTerminal": cfg.allow_terminal,
         "feishuPaired": feishu.enabled && feishu.owner.is_some(),
@@ -485,6 +509,7 @@ fn status(store: &Store) -> Result<Value> {
 
 fn configure(store: &Store, input: &Value) -> Result<Value> {
     let mut cfg = config(&store.db)?;
+    let was_kiro = cfg.kiro_approvals;
     if let Some(v) = input["enabled"].as_bool() {
         cfg.enabled = v;
     }
@@ -500,6 +525,12 @@ fn configure(store: &Store, input: &Value) -> Result<Value> {
             cfg.claude_questions = true;
         }
     }
+    if let Some(v) = input["kiroApprovals"].as_bool() {
+        if v && !was_kiro {
+            claude::validate_kiro_approval_setup(&store.settings()?)?;
+        }
+        cfg.kiro_approvals = v;
+    }
     if let Some(v) = input["allowTerminal"].as_bool() {
         cfg.allow_terminal = v;
     }
@@ -507,7 +538,15 @@ fn configure(store: &Store, input: &Value) -> Result<Value> {
     if cfg.enabled {
         touch_heartbeat(store);
     }
-    let _ = claude::sync_hooks(store);
+    let sync = claude::sync_hooks(store);
+    if was_kiro != cfg.kiro_approvals
+        && let Err(error) = sync
+    {
+        cfg.kiro_approvals = was_kiro;
+        save_config(&store.db, &cfg)?;
+        let _ = claude::sync_hooks(store);
+        return Err(error);
+    }
     LAST_HOOK_SYNC.store(now(), Ordering::Relaxed);
     status(store)
 }
@@ -1199,6 +1238,7 @@ fn inspect_card(store: &Store, params: &Value, lang: &str) -> Result<Value> {
     // Requests are served oldest first, the order the terminal shows its own dialogs in.
     // Nothing is written to the card until a row is known to be presentable.
     if claude::approval_hooked(&source.provider)
+        && (source.provider != "kiro" || cfg.kiro_approvals)
         && let Ok(rows) =
             claude::pending_requests(store, &source.id, &target.session.native_session)
         && let Some((req, hash, question)) = rows.iter().find_map(|req| {
@@ -1395,7 +1435,7 @@ fn inspect_card(store: &Store, params: &Value, lang: &str) -> Result<Value> {
             &mut payload,
             Approval::readonly(&source.provider, &tr("原会话请求确认")),
         );
-        let decision_hook = claude::approval_hooked(&source.provider);
+        let decision_hook = source.provider != "kiro" && claude::approval_hooked(&source.provider);
         let offer = decision_hook && !cfg.claude_approvals && !qoder_desktop_gui(&source);
         payload["needsClaudeApprovals"] = json!(offer);
         payload["quickEnable"] = json!(if offer { "approvals" } else { "" });
@@ -1665,6 +1705,9 @@ fn dispatch(
             claude::pending_requests(store, &source.id, &target.session.native_session)
         && !rows.is_empty()
     {
+        if source.provider == "kiro" && request_id.is_none() {
+            return block("原请求已结束或已被处理，请刷新后再操作");
+        }
         // A card names its request; without a name the oldest one is the one that was shown.
         let Some(req) = (match request_id {
             Some(id) => rows.iter().find(|r| r.id == id),
@@ -3036,6 +3079,82 @@ mod tests {
             .iter()
             .map(|d| d["id"].as_str().unwrap().to_owned())
             .collect()
+    }
+
+    #[test]
+    fn kiro_approval_hook_is_opt_in_and_submits_only_one_native_decision() {
+        let (_dir, store, source) = fixture("kiro");
+        let home = std::path::Path::new(&source.path);
+        std::fs::create_dir(home.join("sessions")).unwrap();
+        let hook_path = home.join("hooks/aieyes-desktop-approval.json");
+        save_config(
+            &store.db,
+            &Config {
+                claude_approvals: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        claude::sync_hooks(&store).unwrap();
+        assert!(!hook_path.exists());
+        save_config(
+            &store.db,
+            &Config {
+                kiro_approvals: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        claude::sync_hooks(&store).unwrap();
+        let hook: Value = serde_json::from_slice(&std::fs::read(&hook_path).unwrap()).unwrap();
+        assert_eq!(hook["version"], "v1");
+        assert_eq!(hook["hooks"][0]["trigger"], "PermissionRequest");
+        assert_eq!(hook["hooks"][0]["action"]["type"], "command");
+
+        let mut live = controlled(&source, "sess_cli", Phase::Working);
+        let input = json!({"path":"/tmp/fixture.txt"});
+        let meta = json!({"provider":"kiro","permission":{"capability":"fs_read","paths":["/tmp/fixture.txt"]}});
+        for (action, behavior) in [("approve", "allow"), ("decline", "deny")] {
+            live.phase = Phase::Working;
+            held(
+                &store,
+                &live,
+                action,
+                "approval",
+                "read_file",
+                "read-hash",
+                &input,
+                meta.clone(),
+            );
+            promote_hook_requests(
+                std::slice::from_mut(&mut live),
+                &pending_hook_requests(&store.db),
+            );
+            assert_eq!(live.phase, Phase::NeedsInput);
+            watch(&store, &live);
+            let card = inspect_card_of(&store, &live);
+            assert_eq!(card["requestId"], action);
+            assert_eq!(card["approval"]["paths"], json!(["/tmp/fixture.txt"]));
+            assert_eq!(decision_ids(&card), ["approve", "decline"]);
+            for invalid in [
+                json!({"action":action}),
+                json!({"action":"approveAlways", "requestId":action}),
+            ] {
+                assert_eq!(respond_to(&store, &card, invalid)["status"], "blocked");
+            }
+            let result = respond_to(&store, &card, json!({"action":action,"requestId":action}));
+            assert_eq!(result["status"], "submitted");
+            let reply: Value =
+                serde_json::from_str(&hook_response(&store, action).unwrap()).unwrap();
+            assert_eq!(
+                reply,
+                json!({"hookSpecificOutput":{"decision":{"behavior":behavior}}})
+            );
+        }
+        save_config(&store.db, &Config::default()).unwrap();
+        claude::sync_hooks(&store).unwrap();
+        let hook: Value = serde_json::from_slice(&std::fs::read(hook_path).unwrap()).unwrap();
+        assert_eq!(hook["hooks"], json!([]));
     }
 
     #[test]

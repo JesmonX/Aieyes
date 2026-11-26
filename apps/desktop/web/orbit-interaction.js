@@ -13,6 +13,7 @@
     autoPopup: false,
     claudeQuestions: false,
     claudeApprovals: false,
+    kiroApprovals: false,
     allowTerminal: false,
   };
   let statusLoaded = false;
@@ -1385,6 +1386,8 @@
         <label class="quota-confirm"><input type="checkbox" role="switch" id="interaction-claude-questions">${esc(tr('在弹窗中回答 Claude / Qoder 提问选项'))}</label>
         <label class="quota-confirm"><input type="checkbox" role="switch" id="interaction-claude-approvals">${esc(tr('在弹窗中审批 Claude / Qoder 工具权限'))}</label>
         <p class="muted tiny">${esc(tr('开启后会拦截 Claude / Qoder CLI 工具授权并在弹窗显示「允许本次 / 拒绝 / 回原终端」；应用退出或超时将自动交还终端。'))}</p>
+        <label class="quota-confirm"><input type="checkbox" role="switch" id="interaction-kiro-approvals">${esc(tr('在弹窗中审批 Kiro CLI 工具权限'))}</label>
+        <p class="muted tiny">${esc(tr('适用于 Kiro CLI 3.4.0 及更新版本的新 V3 会话。可允许或拒绝本次操作，超时后交还原终端。'))}</p>
         <label class="quota-confirm"><input type="checkbox" role="switch" id="interaction-allow-terminal">${esc(tr('允许通过终端适配发送文本'))}</label>
       </div>
       <p class="error tiny" id="interaction-error" hidden></p>
@@ -1397,6 +1400,7 @@
     const autoEl = document.querySelector('#interaction-auto-popup');
     const claudeQEl = document.querySelector('#interaction-claude-questions');
     const claudeAEl = document.querySelector('#interaction-claude-approvals');
+    const kiroAEl = document.querySelector('#interaction-kiro-approvals');
     const termEl = document.querySelector('#interaction-allow-terminal');
     const optsWrap = document.querySelector('#interaction-options');
     const errEl = document.querySelector('#interaction-error');
@@ -1406,11 +1410,12 @@
       if (autoEl) autoEl.checked = !!st.autoPopup;
       if (claudeQEl) claudeQEl.checked = !!(st.claudeQuestions || st.claudeApprovals);
       if (claudeAEl) claudeAEl.checked = !!st.claudeApprovals;
+      if (kiroAEl) kiroAEl.checked = !!st.kiroApprovals;
       if (termEl) termEl.checked = !!(st.desktopAllowTerminal ?? st.allowTerminal);
       if (optsWrap) optsWrap.hidden = !st.enabled;
     };
     const save = async (patch) => {
-      const controls = [enabledEl, autoEl, claudeQEl, claudeAEl, termEl].filter(Boolean);
+      const controls = [enabledEl, autoEl, claudeQEl, claudeAEl, kiroAEl, termEl].filter(Boolean);
       controls.forEach((el) => { el.disabled = true; });
       if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
       try {
@@ -1431,6 +1436,7 @@
     if (autoEl) autoEl.onchange = () => save({ autoPopup: autoEl.checked });
     if (claudeQEl) claudeQEl.onchange = () => save({ claudeQuestions: claudeQEl.checked, claudeApprovals: claudeQEl.checked ? !!claudeAEl?.checked : false });
     if (claudeAEl) claudeAEl.onchange = () => save({ claudeApprovals: claudeAEl.checked });
+    if (kiroAEl) kiroAEl.onchange = () => save({ kiroApprovals: kiroAEl.checked });
     if (termEl) termEl.onchange = () => save({ allowTerminal: termEl.checked });
   }
 
