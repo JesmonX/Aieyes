@@ -96,6 +96,7 @@ fn registered(source: &Source) -> Option<Endpoint> {
 }
 
 /// Pids of this user's `opencode … serve` processes in `ps -xo pid=,command=` output.
+#[cfg(any(unix, test))]
 fn serve_pids(listing: &str) -> Vec<u32> {
     listing
         .lines()
@@ -119,6 +120,7 @@ fn serve_pids(listing: &str) -> Vec<u32> {
 
 /// Loopback origins of the TCP listeners in `lsof -Fn` output. A listener on every interface is
 /// reached through 127.0.0.1 as well; other addresses are ignored.
+#[cfg(any(unix, test))]
 fn loopback_listeners(listing: &str) -> Vec<String> {
     let mut found = Vec::new();
     for name in listing.lines().filter_map(|line| line.strip_prefix('n')) {
